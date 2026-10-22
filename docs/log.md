@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-10-22
+* Globu moved from Mercastra to Kamil Ziajka. The CLI is published to npm as `globu` (`@mercastra/globu` and `@mercastra/knowledge-base` are unpublished), the repo is `kamilziajka/globu`, and LICENSE, the author fields and the marketplace owner name Kamil Ziajka. The plugin's hooks and skills run `node_modules/globu/dist/globu.mjs`. Updated the README, [architecture](./architecture.md), [globu CLI](./globu-cli.md), [development](./development.md) and [unattended runs](./unattended-runs.md). The site still lives in `mercastra-app-frontend`.
+
 ## 2026-10-10
 * issue-check and issue-fix, after a dry-run on GLOBU-8: refs are pointers or citations and only pointers count or get fixed, issue-fix asks before editing a Done issue, searches every registered shard when a ref has no candidates and proposes a fix in a shard outside the active context with a warning.
 * Renamed the check-issue skill to issue-check and added issue-fix, which runs the same check and rewrites the broken refs in the Jira issue after the user confirms. Updated [architecture](./architecture.md), [globu CLI](./globu-cli.md) and the READMEs.

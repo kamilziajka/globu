@@ -110,7 +110,7 @@ jobs:
 
       - name: Bootstrap Globu
         run: |
-          npm install -g @mercastra/globu
+          npm install -g globu
           globu import https://github.com/acme/product.git --context team --yes
           globu register "$GITHUB_WORKSPACE"
           globu sync
@@ -119,7 +119,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          plugin_marketplaces: https://github.com/Mercastra/globu.git
+          plugin_marketplaces: https://github.com/kamilziajka/globu.git
           plugins: globu@globu
           prompt: ${{ inputs.prompt }}
 ```

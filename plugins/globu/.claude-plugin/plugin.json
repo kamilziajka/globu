@@ -3,7 +3,7 @@
   "description": "OKF knowledge bases inside a repo and a per-user registry of knowledge shards for Claude Code",
   "version": "0.3.3",
   "author": {
-    "name": "Mercastra"
+    "name": "Kamil Ziajka"
   },
   "license": "MIT"
 }
