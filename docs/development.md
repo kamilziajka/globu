@@ -75,7 +75,7 @@ A comment is allowed only when it is critical, meaning a reader would misread or
 
 ## Working on the plugin locally
 
-`npm run build` links the CLI package into the plugin as `plugins/globu/node_modules/@mercastra/globu`. That directory is ignored by git. With the link in place the hooks and skills of the working tree run the freshly built CLI:
+`npm run build` links the CLI package into the plugin as `plugins/globu/node_modules/globu`. That directory is ignored by git. With the link in place the hooks and skills of the working tree run the freshly built CLI:
 
 ```bash
 npm run build
@@ -93,7 +93,7 @@ A release publishes the CLI, pins the plugin to it and then updates the public s
 3. Pull `main` afterwards. The workflow adds the pin commit, so a local `main` is one commit behind.
 4. Update the site. globu.mercastra.com is `packages/globu-homepage` in `mercastra-app-frontend` and has no dependency on this repo: it shows the version in its `release.json` and renders the docs from a snapshot of `docs/` in its `content/`. The release skill writes both and opens that pull request; by hand, copy `docs/*.md` except `index.md` and `log.md` into `content/`, set `release.json` and open the pull request with `Globu <version>` in its title. The site shows the new version once that merges and deploys. `.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm version and the site's `version.json` at the end of every session here and reports an unreleased bump or a site that lags without an open pull request (`mercastra-product` decision 148).
 
-Every release needs a new version. npm never accepts a version twice, so a run on an already published version fails at the publish step. `npm view @mercastra/globu versions` shows what is taken.
+Every release needs a new version. npm never accepts a version twice, so a run on an already published version fails at the publish step. `npm view globu versions` shows what is taken.
 
 The workflow runs `npm run verify`, then:
 
@@ -107,7 +107,7 @@ A package has to exist on npm before a trusted publisher can be configured for i
 ```bash
 npm run verify
 npm run pin
-npm publish ./release/mercastra-globu-<version>.tgz
+npm publish ./release/globu-<version>.tgz
 git add plugins
 git commit -m "Pin plugins to <version>"
 git push origin HEAD:main HEAD:stable

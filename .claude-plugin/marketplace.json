@@ -2,14 +2,14 @@
   "name": "globu",
   "description": "Globu: OKF knowledge bases, a per-user knowledge registry and a session status mod for Claude Code",
   "owner": {
-    "name": "Mercastra"
+    "name": "Kamil Ziajka"
   },
   "plugins": [
     {
       "name": "globu",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/Mercastra/globu.git",
+        "url": "https://github.com/kamilziajka/globu.git",
         "path": "plugins/globu",
         "ref": "stable"
       },
@@ -19,7 +19,7 @@
       "name": "globu-status",
       "source": {
         "source": "git-subdir",
-        "url": "https://github.com/Mercastra/globu.git",
+        "url": "https://github.com/kamilziajka/globu.git",
         "path": "mods/globu-status",
         "ref": "stable"
       },

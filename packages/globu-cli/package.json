@@ -1,8 +1,8 @@
 {
-  "name": "@mercastra/globu",
-  "version": "0.3.3",
+  "name": "globu",
+  "version": "0.4.0",
   "description": "Knowledge bases inside a repo and a registry of knowledge shards for Claude Code",
-  "author": "Mercastra",
+  "author": "Kamil Ziajka",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Mercastra/globu.git",
+    "url": "git+https://github.com/kamilziajka/globu.git",
     "directory": "packages/globu-cli"
   }
 }

@@ -5,7 +5,7 @@ description: Check that every doc and code reference in a Jira issue resolves to
 
 # Check an issue's references
 
-An issue meant for a coding agent should point at the docs that govern the work instead of pasting them. A pointer the agent cannot open is the most common way such a task fails. This skill reads the issue, turns each reference into a ref and lets `globu resolve` check that it exists on the default branch of its repo, which is what the delivering agent will check out. The CLI is installed with this plugin at `node_modules/@mercastra/globu/dist/globu.mjs` in the plugin root (two directories above this file).
+An issue meant for a coding agent should point at the docs that govern the work instead of pasting them. A pointer the agent cannot open is the most common way such a task fails. This skill reads the issue, turns each reference into a ref and lets `globu resolve` check that it exists on the default branch of its repo, which is what the delivering agent will check out. The CLI is installed with this plugin at `node_modules/globu/dist/globu.mjs` in the plugin root (two directories above this file).
 
 The skill only reads. It never comments on the issue, changes its status or edits a shard. To apply the fixes it suggests, use the `issue-fix` skill, which runs the same steps and then edits the issue once the user confirms.
 
@@ -15,7 +15,7 @@ The skill only reads. It never comments on the issue, changes its status or edit
 
 2. **Find the target repo.** Look for a repository field, a repository label or a sentence such as "Lands in `<repo>`". List the shards:
    ```bash
-   node <plugin-root>/node_modules/@mercastra/globu/dist/globu.mjs list --json
+   node <plugin-root>/node_modules/globu/dist/globu.mjs list --json
    ```
    The target repo's checkout is where bare code paths resolve. Use its `workPath` when it is a shard, or ask the user where the repo is. If the issue names no target repo, report that as a finding and resolve only refs that name a shard.
 
@@ -32,7 +32,7 @@ The skill only reads. It never comments on the issue, changes its status or edit
 
 4. **Resolve them**, from the target repo's checkout so that bare paths resolve there:
    ```bash
-   node <plugin-root>/node_modules/@mercastra/globu/dist/globu.mjs resolve <ref>... --json
+   node <plugin-root>/node_modules/globu/dist/globu.mjs resolve <ref>... --json
    ```
    Each result has `ok`, `location`, `revision` and, when it failed, `reason`, the `worktrees` where the path exists anyway and `candidates` for the file that was meant. A candidate with `match: "rename"` is where git history moved the file. One with `match: "name"` only shares the file name, so treat it as a guess. The exit code is 1 when any ref failed.
 
