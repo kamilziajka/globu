@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const PACKAGE_NAME = "globu";
+const PACKAGE_NAME = "@kazet/globu";
 const SITE_VERSION_URL = "https://globu.mercastra.com/version.json";
 const SITE_REPO = "Mercastra/mercastra-app-frontend";
 const TIMEOUT_MS = 8000;

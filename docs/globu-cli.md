@@ -6,7 +6,7 @@ description: "Command reference for the globu CLI: knowledge bases, registering 
 
 # globu CLI
 
-Published to npm as `globu` and built to `packages/globu-cli/dist/globu.mjs`. Source: `packages/globu-cli/src/globu.ts` on top of `packages/globu-core`, with the `base` group in `packages/globu-cli/src/base.ts` on top of `packages/knowledge-base` and the commander runner in `packages/globu-cli/src/cli`. Add `--json` to any command. `--help` works on the program and on every command. The CLI never prompts.
+Published to npm as `@kazet/globu` and built to `packages/globu-cli/dist/globu.mjs`. Source: `packages/globu-cli/src/globu.ts` on top of `packages/globu-core`, with the `base` group in `packages/globu-cli/src/base.ts` on top of `packages/knowledge-base` and the commander runner in `packages/globu-cli/src/cli`. Add `--json` to any command. `--help` works on the program and on every command. The CLI never prompts.
 
 Environment:
 

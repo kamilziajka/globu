@@ -110,7 +110,7 @@ jobs:
 
       - name: Bootstrap Globu
         run: |
-          npm install -g globu
+          npm install -g @kazet/globu
           globu import https://github.com/acme/product.git --context team --yes
           globu register "$GITHUB_WORKSPACE"
           globu sync

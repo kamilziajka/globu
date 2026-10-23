@@ -5,7 +5,7 @@ description: Register a knowledge shard with Globu so Claude can find it in ever
 
 # Register a shard
 
-A shard is one registered unit of knowledge: a git repo plus what Globu knows about reading it. The CLI is installed with this plugin at `node_modules/globu/dist/globu.mjs` in the plugin root (two directories above this file). It never prompts, so you collect the answers and pass flags.
+A shard is one registered unit of knowledge: a git repo plus what Globu knows about reading it. The CLI is installed with this plugin at `node_modules/@kazet/globu/dist/globu.mjs` in the plugin root (two directories above this file). It never prompts, so you collect the answers and pass flags.
 
 ## Workflow
 
@@ -25,7 +25,7 @@ A shard is one registered unit of knowledge: a git repo plus what Globu knows ab
 
 3. **Register it.**
    ```bash
-   node <plugin-root>/node_modules/globu/dist/globu.mjs register <path-or-url> [--id <id>] [--mode read|write] [--path <dir>] --json
+   node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs register <path-or-url> [--id <id>] [--mode read|write] [--path <dir>] --json
    ```
    The output includes the detected `format`, the `roots` and their `entry` files.
 
@@ -37,7 +37,7 @@ A shard is one registered unit of knowledge: a git repo plus what Globu knows ab
 
 5. **Save the routing text.**
    ```bash
-   node <plugin-root>/node_modules/globu/dist/globu.mjs set <id> --description "<text>" --use-when "<text>"
+   node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs set <id> --description "<text>" --use-when "<text>"
    ```
 
 6. **Report** the id, format, mode and location. Mention that the shard appears in new sessions, not the current one, and that `globu claude sync` lets Claude read shard folders without permission prompts.

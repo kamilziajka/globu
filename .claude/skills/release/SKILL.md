@@ -5,20 +5,20 @@ description: Release a new version of Globu and bring its public site up to date
 
 # Release Globu
 
-Releases the `globu` npm package the way `docs/development.md` describes under "Releasing", then updates the site at globu.mercastra.com, which lives in `mercastra-app-frontend` (`packages/globu-homepage`, `mercastra-product` decision 148). The site has no dependency on this repo: it carries `release.json` and a snapshot of `docs/` that this skill writes. Do the steps in order and stop at the first failure.
+Releases the `@kazet/globu` npm package the way `docs/development.md` describes under "Releasing", then updates the site at globu.mercastra.com, which lives in `mercastra-app-frontend` (`packages/globu-homepage`, `mercastra-product` decision 148). The site has no dependency on this repo: it carries `release.json` and a snapshot of `docs/` that this skill writes. Do the steps in order and stop at the first failure.
 
 ## Before anything
 
-1. The argument is the version, for example `0.4.0`. Without one, show `npm view globu versions --json` and the current `package.json` version and ask which version to release.
+1. The argument is the version, for example `0.4.0`. Without one, show `npm view @kazet/globu versions --json` and the current `package.json` version and ask which version to release.
 2. Check: on `main`, `git status --porcelain` empty, `git pull --ff-only` done, `gh auth status` fine. Refuse to continue otherwise.
-3. Confirm the version is not published yet: it must not appear in `npm view globu versions --json`.
+3. Confirm the version is not published yet: it must not appear in `npm view @kazet/globu versions --json`.
 
 ## Release
 
 4. Bump: `npm version <version> --no-git-tag-version && npm run build`. Three files change (root `package.json` and `package-lock.json`, `packages/globu-cli/package.json`). Commit them as `Release <version>`.
 5. Ask the user whether to push the commit to `main` directly or open a pull request. The Release workflow checks out `main`, so a pull request has to merge before the next step; wait for the user to say it merged.
 6. Run the workflow and wait for it: `gh workflow run release.yml --ref main`, then find the run with `gh run list --workflow release.yml --limit 1 --json databaseId` and `gh run watch <id> --exit-status`. About six minutes.
-7. `git pull --ff-only` (the workflow adds the pin commit) and confirm `npm view globu version` prints the version. If it does not after a minute, stop and report.
+7. `git pull --ff-only` (the workflow adds the pin commit) and confirm `npm view @kazet/globu version` prints the version. If it does not after a minute, stop and report.
 
 ## Update the site
 

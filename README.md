@@ -27,7 +27,7 @@ The plugin runs its CLI from an npm package that Claude Code installs with it, s
 The CLI also works on its own in a terminal:
 
 ```sh
-npm install -g globu
+npm install -g @kazet/globu
 globu base --help
 ```
 
@@ -55,7 +55,7 @@ npm run verify
 
 `npm run verify` runs lint, typecheck, the build and the tests with a 100% coverage gate. The pre-commit hook and CI run the same command. See [docs/development.md](docs/development.md).
 
-`npm run build` bundles the CLI into `packages/globu-cli/dist/` and links it into the plugin. The bundle is not kept in git: the CLI is published to npm as `globu`, and the plugin depends on it at a pinned version. See [docs/development.md](docs/development.md#releasing).
+`npm run build` bundles the CLI into `packages/globu-cli/dist/` and links it into the plugin. The bundle is not kept in git: the CLI is published to npm as `@kazet/globu`, and the plugin depends on it at a pinned version. See [docs/development.md](docs/development.md#releasing).
 
 ## Licence
 
