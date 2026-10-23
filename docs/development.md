@@ -108,10 +108,19 @@ A package has to exist on npm before a trusted publisher can be configured for i
 npm run verify
 npm run pin
 npm publish ./release/kazet-globu-<version>.tgz
+npm view @kazet/globu@<version> dist.integrity
 git add plugins
 git commit -m "Pin plugins to <version>"
 git push origin HEAD:main HEAD:stable
 ```
+
+Push only once `npm view` prints the version with the integrity that `plugins/globu/package-lock.json` pins. npm accepted 0.4.0 about five minutes before it served it, and a `stable` that pins a tarball npm does not serve yet breaks every fresh plugin install. Then bind the package to the workflow, which needs npm 11.15 or later, two-factor authentication on the account and the package already on npm:
+
+```bash
+npm trust github @kazet/globu --file release.yml --repo kamilziajka/globu --allow-publish
+```
+
+`npm trust list @kazet/globu` shows the binding. From then on the `Release` workflow publishes.
 
 Packing is reproducible. If a release fails after publishing, `npm run build && npm run pin` on the released commit writes the same pin again.
 

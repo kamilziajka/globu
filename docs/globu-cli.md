@@ -86,3 +86,5 @@ Each failure names its reason: the shard is not in the active context, it has no
 ## Diagnostics
 
 `doctor` reports, per shard: missing or wrong clone, origin mismatch, format or roots that changed since registration and missing routing text. Exit code 1 when any finding is an error.
+
+An origin mismatch is what a repo transfer or a changed remote leaves behind: `the clone's origin does not match the manifest` names the URL the manifest still holds. No command changes a shard's repo URL, so edit `repo:` under that shard's `source` in `~/.globu/manifest.yaml` to the clone's new origin, exactly as `git remote get-url origin` prints it, and run `doctor` again.
