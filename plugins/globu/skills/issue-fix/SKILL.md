@@ -5,7 +5,7 @@ description: Fix the broken doc and code references in a Jira issue so a coding 
 
 # Fix an issue's references
 
-This skill runs the `issue-check` analysis and then repairs what it can. Most repairs are an edit to the issue: a path that moved or was mistyped is replaced with the path that is on the default branch. Some failures are not the issue's fault, and those are reported for the user to act on. The CLI is installed with this plugin at `node_modules/globu/dist/globu.mjs` in the plugin root (two directories above this file).
+This skill runs the `issue-check` analysis and then repairs what it can. Most repairs are an edit to the issue: a path that moved or was mistyped is replaced with the path that is on the default branch. Some failures are not the issue's fault, and those are reported for the user to act on. The CLI is installed with this plugin at `node_modules/@kazet/globu/dist/globu.mjs` in the plugin root (two directories above this file).
 
 The skill writes to Jira only after the user has seen the exact edit and said yes. It never changes the issue's status, never commits or pushes in a shard and never edits a shard.
 

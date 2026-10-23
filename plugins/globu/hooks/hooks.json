@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/globu/dist/globu.mjs\" hook session-start"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/@kazet/globu/dist/globu.mjs\" hook session-start"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/globu/dist/globu.mjs\" hook guard"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/@kazet/globu/dist/globu.mjs\" hook guard"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/globu/dist/globu.mjs\" hook validate-edit"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/node_modules/@kazet/globu/dist/globu.mjs\" hook validate-edit"
           }
         ]
       }

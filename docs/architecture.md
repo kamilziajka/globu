@@ -190,7 +190,7 @@ Rules that hold everywhere:
 ```
 packages/knowledge-base      OKF library: frontmatter, scan, validate, setup, log
 packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
-packages/globu-cli           the globu program, published to npm as globu: the base group, the registry commands, the hooks and the commander runner
+packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
 packages/testing             test helpers
 plugins/globu                the plugin: skills, session, guard and edit hooks, pinned dependency on the CLI
 mods/globu-status            the status mod: a plugin of function hooks with its own tests
@@ -202,9 +202,9 @@ tests/                       checks that run the built bundles and the plugin ho
 
 ## Distribution
 
-The CLI is bundled into a single file with no runtime dependencies and published to npm as `globu`. Nothing compiled is kept in git.
+The CLI is bundled into a single file with no runtime dependencies and published to npm as `@kazet/globu`. Nothing compiled is kept in git.
 
-The plugin is a source-only directory: skills, hooks, `plugin.json` and a `package.json` with a `package-lock.json` that pin the CLI to one exact version. Claude Code copies the plugin into its cache on install and then installs that one dependency, so hooks and skills run the CLI from `node_modules/globu/dist` inside the plugin root.
+The plugin is a source-only directory: skills, hooks, `plugin.json` and a `package.json` with a `package-lock.json` that pin the CLI to one exact version. Claude Code copies the plugin into its cache on install and then installs that one dependency, so hooks and skills run the CLI from `node_modules/@kazet/globu/dist` inside the plugin root.
 
 The marketplace is this repo. Its entries point at the plugin and mod directories on the `stable` branch, which only the release moves. `main` can therefore hold skills that are ahead of the published CLI without anyone installing that mix.
 

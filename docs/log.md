@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-10-23
+* npm refused the name `globu` as too similar to `glob`, `global` and `globby`, so the CLI is published as `@kazet/globu`. Scoped names skip that check. The command stays `globu`, the plugin runs `node_modules/@kazet/globu/dist/globu.mjs` and a release tarball is `kazet-globu-<version>.tgz`. Updated the README, [architecture](./architecture.md), [globu CLI](./globu-cli.md), [development](./development.md) and [unattended runs](./unattended-runs.md).
+
 ## 2026-10-22
 * Globu moved from Mercastra to Kamil Ziajka. The CLI is published to npm as `globu` (`@mercastra/globu` and `@mercastra/knowledge-base` are unpublished), the repo is `kamilziajka/globu`, and LICENSE, the author fields and the marketplace owner name Kamil Ziajka. The plugin's hooks and skills run `node_modules/globu/dist/globu.mjs`. Updated the README, [architecture](./architecture.md), [globu CLI](./globu-cli.md), [development](./development.md) and [unattended runs](./unattended-runs.md). The site still lives in `mercastra-app-frontend`.
 
