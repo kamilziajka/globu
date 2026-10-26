@@ -40,7 +40,13 @@ A shard is one registered unit of knowledge: a git repo plus what Globu knows ab
    node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs set <id> --description "<text>" --use-when "<text>"
    ```
 
-6. **Report** the id, format, mode and location. Mention that the shard appears in new sessions, not the current one, and that `globu claude sync` lets Claude read shard folders without permission prompts.
+6. **Offer `globu claude sync`.** Without it, the first read of the new shard from another repo raises a permission prompt in every session. Tell the user in one line what the command does: it adds the paths of all active shards, not only this one, to `permissions.additionalDirectories` in their Claude settings, and in `acceptEdits` mode files under those paths can then be edited without a prompt, which is what `--mode read` and `--mode ask` are for. Ask once. On a yes, run:
+   ```bash
+   node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs claude sync
+   ```
+   Never run it unasked. Changing the user's Claude settings is never a side effect of registering.
+
+7. **Report** the id, format, mode and location, and whether the paths were added to the Claude settings. Mention that the shard appears in new sessions, not the current one.
 
 ## Notes
 

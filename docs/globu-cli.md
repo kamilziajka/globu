@@ -68,7 +68,7 @@ Ids are global: a team shard whose id or repo is already registered under someth
 | Command | Purpose |
 |---|---|
 | `index` | Print the text the session hook injects, for the directory it is run in. |
-| `claude sync [--remove]` | Add the active shards' paths to `permissions.additionalDirectories`, or remove the ones Globu added. Entries Globu did not add are never touched. |
+| `claude sync [--remove]` | Add the active shards' paths to `permissions.additionalDirectories`, or remove the ones Globu added. Entries Globu did not add are never touched. The register skill offers to run it after registering. |
 | `hook session-start` | SessionStart entry point. Prints the index, or nothing. |
 | `hook validate-edit` | PostToolUse entry point for `Edit` and `Write`. Validates the base that owns an edited Markdown file and exits 2 with the errors when it fails. |
 | `hook guard` | PreToolUse entry point for `Edit`, `Write`, `NotebookEdit` and `Bash`. Exit code 2 when the target is in a `read` shard. For an `ask` shard changed from a session in another repo it prints a PreToolUse `permissionDecision` of `ask` and exits 0. Targets are matched to shards by git repo, so linked worktrees count wherever they are. For `Bash` it reads `tool_input.command`: certain writes are treated like file edits, possible ones only prompt. See [architecture](./architecture.md) for the rules and their limits. |

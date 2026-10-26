@@ -2,6 +2,7 @@
 
 ## 2026-10-26
 * A base is recognised by the `okf_version` marker in its `index.md`, not by a directory called `docs/`. `base setup` takes `--dir` to name the directory and upgrades an existing base under the target whatever it is called, the owner walk checks every child directory, and the setup skill asks whether a new base goes in `docs`, `wiki`, `knowledge` or a custom directory. Updated [knowledge bases](./knowledge-base.md), [architecture](./architecture.md), [overview](./overview.md) and the guide block in this index.
+* The register skill now offers `globu claude sync` after a shard is registered and runs it only when the user agrees, so sessions in other repos read the new shard without a permission prompt. Updated [architecture](./architecture.md), [overview](./overview.md) and [globu CLI](./globu-cli.md). `globu sync` stays out of the skill because registering a URL already clones it.
 
 ## 2026-10-23
 * Released 0.4.0, the first `@kazet/globu`, by hand. [Development](./development.md) now waits for npm to serve the tarball before the first release pushes `stable` and shows the `npm trust github` command that binds the package to the `Release` workflow. [globu CLI](./globu-cli.md) says how to clear the origin mismatch `doctor` reports after a repo transfer.
