@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-10-26
+* The register skill now offers `globu claude sync` after a shard is registered and runs it only when the user agrees, so sessions in other repos read the new shard without a permission prompt. Updated [architecture](./architecture.md), [overview](./overview.md) and [globu CLI](./globu-cli.md). `globu sync` stays out of the skill because registering a URL already clones it.
+
 ## 2026-10-23
 * Released 0.4.0, the first `@kazet/globu`, by hand. [Development](./development.md) now waits for npm to serve the tarball before the first release pushes `stable` and shows the `npm trust github` command that binds the package to the `Release` workflow. [globu CLI](./globu-cli.md) says how to clear the origin mismatch `doctor` reports after a repo transfer.
 * npm refused the name `globu` as too similar to `glob`, `global` and `globby`, so the CLI is published as `@kazet/globu`. Scoped names skip that check. The command stays `globu`, the plugin runs `node_modules/@kazet/globu/dist/globu.mjs` and a release tarball is `kazet-globu-<version>.tgz`. Updated the README, [architecture](./architecture.md), [globu CLI](./globu-cli.md), [development](./development.md) and [unattended runs](./unattended-runs.md).

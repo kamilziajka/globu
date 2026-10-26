@@ -25,7 +25,7 @@ One repo with its own base, and a second repo that uses it.
 
 2. **Record what a session learned.** After a task, `/globu:update-knowledge` lists what was decided or discovered, says which doc each item goes to, writes it, adds a log entry and validates. The edits stay in the working tree, so they ship in the same commit as the code.
 
-3. **Register the repo.** `/globu:register-knowledge-base` adopts the repo as a shard and drafts two lines of routing text: what the shard holds and when to consult it. A repo given by URL is cloned read-only under `~/.globu/clones`, or, with a path, as an editable clone.
+3. **Register the repo.** `/globu:register-knowledge-base` adopts the repo as a shard and drafts two lines of routing text: what the shard holds and when to consult it. A repo given by URL is cloned read-only under `~/.globu/clones`, or, with a path, as an editable clone. The skill then offers `globu claude sync`, which lets sessions in other repos read the shard without a permission prompt.
 
 4. **Work from another repo.** A session started anywhere begins with the shard index: each shard's location, routing text and entry file. When a task touches a shard's area, Claude reads that shard's `index.md` and follows the links. When the task produces knowledge that belongs to a shard, `update-knowledge` writes it there, within that shard's mode.
 
