@@ -1,11 +1,11 @@
 ---
 name: release
-description: Release a new version of Globu and bring its public site up to date. Use when the user asks to release, publish or ship Globu, or to cut a version. Bumps the version, runs the Release workflow, waits for npm, then writes the released version and a snapshot of docs/ into the site workspace in mercastra-app-frontend and opens that pull request. Takes the version as its argument.
+description: Release a new version of Globu and bring its public site up to date. Use when the user asks to release, publish or ship Globu, or to cut a version. Bumps the version, runs the Release workflow, waits for npm, then writes the released version and a snapshot of docs/ into the globu-website repo and opens that pull request. Takes the version as its argument.
 ---
 
 # Release Globu
 
-Releases the `@kazet/globu` npm package the way `docs/development.md` describes under "Releasing", then updates the site at globu.mercastra.com, which lives in `mercastra-app-frontend` (`packages/globu-homepage`, `mercastra-product` decision 148). The site has no dependency on this repo: it carries `release.json` and a snapshot of `docs/` that this skill writes. Do the steps in order and stop at the first failure.
+Releases the `@kazet/globu` npm package the way `docs/development.md` describes under "Releasing", then updates the site at globu.kazet.blog, which lives in its own repo `kamilziajka/globu-website` (registered with Globu as the shard `globu-website`). The site has no dependency on this repo: it carries `release.json` and a snapshot of `docs/` that this skill writes. Do the steps in order and stop at the first failure.
 
 ## Before anything
 
@@ -22,13 +22,13 @@ Releases the `@kazet/globu` npm package the way `docs/development.md` describes 
 
 ## Update the site
 
-8. Find the frontend checkout: `node packages/globu-cli/dist/globu.mjs list --json` (or `globu list --json`), take the shard with id `mercastra-app-frontend` and use its `workPath`. It is an `ask` shard: say what you are about to change there and expect a permission prompt on each write.
+8. Find the site checkout: `node packages/globu-cli/dist/globu.mjs list --json` (or `globu list --json`), take the shard with id `globu-website` and use its `workPath`. It is a writable shard, so no permission prompt is expected beyond the usual ones for commands.
 9. Make a worktree on a fresh branch so the user's checkout is untouched:
    ```bash
    git -C <workPath> fetch origin
    git -C <workPath> worktree add .claude/worktrees/globu-release-<version> -b globu-release-<version> origin/main
    ```
-   Work inside that worktree from here on (`<site>` below is `<worktree>/packages/globu-homepage`).
+   Work inside that worktree from here on (`<site>` below is the worktree root; `release.json` and `content/` sit at the repo root).
 10. Write `<site>/release.json`:
     ```json
     {
@@ -36,20 +36,21 @@ Releases the `@kazet/globu` npm package the way `docs/development.md` describes 
       "releasedAt": "<today, YYYY-MM-DD>"
     }
     ```
-11. Refresh the snapshot: delete every `<site>/content/*.md`, then copy every `docs/*.md` of this repo except `index.md` and `log.md` into `<site>/content/`. Copy verbatim; the site rewrites links and strips the authoring guide at build time. A doc added to `docs/` since the last release is new content: add it to the nav registry in `<site>/src/docs/nav.ts` under the right group (`fromContent("<slug>")`), because an unlisted content file fails `nav.test.ts`.
+11. Refresh the snapshot: delete every `<site>/content/*.md`, then copy every `docs/*.md` of this repo except `index.md` and `log.md` into `<site>/content/`. Copy verbatim; the site rewrites links and strips the authoring guide at build time. A doc added to `docs/` since the last release is new content: add it to the nav registry in `<site>/src/docs/nav.ts` under the right group (`fromContent("<slug>")`), because an unlisted content file fails `nav.test.ts`. A doc removed from `docs/` has to leave the registry too, because the build throws on a listed slug without a file.
 12. Check the site in the worktree:
     ```bash
     npm install
-    npm run test --workspace=packages/globu-homepage
-    npm run globu-homepage:build
-    npm run verify:prerender --workspace=packages/globu-homepage
+    npm run verify
+    npm run build:prod
+    npm run verify:prerender
     ```
-13. Commit as `Globu <version>: release.json and the docs snapshot`, push the branch and open the pull request against `main` with `gh pr create`. The title must contain `Globu <version>`: the drift hook looks for it. In the body name this repo's release commit and the pin commit. Add the log entry to `<site>/docs/log.md` in the same commit.
+    `dist/version.json` must report the version.
+13. Add the log entry to `<site>/docs/log.md` (newest first, under a `## <today>` heading: the version, its release date and the commit of this repo the snapshot was taken at). Commit everything as `Globu <version>: release.json and the docs snapshot`, push the branch and open the pull request against `main` with `gh pr create`. The title must contain `Globu <version>`: the drift hook looks for it. In the body name this repo's release commit and the pin commit.
 14. Remove the worktree when the pull request is open: `git -C <workPath> worktree remove .claude/worktrees/globu-release-<version>`.
 
 ## Report
 
-15. Say: the published version, the Release run, the site pull request and that globu.mercastra.com shows the new version only after that pull request merges and deploys. `.claude/hooks/site-drift.mjs` reports the gap at the end of later sessions until then.
+15. Say: the published version, the Release run, the site pull request and that globu.kazet.blog shows the new version only after that pull request merges and deploys. `.claude/hooks/site-drift.mjs` reports the gap at the end of later sessions until then.
 
 ## Guardrails
 

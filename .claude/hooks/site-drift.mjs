@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const PACKAGE_NAME = "@kazet/globu";
-const SITE_VERSION_URL = "https://globu.mercastra.com/version.json";
-const SITE_REPO = "Mercastra/mercastra-app-frontend";
+const SITE_VERSION_URL = "https://globu.kazet.blog/version.json";
+const SITE_HOST = new URL(SITE_VERSION_URL).host;
+const SITE_REPO = "kamilziajka/globu-website";
 const TIMEOUT_MS = 8000;
 
 function readStdin() {
@@ -82,12 +83,12 @@ async function main() {
     const pullRequest = openSitePullRequest(published);
     if (pullRequest === false) {
       findings.push(
-        `globu.mercastra.com shows ${site} while npm serves ${published} and no pull request titled "Globu ${published}" is open in ${SITE_REPO}: the site update was skipped. Run the release skill's site step, or tell the user.`
+        `${SITE_HOST} shows ${site} while npm serves ${published} and no pull request titled "Globu ${published}" is open in ${SITE_REPO}: the site update was skipped. Run the release skill's site step, or tell the user.`
       );
     } else if (typeof pullRequest === "number") {
-      findings.push(`globu.mercastra.com shows ${site}; ${published} waits in ${SITE_REPO}#${pullRequest}.`);
+      findings.push(`${SITE_HOST} shows ${site}; ${published} waits in ${SITE_REPO}#${pullRequest}.`);
     } else {
-      findings.push(`globu.mercastra.com shows ${site} while npm serves ${published}; could not check ${SITE_REPO} for an open pull request.`);
+      findings.push(`${SITE_HOST} shows ${site} while npm serves ${published}; could not check ${SITE_REPO} for an open pull request.`);
     }
   }
 
