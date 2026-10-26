@@ -102,6 +102,17 @@ describe("globu base log", () => {
     );
   });
 
+  it("opens a titled section with --title and joins it on the next call", () => {
+    run(["base", "setup"]);
+    expect(run(["base", "log", "docs", "2026-10-26", "one", "--title", "what changed"]).out).toBe(
+      "updated docs/log.md\n"
+    );
+    expect(run(["base", "log", "docs", "2026-10-26", "two", "--title", "ignored"]).out).toBe("updated docs/log.md\n");
+    expect(read(root, "docs/log.md")).toBe(
+      "# Knowledge base update log\n\n## 2026-10-26 (what changed)\n* two\n* one\n"
+    );
+  });
+
   it("rejects incomplete arguments and unknown flags", () => {
     expect(run(["base", "log", "docs"]).err).toBe("error: missing required argument 'date'\n");
     expect(run(["base", "log", "docs", "2026-01-01"]).err).toBe("error: missing required argument 'entries'\n");

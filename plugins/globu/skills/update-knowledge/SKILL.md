@@ -44,10 +44,10 @@ Decides where each piece of knowledge belongs, checks that it may be written the
 6. **Write, per target, using its format.**
    - `okf`: read the base's `index.md` first, it carries the authoring guide, and skim the existing concept docs. Prefer editing an existing doc over creating a near-duplicate. New concept docs need frontmatter with a non-empty `type`, plus `title` and `description`; use `type: "Playbook"` for a repeatable procedure. Add new docs to the Contents list in `index.md`. Then record the change in the log and validate:
      ```bash
-     node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base log <docsDir> <YYYY-MM-DD> "<entry>" ["<entry>" ...]
+     node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base log <docsDir> <YYYY-MM-DD> "<entry>" ["<entry>" ...] [--title "<text>"]
      node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base validate <docsDir>
      ```
-     Fix any errors before finishing. Build `<docsDir>` from the shard's `workPath` joined with the root's `path`, never from `path`: from a worktree that would send the edits to the main checkout.
+     `base log` joins the day's section whether its heading is bare or titled. Pass `--title` only when the base titles its day sections and the day has no section yet. Fix any errors before finishing. Build `<docsDir>` from the shard's `workPath` joined with the root's `path`, never from `path`: from a worktree that would send the edits to the main checkout.
    - `generic`: follow the conventions the existing files already use. Keep the change small and say what you changed.
 
 7. **Report** what was written where, and what was skipped and why.

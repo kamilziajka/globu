@@ -28,7 +28,7 @@ The `base` group of the [globu CLI](./globu-cli.md). Add `--json` to any command
 | `base validate [path]` | Structural check of one base or of every base under a directory. Exit code 1 on errors. |
 | `base list [path]` | List every base under a directory. |
 | `base owner <file>` | Print the base that owns a file. |
-| `base log <docsDir> <YYYY-MM-DD> <entry...>` | Add entries to a base's `log.md`, newest first. It appends to a heading that is exactly `## <date>` or opens one at the top; a base whose log titles its day sections (`## 2026-10-26 (what changed)`) gets a second, bare section for the same day and has to fold it in by hand or edit `log.md` directly. |
+| `base log <docsDir> <YYYY-MM-DD> <entry...> [--title <text>]` | Add entries to a base's `log.md`, newest first. The day's section is the first heading that is `## <date>`, with or without a parenthesised title after it, such as `## 2026-10-26 (what changed)`. The date must match whole: `## 2026-10-2` and `## 2026-10-26-notes` are other sections. When the day has no section one is opened at the top, as `## <date> (<text>)` with `--title` and bare without it. `--title` does nothing when the day already has a section. |
 | `hook validate-edit` | Hook entry point. |
 
 `setup` only ever changes two things in an existing `index.md`: required frontmatter keys (`okf_version`, `name`, `knowledge_base_version`) and the authoring guide block.
