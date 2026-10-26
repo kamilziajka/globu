@@ -71,12 +71,12 @@ export function defineBaseCommands(base: Command, io: Io, exit: Exit): void {
     if (docsDir === null) exit(1);
   });
 
-  command(base, "log <docsDir> <date> <entries...>", "add entries to a base's log.md under a YYYY-MM-DD date").action(
-    (docsDir: string, date: string, entries: string[], options: JsonOption) => {
-      const logPath = appendLog(path.resolve(io.cwd, docsDir), date, entries);
+  command(base, "log <docsDir> <date> <entries...>", "add entries to a base's log.md under a YYYY-MM-DD date")
+    .option("--title <text>", "title for the day section when it has to be opened")
+    .action((docsDir: string, date: string, entries: string[], options: JsonOption & { title?: string }) => {
+      const logPath = appendLog(path.resolve(io.cwd, docsDir), date, entries, options.title);
       print(io, options.json, { logPath }, `updated ${rel(io, logPath)}`);
-    }
-  );
+    });
 }
 
 export function validateEditHook(io: Io, exit: Exit): void {
