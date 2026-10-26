@@ -1,4 +1,4 @@
-import { DOCS_DIRNAME, INDEX_FILENAME, LOG_FILENAME, OKF_SPEC_URL, PLUGIN_NAME } from "./constants.js";
+import { INDEX_FILENAME, LOG_FILENAME, OKF_SPEC_URL, PLUGIN_NAME } from "./constants.js";
 
 export const AUTHORING_GUIDE_START = `<!-- ${PLUGIN_NAME}:authoring-guide:start -->`;
 export const AUTHORING_GUIDE_END = `<!-- ${PLUGIN_NAME}:authoring-guide:end -->`;
@@ -15,7 +15,7 @@ export function authoringGuideBlock(): string {
     "",
     "## Which base owns what",
     "",
-    `A repo can hold more than one base. A base is any \`${DOCS_DIRNAME}/\` directory whose \`${INDEX_FILENAME}\` carries \`okf_version\`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own \`${DOCS_DIRNAME}/\` owns its knowledge and everything else falls to the base at the repo root.`,
+    `A repo can hold more than one base. A base is any directory whose \`${INDEX_FILENAME}\` carries \`okf_version\`, usually \`docs/\`, \`wiki/\` or \`knowledge/\`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own base owns its knowledge and everything else falls to the base at the repo root.`,
     "",
     "## How to add or update knowledge here",
     "",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DOCS_DIRNAME, INDEX_FILENAME, RESERVED_FILENAMES } from "./constants.js";
+import { INDEX_FILENAME, RESERVED_FILENAMES } from "./constants.js";
 import { type Frontmatter, parseFrontmatter } from "./frontmatter.js";
 import { findBases } from "./scan.js";
 
@@ -51,8 +51,7 @@ export function validateBase(docsDir: string): BaseValidation {
 
 export function validateRepo(rootPath: string): RepoValidation {
   const resolved = path.resolve(rootPath);
-  const docsDirs =
-    path.basename(resolved) === DOCS_DIRNAME ? [resolved] : findBases(resolved).map((base) => base.docsDir);
+  const docsDirs = findBases(resolved).map((base) => base.docsDir);
 
   if (docsDirs.length === 0) {
     return { results: [], errors: [{ file: resolved, message: "no OKF bases found" }] };

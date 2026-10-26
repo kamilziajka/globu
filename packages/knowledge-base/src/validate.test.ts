@@ -50,10 +50,10 @@ describe("validateRepo", () => {
     expect(errors).toHaveLength(1);
   });
 
-  it("validates a docs directory passed directly", () => {
+  it("validates a base directory passed directly", () => {
     const root = tempDir();
-    write(root, "docs/index.md", baseIndex("root"));
-    expect(validateRepo(path.join(root, "docs")).errors).toEqual([]);
+    write(root, "wiki/index.md", baseIndex("root"));
+    expect(validateRepo(path.join(root, "wiki")).errors).toEqual([]);
   });
 
   it("fails when there is no base", () => {

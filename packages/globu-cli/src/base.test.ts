@@ -37,6 +37,13 @@ describe("globu base setup", () => {
     expect(run(["base", "setup"]).out).toBe("base: docs\n  unchanged docs/index.md\n  unchanged docs/log.md\n");
   });
 
+  it("creates the base in the directory named by --dir", () => {
+    expect(run(["base", "setup", "--dir", "wiki", "--name", "demo"]).out).toBe(
+      "base: wiki\n  created   wiki/index.md\n  created   wiki/log.md\n"
+    );
+    expect(run(["base", "setup"]).out).toBe("base: wiki\n  unchanged wiki/index.md\n  unchanged wiki/log.md\n");
+  });
+
   it("reports validation errors and exits 1", () => {
     write(root, "pkg/docs/index.md", baseIndex("pkg"));
     write(root, "pkg/docs/bad.md", "bare\n");

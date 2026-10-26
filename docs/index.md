@@ -2,7 +2,7 @@
 okf_version: "0.2"
 name: globu
 description: What Globu is for, how it works, the CLI reference and how to develop it
-knowledge_base_version: 0.1.0
+knowledge_base_version: 0.4.0
 ---
 
 # globu knowledge base
@@ -16,7 +16,7 @@ If you are an agent that just changed code or behavior in this repo, do not stop
 
 ## Which base owns what
 
-A repo can hold more than one base. A base is any `docs/` directory whose `index.md` carries `okf_version`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own `docs/` owns its knowledge and everything else falls to the base at the repo root.
+A repo can hold more than one base. A base is any directory whose `index.md` carries `okf_version`, usually `docs/`, `wiki/` or `knowledge/`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own base owns its knowledge and everything else falls to the base at the repo root.
 
 ## How to add or update knowledge here
 

@@ -23,8 +23,13 @@ export function defineBaseCommands(base: Command, io: Io, exit: Exit): void {
   command(base, "setup [path]", "bootstrap a base or upgrade one in place")
     .option("--name <name>", "name of the base")
     .option("--description <text>", "one sentence describing the base")
-    .action((dir: string | undefined, options: JsonOption & { name?: string; description?: string }) => {
-      const summary = setupBase(target(io, dir), { name: options.name, description: options.description });
+    .option("--dir <name>", "name of the base directory, docs by default")
+    .action((dir: string | undefined, options: JsonOption & { name?: string; description?: string; dir?: string }) => {
+      const summary = setupBase(target(io, dir), {
+        name: options.name,
+        description: options.description,
+        dir: options.dir
+      });
       const lines = [
         `base: ${rel(io, summary.docsDir)}`,
         ...summary.created.map((file) => `  created   ${rel(io, file)}`),

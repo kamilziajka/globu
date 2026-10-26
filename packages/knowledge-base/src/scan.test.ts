@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { addWorktree, baseIndex, initRepo, tempDir, write } from "../../testing/index.js";
-import { findBases, isInside, ownerBase, readBaseIndex } from "./scan.js";
+import { childBase, findBases, isInside, ownerBase, readBaseIndex } from "./scan.js";
 
 describe("findBases", () => {
   it("needs the OKF marker and respects .gitignore", () => {
@@ -9,7 +9,9 @@ describe("findBases", () => {
       ".gitignore": "target/\n",
       "docs/index.md": baseIndex("root"),
       "packages/api/docs/index.md": baseIndex("api", "API package"),
+      "packages/cli/wiki/index.md": baseIndex("cli"),
       "packages/web/docs/index.md": "# plain docs folder, not a base\n",
+      "packages/web/index.md": "# a page, not a base\n",
       "packages/broken/docs/index.md": "---\nkey: [unclosed\n---\n",
       "target/classes/docs/index.md": baseIndex("copied-by-build")
     });
@@ -23,6 +25,7 @@ describe("findBases", () => {
         docsDir: path.join(root, "packages/api/docs"),
         path: "packages/api/docs"
       },
+      { name: "cli", description: "", docsDir: path.join(root, "packages/cli/wiki"), path: "packages/cli/wiki" },
       { name: "untracked", description: "", docsDir: path.join(root, "packages/new/docs"), path: "packages/new/docs" }
     ]);
   });
@@ -42,11 +45,26 @@ describe("findBases", () => {
     expect(findBases(repo).map((base) => base.path)).toEqual(["docs"]);
   });
 
-  it("accepts a docs directory as the root", () => {
+  it("accepts a base directory as the root, whatever its name", () => {
     const root = tempDir();
-    write(root, "docs/index.md", baseIndex("root"));
-    write(root, "docs/guides/docs/index.md", baseIndex("nested"));
-    expect(findBases(path.join(root, "docs")).map((base) => base.path)).toEqual([".", "guides/docs"]);
+    write(root, "knowledge/index.md", baseIndex("root"));
+    write(root, "knowledge/guides/docs/index.md", baseIndex("nested"));
+    expect(findBases(path.join(root, "knowledge")).map((base) => base.path)).toEqual([".", "guides/docs"]);
+  });
+});
+
+describe("childBase", () => {
+  it("returns the first base directly under a directory, skipping nested repos", () => {
+    const root = tempDir();
+    write(root, "wiki/index.md", baseIndex("wiki"));
+    write(root, "docs/index.md", "# not a base\n");
+    write(root, "vendor/.git", "gitdir: elsewhere\n");
+    write(root, "vendor/index.md", baseIndex("vendored"));
+    expect(childBase(root)).toBe(path.join(root, "wiki"));
+    write(root, "knowledge/index.md", baseIndex("knowledge"));
+    expect(childBase(root)).toBe(path.join(root, "knowledge"));
+    expect(childBase(path.join(root, "docs"))).toBeNull();
+    expect(childBase(path.join(root, "missing"))).toBeNull();
   });
 });
 
@@ -58,21 +76,22 @@ describe("readBaseIndex", () => {
 
 describe("ownerBase", () => {
   const root = tempDir();
-  write(root, "docs/index.md", baseIndex("root"));
+  write(root, "wiki/index.md", baseIndex("root"));
   write(root, "packages/api/docs/index.md", baseIndex("api"));
   const apiFile = write(root, "packages/api/src/main/Handler.java", "");
   const webFile = write(root, "packages/web/src/app.js", "");
   const docFile = write(root, "packages/api/docs/topics/auth.md", "");
 
-  it("picks the nearest base walking up", () => {
+  it("picks the nearest base walking up, whatever the directory is called", () => {
     expect(ownerBase(apiFile)).toBe(path.join(root, "packages/api/docs"));
-    expect(ownerBase(webFile)).toBe(path.join(root, "docs"));
+    expect(ownerBase(webFile)).toBe(path.join(root, "wiki"));
     expect(ownerBase(docFile)).toBe(path.join(root, "packages/api/docs"));
   });
 
   it("accepts directories and files that do not exist yet", () => {
     expect(ownerBase(path.join(root, "packages/api"))).toBe(path.join(root, "packages/api/docs"));
     expect(ownerBase(path.join(root, "packages/api/src/New.java"))).toBe(path.join(root, "packages/api/docs"));
+    expect(ownerBase(path.join(root, "packages/api/src/new/deep/New.java"))).toBe(path.join(root, "packages/api/docs"));
   });
 
   it("stops at the root of the repo or worktree that holds the file", () => {

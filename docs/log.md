@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-10-26
+* A base is recognised by the `okf_version` marker in its `index.md`, not by a directory called `docs/`. `base setup` takes `--dir` to name the directory and upgrades an existing base under the target whatever it is called, the owner walk checks every child directory, and the setup skill asks whether a new base goes in `docs`, `wiki`, `knowledge` or a custom directory. Updated [knowledge bases](./knowledge-base.md), [architecture](./architecture.md), [overview](./overview.md) and the guide block in this index.
+
 ## 2026-10-23
 * Released 0.4.0, the first `@kazet/globu`, by hand. [Development](./development.md) now waits for npm to serve the tarball before the first release pushes `stable` and shows the `npm trust github` command that binds the package to the `Release` workflow. [globu CLI](./globu-cli.md) says how to clear the origin mismatch `doctor` reports after a repo transfer.
 * npm refused the name `globu` as too similar to `glob`, `global` and `globby`, so the CLI is published as `@kazet/globu`. Scoped names skip that check. The command stays `globu`, the plugin runs `node_modules/@kazet/globu/dist/globu.mjs` and a release tarball is `kazet-globu-<version>.tgz`. Updated the README, [architecture](./architecture.md), [globu CLI](./globu-cli.md), [development](./development.md) and [unattended runs](./unattended-runs.md).

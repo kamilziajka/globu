@@ -10,7 +10,7 @@ Globu plugs into Claude Code so Claude can find the right knowledge for a task a
 
 | Half | Scope | Needs the other? |
 |---|---|---|
-| Knowledge bases (`globu base`, the edit hook) | One repo, any number of OKF `docs/` bases inside it | No |
+| Knowledge bases (`globu base`, the edit hook) | One repo, any number of OKF bases inside it | No |
 | Registry (every other command and hook) | The per-user layer: which knowledge sources exist for me, when to consult them and where writes may go | Yes, through the OKF library |
 
 The dependency runs one way. The registry knows about OKF bases through its `okf` driver. The OKF library in `packages/knowledge-base` knows nothing about the registry, so the single-repo half works with no shard registered.
@@ -116,7 +116,7 @@ A driver has a fixed interface:
 
 Drivers so far, in detection order:
 
-1. `okf`: any tracked `docs/index.md` carrying `okf_version`. Each base is a root.
+1. `okf`: any tracked `index.md` carrying `okf_version`, whatever its directory is called. Each base is a root.
 2. `generic`: matches everything. The entry is the README when there is one.
 
 Source and format are separate axes. The only source type so far is `git`.

@@ -1,13 +1,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DOCS_DIRNAME, INDEX_FILENAME } from "./constants.js";
+import { INDEX_FILENAME } from "./constants.js";
 import { type Frontmatter, parseFrontmatter, textOf } from "./frontmatter.js";
 
 export type Base = { name: string; description: string; docsDir: string; path: string };
 
 const SKIPPED_DIRS = new Set(["node_modules", ".git", "target", "build", "dist", "out", ".gradle", ".venv"]);
-const INDEX_SUFFIX = `${DOCS_DIRNAME}/${INDEX_FILENAME}`;
 
 function isRepoRoot(dir: string): boolean {
   return fs.existsSync(path.join(dir, ".git"));
@@ -59,13 +58,10 @@ export function readBaseIndex(docsDir: string): Frontmatter | null {
 export function findBases(rootDir: string): Base[] {
   const root = path.resolve(rootDir);
   const files = gitFiles(root) ?? walkFiles(root);
-  const rootIsDocs = path.basename(root) === DOCS_DIRNAME;
 
   const bases: Base[] = [];
   for (const file of files) {
-    const isCandidate =
-      file === INDEX_SUFFIX || file.endsWith(`/${INDEX_SUFFIX}`) || (rootIsDocs && file === INDEX_FILENAME);
-    if (!isCandidate) continue;
+    if (path.posix.basename(file) !== INDEX_FILENAME) continue;
     const docsDir = path.dirname(path.join(root, file));
     const data = readBaseIndex(docsDir);
     if (!data) continue;
@@ -79,15 +75,25 @@ export function findBases(rootDir: string): Base[] {
   return bases.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+export function childBase(dir: string): string | null {
+  if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return null;
+  const found = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(dir, entry.name))
+    .filter((child) => !isRepoRoot(child) && readBaseIndex(child) !== null)
+    .sort();
+  return found[0] ?? null;
+}
+
 export function ownerBase(filePath: string, stopAt?: string): string | null {
   const start = path.resolve(filePath);
   const limit = stopAt === undefined ? null : path.resolve(stopAt);
   let dir = fs.statSync(start, { throwIfNoEntry: false })?.isDirectory() ? start : path.dirname(start);
 
   while (true) {
-    if (path.basename(dir) === DOCS_DIRNAME && readBaseIndex(dir)) return dir;
-    const nested = path.join(dir, DOCS_DIRNAME);
-    if (readBaseIndex(nested)) return nested;
+    const base = readBaseIndex(dir) ? dir : childBase(dir);
+    if (base !== null) return base;
     const parent = path.dirname(dir);
     if (dir === limit || parent === dir || isRepoRoot(dir)) return null;
     dir = parent;

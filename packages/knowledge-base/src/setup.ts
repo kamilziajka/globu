@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DOCS_DIRNAME, INDEX_FILENAME, LOG_FILENAME, OKF_VERSION, VERSION } from "./constants.js";
+import { DEFAULT_DOCS_DIRNAME, INDEX_FILENAME, LOG_FILENAME, OKF_VERSION, VERSION } from "./constants.js";
 import { type Frontmatter, parseFrontmatter, stringifyFrontmatter, textOf } from "./frontmatter.js";
 import { upsertAuthoringGuide } from "./guide.js";
 import { DEFAULT_LOG_BODY } from "./log.js";
+import { childBase, readBaseIndex } from "./scan.js";
 import { type BaseValidation, validateBase } from "./validate.js";
 
-export type SetupOptions = { name?: string; description?: string };
+export type SetupOptions = { name?: string; description?: string; dir?: string };
 export type SetupSummary = {
   docsDir: string;
   created: string[];
@@ -29,9 +30,16 @@ function writeIfChanged(filePath: string, next: string, summary: SetupSummary): 
   (previous === null ? summary.created : summary.updated).push(filePath);
 }
 
-export function setupBase(targetDir: string, { name, description }: SetupOptions = {}): SetupSummary {
+function resolveDocsDir(resolved: string, dir: string | undefined): string {
+  const dirname = dir ?? DEFAULT_DOCS_DIRNAME;
+  if (path.basename(resolved) === dirname || readBaseIndex(resolved)) return resolved;
+  const existing = dir === undefined ? childBase(resolved) : null;
+  return existing ?? path.join(resolved, dirname);
+}
+
+export function setupBase(targetDir: string, { name, description, dir }: SetupOptions = {}): SetupSummary {
   const resolved = path.resolve(targetDir);
-  const docsDir = path.basename(resolved) === DOCS_DIRNAME ? resolved : path.join(resolved, DOCS_DIRNAME);
+  const docsDir = resolveDocsDir(resolved, dir);
   const baseName = name ?? path.basename(path.dirname(docsDir));
   const indexPath = path.join(docsDir, INDEX_FILENAME);
   const logPath = path.join(docsDir, LOG_FILENAME);

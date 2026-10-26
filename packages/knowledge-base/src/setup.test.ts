@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { read, tempDir, write } from "../../testing/index.js";
+import { baseIndex, read, tempDir, write } from "../../testing/index.js";
 import { VERSION } from "./constants.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { AUTHORING_GUIDE_START } from "./guide.js";
@@ -36,6 +36,21 @@ describe("setupBase", () => {
     const summary = setupBase(docsDir, { name: "custom" });
     expect(summary.docsDir).toBe(docsDir);
     expect(parseFrontmatter(read(docsDir, "index.md")).data.name).toBe("custom");
+  });
+
+  it("creates the base under the directory name given", () => {
+    const root = tempDir();
+    expect(setupBase(root, { dir: "wiki" }).docsDir).toBe(path.join(root, "wiki"));
+    expect(setupBase(path.join(root, "knowledge"), { dir: "knowledge" }).docsDir).toBe(path.join(root, "knowledge"));
+    expect(setupBase(root, { dir: "knowledge" }).created).toEqual([]);
+  });
+
+  it("upgrades an existing base whatever its directory is called", () => {
+    const root = tempDir();
+    write(root, "wiki/index.md", baseIndex("kept"));
+    expect(setupBase(root).docsDir).toBe(path.join(root, "wiki"));
+    expect(setupBase(path.join(root, "wiki")).docsDir).toBe(path.join(root, "wiki"));
+    expect(setupBase(root, { dir: "docs" }).docsDir).toBe(path.join(root, "docs"));
   });
 
   it("upgrades an existing index without touching its content", () => {

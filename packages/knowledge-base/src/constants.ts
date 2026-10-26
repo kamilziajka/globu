@@ -2,7 +2,7 @@ import pkg from "../../../package.json" with { type: "json" };
 
 export const VERSION = pkg.version;
 export const PLUGIN_NAME = "knowledge-base";
-export const DOCS_DIRNAME = "docs";
+export const DEFAULT_DOCS_DIRNAME = "docs";
 export const INDEX_FILENAME = "index.md";
 export const LOG_FILENAME = "log.md";
 export const OKF_VERSION = "0.2";
