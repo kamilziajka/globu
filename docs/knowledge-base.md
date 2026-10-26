@@ -31,6 +31,8 @@ The `base` group of the [globu CLI](./globu-cli.md). Add `--json` to any command
 | `base log <docsDir> <YYYY-MM-DD> <entry...> [--title <text>]` | Add entries to a base's `log.md`, newest first. The day's section is the first heading that is `## <date>`, with or without a parenthesised title after it, such as `## 2026-10-26 (what changed)`. The date must match whole: `## 2026-10-2` and `## 2026-10-26-notes` are other sections. When the day has no section one is opened at the top, as `## <date> (<text>)` with `--title` and bare without it. `--title` does nothing when the day already has a section. |
 | `hook validate-edit` | Hook entry point. |
 
+Because `log.md` is newest first, two branches that each add an entry for the same day both insert under the same heading and conflict on merge. The resolution is always to keep both bullets.
+
 `setup` only ever changes two things in an existing `index.md`: required frontmatter keys (`okf_version`, `name`, `knowledge_base_version`) and the authoring guide block.
 
 ## Hook
