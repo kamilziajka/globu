@@ -1,6 +1,6 @@
 {
   "name": "@kazet/globu",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Knowledge bases inside a repo and a registry of knowledge shards for Claude Code",
   "author": "Kamil Ziajka",
   "license": "MIT",
