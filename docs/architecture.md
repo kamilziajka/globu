@@ -45,9 +45,10 @@ contexts:
   work: [product, team-*]
 imports:
   - source: git@github.com:acme/product.git
+    commit: 4f1c2d9e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d
 ```
 
-`imports` records the team manifests merged in with `globu import`, so a later bare `globu import --yes` refreshes them. The merge copies shards and contexts into this file: nothing is resolved at session time, and the team repo is only read when `import` runs.
+`imports` records the team manifests merged in with `globu import`, so a later bare `globu import --yes` refreshes them. An entry holds the source, the `file` when it is not the default, the `ref` when the import came from a link to a file on a branch, and the `commit` the team repo was at, so the next refresh can say whether it moved. The merge copies shards and contexts into this file: nothing is resolved at session time, and the team repo is only read when `import` runs.
 
 `state.yaml` is per machine and never shared.
 
@@ -104,7 +105,7 @@ The index, `list` and both hooks use the session view. `show`, `doctor`, `sync` 
 
 ## Probe and drivers
 
-The probe turns a directory into a shard proposal. It asks each driver in order whether it recognises the directory. The first match wins and the result is pinned in the manifest, so the probe runs at registration and not every session. `globu doctor` reports drift and `globu reprobe` refreshes the pinned result.
+The probe turns a directory into a shard proposal. It asks each driver in order whether it recognises the directory. The first match wins and the result is pinned in the manifest, so the probe runs at registration and not every session. `globu doctor` reports drift and `globu reprobe` refreshes the pinned result, or shows it with `--dry-run`. Both read the working tree of the main checkout, so a stale or differently-branched checkout is probed as it is.
 
 A driver has a fixed interface:
 

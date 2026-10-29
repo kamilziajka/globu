@@ -12,6 +12,7 @@ import {
   tempDir,
   write
 } from "../../testing/index.js";
+import { syncClaudeDirectories } from "./claude.js";
 import { loadManifest, saveManifest } from "./manifest.js";
 import { clonesDir, manifestPath, statePath } from "./paths.js";
 import {
@@ -89,6 +90,19 @@ describe("register a local directory", () => {
       mode: "read"
     });
     expect(register({ locator: repo, cwd: sandbox }).shard.id).toBe("hb");
+  });
+
+  it("falls back to the only remote when there is no origin", () => {
+    const mirror = localRepo("mirror");
+    git(mirror, "remote", "add", "gitlab", "git@gitlab.example.com:acme/mirror.git");
+    expect(register({ locator: mirror, cwd: sandbox }).shard.source.repo).toBe(
+      "git@gitlab.example.com:acme/mirror.git"
+    );
+
+    const two = localRepo("two");
+    git(two, "remote", "add", "a", "git@example.com:a/two.git");
+    git(two, "remote", "add", "b", "git@example.com:b/two.git");
+    expect(register({ locator: two, cwd: sandbox }).shard.source.repo).toBeNull();
   });
 
   it("derives the id from the remote and handles a repo that is itself a docs base", () => {
@@ -173,9 +187,30 @@ describe("register a URL", () => {
     fs.mkdirSync(dest, { recursive: true });
 
     const attached = register({ locator: url, cwd: sandbox, dest, mode: "read" });
-    expect(attached).toMatchObject({ action: "attached", shard: { path: dest, owner: "user", mode: "read" } });
-    expect(register({ locator: url, cwd: sandbox, dest }).shard.mode).toBe("write");
+    expect(attached).toMatchObject({
+      action: "attached",
+      replaced: path.join(clonesDir(), "notes"),
+      shard: { path: dest, owner: "user", mode: "read" }
+    });
+    expect(fs.existsSync(path.join(clonesDir(), "notes"))).toBe(false);
+    expect(register({ locator: url, cwd: sandbox, dest })).toMatchObject({ replaced: null, shard: { mode: "write" } });
     expect(loadManifest().shards).toHaveLength(1);
+  });
+
+  it("leaves a replaced clone alone when it is already gone or not under the clones directory", () => {
+    const url = remoteRepo("notes");
+    const managed = register({ locator: url, cwd: sandbox }).shard.path as string;
+    fs.rmSync(managed, { recursive: true });
+    expect(register({ locator: url, cwd: sandbox, dest: "work/notes" }).replaced).toBeNull();
+
+    const other = remoteRepo("other");
+    register({ locator: other, cwd: sandbox });
+    const elsewhere = localRepo("elsewhere");
+    const state = loadState();
+    state.shards.other.path = elsewhere;
+    saveState(state);
+    expect(register({ locator: other, cwd: sandbox, dest: "work/other" }).replaced).toBeNull();
+    expect(fs.existsSync(elsewhere)).toBe(true);
   });
 
   it("refuses a destination that holds something else", () => {
@@ -191,7 +226,7 @@ describe("unregister", () => {
   it("never deletes a user clone", () => {
     const repo = localRepo("mine");
     register({ locator: repo, cwd: sandbox });
-    expect(unregister("mine", true)).toEqual({ id: "mine", path: repo, clone: "kept" });
+    expect(unregister("mine", true)).toEqual({ id: "mine", path: repo, clone: "kept", claudeListed: false });
     expect(fs.existsSync(repo)).toBe(true);
     expect(() => unregister("mine", false)).toThrow(/no shard registered/);
   });
@@ -215,15 +250,27 @@ describe("unregister", () => {
     expect(unregister("mine", true).clone).toBe("kept");
   });
 
+  it("says when the Claude settings still list the clone", () => {
+    const repo = localRepo("listed");
+    register({ locator: repo, cwd: sandbox });
+    syncClaudeDirectories(false);
+    expect(unregister("listed", false)).toMatchObject({ clone: "kept", claudeListed: true });
+  });
+
   it("reports nothing to remove for a shard without a local clone", () => {
     const repo = localRepo("gone");
     register({ locator: repo, cwd: sandbox });
     fs.rmSync(repo, { recursive: true });
-    expect(unregister("gone", true)).toEqual({ id: "gone", path: repo, clone: "none" });
+    expect(unregister("gone", true)).toEqual({ id: "gone", path: repo, clone: "none", claudeListed: false });
 
     register({ locator: remoteRepo("remote-only"), cwd: sandbox });
     fs.rmSync(statePath());
-    expect(unregister("remote-only", true)).toEqual({ id: "remote-only", path: null, clone: "none" });
+    expect(unregister("remote-only", true)).toEqual({
+      id: "remote-only",
+      path: null,
+      clone: "none",
+      claudeListed: false
+    });
   });
 });
 
@@ -320,8 +367,16 @@ describe("reprobe", () => {
     expect(reprobe("svc").changed).toBe(false);
 
     write(repo, "docs/index.md", baseIndex("svc"));
+    const preview = reprobe("svc", false);
+    expect(preview).toMatchObject({
+      changed: true,
+      applied: false,
+      shard: { format: "generic" },
+      probed: { format: "okf", roots: [{ path: "docs", name: "svc", entry: "docs/index.md" }] }
+    });
+    expect(loadManifest().shards[0].format).toBe("generic");
     const result = reprobe("svc");
-    expect(result).toMatchObject({ changed: true, shard: { format: "okf" } });
+    expect(result).toMatchObject({ changed: true, applied: true, shard: { format: "okf" } });
     expect(loadManifest().shards[0].roots).toEqual([{ path: "docs", name: "svc", entry: "docs/index.md" }]);
 
     write(repo, "pkg/docs/index.md", baseIndex("pkg"));

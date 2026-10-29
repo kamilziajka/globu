@@ -18,7 +18,12 @@ const ShardSchema = z.object({
   access: z.literal("read").optional()
 });
 
-const ImportSchema = z.object({ source: z.string().min(1), file: z.string().optional() });
+const ImportSchema = z.object({
+  source: z.string().min(1),
+  file: z.string().optional(),
+  ref: z.string().optional(),
+  commit: z.string().optional()
+});
 
 const ManifestSchema = z.object({
   version: z.number().default(1),

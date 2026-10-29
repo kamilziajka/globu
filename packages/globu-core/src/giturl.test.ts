@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeRepoUrl, normalizeRepoUrl, repoBasename, sameRepo } from "./giturl.js";
+import { looksLikeRepoUrl, normalizeRepoUrl, repoBasename, sameRepo, splitFileLink } from "./giturl.js";
 
 describe("normalizeRepoUrl", () => {
   it("treats ssh, scp and https forms as the same repo", () => {
@@ -37,5 +37,36 @@ describe("helpers", () => {
     expect(repoBasename("git@github.com:acme/notes.git")).toBe("notes");
     expect(repoBasename("https://github.com/acme/handbook/")).toBe("handbook");
     expect(repoBasename("/Users/me/projects/local")).toBe("local");
+  });
+});
+
+describe("splitFileLink", () => {
+  it("splits GitLab and GitHub file links into repo, ref and file", () => {
+    expect(splitFileLink("https://gitlab.example.com/group/sub/repo/-/blob/main/.globu/manifest.yaml")).toEqual({
+      repo: "https://gitlab.example.com/group/sub/repo",
+      ref: "main",
+      file: ".globu/manifest.yaml"
+    });
+    expect(splitFileLink("https://gitlab.com/acme/repo/-/raw/v1.2/team.yaml?ref_type=tags")).toEqual({
+      repo: "https://gitlab.com/acme/repo",
+      ref: "v1.2",
+      file: "team.yaml"
+    });
+    expect(splitFileLink("https://github.com/acme/repo/blob/main/.globu/manifest.yaml#L1")).toEqual({
+      repo: "https://github.com/acme/repo",
+      ref: "main",
+      file: ".globu/manifest.yaml"
+    });
+    expect(splitFileLink("https://raw.githubusercontent.com/acme/repo/main/.globu/manifest.yaml")).toEqual({
+      repo: "https://github.com/acme/repo",
+      ref: "main",
+      file: ".globu/manifest.yaml"
+    });
+  });
+
+  it("leaves repo URLs and paths alone", () => {
+    expect(splitFileLink("https://github.com/acme/repo.git")).toBeNull();
+    expect(splitFileLink("git@github.com:acme/repo.git")).toBeNull();
+    expect(splitFileLink("./team/.globu/manifest.yaml")).toBeNull();
   });
 });

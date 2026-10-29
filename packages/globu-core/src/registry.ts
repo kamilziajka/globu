@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isInside } from "../../knowledge-base/src/index.js";
 import { activeContextName, selectShards } from "./context.js";
-import { clone, fetch, isRepo, mainCheckout, originUrl, pull } from "./git.js";
+import { clone, fetch, isRepo, mainCheckout, pull, remoteUrl } from "./git.js";
 import { looksLikeRepoUrl, repoBasename, sameRepo } from "./giturl.js";
 import { loadManifest, type Manifest, type Shard, saveManifest } from "./manifest.js";
 import { clonesDir } from "./paths.js";
-import { probeDir } from "./probe.js";
+import { type Probe, probeDir } from "./probe.js";
 import { type Access, type LocalShard, loadState, type Mode, type Owner, type State, saveState } from "./state.js";
 
 export type ResolvedShard = Shard & { path: string | null; owner: Owner | null; mode: Mode; present: boolean };
@@ -22,8 +22,25 @@ export type RegisterOptions = {
   description?: string;
   useWhen?: string;
 };
-export type RegisterResult = { action: "registered" | "attached"; shard: ResolvedShard; portable: boolean };
-export type UnregisterResult = { id: string; path: string | null; clone: "none" | "kept" | "removed" };
+export type RegisterResult = {
+  action: "registered" | "attached";
+  shard: ResolvedShard;
+  portable: boolean;
+  replaced: string | null;
+};
+export type UnregisterResult = {
+  id: string;
+  path: string | null;
+  clone: "none" | "kept" | "removed";
+  claudeListed: boolean;
+};
+export type ReprobeResult = {
+  changed: boolean;
+  applied: boolean;
+  shard: ResolvedShard;
+  previous: Pick<Shard, "format" | "roots">;
+  probed: Probe;
+};
 export type ShardUpdate = { description?: string; useWhen?: string; mode?: Mode; access?: Access };
 export type SyncEntry = { id: string; action: "cloned" | "pulled" | "fetched" | "error"; error?: string };
 
@@ -72,7 +89,7 @@ function placeLocal(locator: string, cwd: string, mode: Mode | undefined): Place
     throw new Error(`${target} is not inside a git repository (git repos are the only source type so far)`);
   }
   const localPath = mainCheckout(target);
-  return { repo: originUrl(localPath), path: localPath, owner: "user", mode: mode ?? "write" };
+  return { repo: remoteUrl(localPath), path: localPath, owner: "user", mode: mode ?? "write" };
 }
 
 function placeRemote(repo: string, id: string, options: RegisterOptions): Placement {
@@ -88,7 +105,7 @@ function placeRemote(repo: string, id: string, options: RegisterOptions): Placem
   const occupied = fs.existsSync(target) && fs.readdirSync(target).length > 0;
   if (!occupied) {
     clone(repo, target, false);
-  } else if (!isRepo(target) || !sameRepo(originUrl(target), repo)) {
+  } else if (!isRepo(target) || !sameRepo(remoteUrl(target), repo)) {
     throw new Error(`${target} already exists and is not a clone of ${repo}`);
   }
   return { repo, path: mainCheckout(target), owner: "user", mode: options.mode ?? "write" };
@@ -143,31 +160,48 @@ export function register(options: RegisterOptions): RegisterResult {
     manifest.shards.push(shard);
   }
 
+  const replaced = replacedManagedClone(state, shardId, placement.path);
   state.shards[shardId] = { path: placement.path, mode: placement.mode, owner: placement.owner };
   saveManifest(manifest);
   saveState(state);
   return {
     action: known ? "attached" : "registered",
     shard: resolveShard(shard, state),
-    portable: placement.repo !== null
+    portable: placement.repo !== null,
+    replaced
   };
+}
+
+function isManagedClone(local: LocalShard): boolean {
+  return local.owner === "globu" && isInside(clonesDir(), local.path);
+}
+
+function replacedManagedClone(state: State, id: string, newPath: string): string | null {
+  const current = Object.hasOwn(state.shards, id) ? state.shards[id] : null;
+  if (current === null || current.path === newPath || !isManagedClone(current) || !fs.existsSync(current.path)) {
+    return null;
+  }
+  fs.rmSync(current.path, { recursive: true, force: true });
+  return current.path;
 }
 
 export function unregister(id: string, purge: boolean): UnregisterResult {
   const manifest = loadManifest();
   const state = loadState();
   const resolved = resolveShard(findShard(manifest, id), state);
+  const local = Object.hasOwn(state.shards, id) ? state.shards[id] : null;
+  const claudeListed = resolved.path !== null && state.claude.directories.includes(resolved.path);
 
   manifest.shards = manifest.shards.filter((shard) => shard.id !== id);
   delete state.shards[id];
   saveManifest(manifest);
   saveState(state);
 
-  if (resolved.path === null || !resolved.present) return { id, path: resolved.path, clone: "none" };
-  const managed = resolved.owner === "globu" && isInside(clonesDir(), resolved.path);
-  if (!managed || !purge) return { id, path: resolved.path, clone: "kept" };
-  fs.rmSync(resolved.path, { recursive: true, force: true });
-  return { id, path: resolved.path, clone: "removed" };
+  const result = { id, path: resolved.path, claudeListed };
+  if (local === null || !resolved.present) return { ...result, clone: "none" };
+  if (!isManagedClone(local) || !purge) return { ...result, clone: "kept" };
+  fs.rmSync(local.path, { recursive: true, force: true });
+  return { ...result, clone: "removed" };
 }
 
 export function updateShard(id: string, update: ShardUpdate): ResolvedShard {
@@ -222,7 +256,7 @@ function syncShard(shard: ResolvedShard, state: State): SyncEntry["action"] {
     return "pulled";
   }
   if (!shard.present) throw new Error(`clone is missing at ${shard.path}, register it again with --path`);
-  if (originUrl(shard.path) !== null) fetch(shard.path);
+  if (remoteUrl(shard.path) !== null) fetch(shard.path);
   return "fetched";
 }
 
@@ -239,7 +273,7 @@ export function sync(): SyncEntry[] {
   return report;
 }
 
-export function reprobe(id: string): { changed: boolean; shard: ResolvedShard } {
+export function reprobe(id: string, apply = true): ReprobeResult {
   const manifest = loadManifest();
   const state = loadState();
   const shard = findShard(manifest, id);
@@ -248,11 +282,14 @@ export function reprobe(id: string): { changed: boolean; shard: ResolvedShard } 
     throw new Error(`shard "${id}" has no local clone, run \`globu sync\` first`);
   }
   const probed = probeDir(resolved.path);
-  const changed = probed.format !== shard.format || JSON.stringify(probed.roots) !== JSON.stringify(shard.roots);
-  shard.format = probed.format;
-  shard.roots = probed.roots;
-  saveManifest(manifest);
-  return { changed, shard: resolveShard(shard, state) };
+  const previous = { format: shard.format, roots: shard.roots };
+  const changed = probed.format !== previous.format || JSON.stringify(probed.roots) !== JSON.stringify(previous.roots);
+  if (apply) {
+    shard.format = probed.format;
+    shard.roots = probed.roots;
+    saveManifest(manifest);
+  }
+  return { changed, applied: apply, shard: resolveShard(shard, state), previous, probed };
 }
 
 export function useContext(name: string | null): string | null {

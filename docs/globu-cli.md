@@ -26,20 +26,20 @@ The `base` group works on the repo the command runs in and needs no registered s
 | `register <path>` | Adopt the git repo containing `path` in place. Editable unless `--mode read` or `--mode ask`. From a linked worktree it records the main checkout. |
 | `register <url>` | Shallow clone into `~/.globu/clones/<id>`, read-only. |
 | `register <url> --path <dir>` | Full clone at `dir` (or adopt a matching clone already there), editable. |
-| `unregister <id> [--purge]` | Remove from manifest and state. `--purge` also deletes a globu-owned clone. User-owned clones are never deleted. |
+| `unregister <id> [--purge]` | Remove from manifest and state. `--purge` also deletes a globu-owned clone. User-owned clones are never deleted. Prints a `globu claude sync` reminder when the Claude settings still list the clone. |
 | `list [--all]` | Shards in the active context, or all of them. Run inside a worktree of a shard's repo, it adds that worktree as `this session: <dir>`. With `--json` every shard carries `here` and `workPath`. |
 | `show <id>` | Everything known about one shard. |
 | `set <id> [--description] [--use-when] [--mode] [--access]` | Edit routing text, local mode or the manifest's access cap. |
-| `reprobe <id>` | Detect format and roots again and update the manifest. |
-| `sync` | Clone shards missing on this machine, pull globu-owned clones, fetch user-owned ones. With `GLOBU_GIT_TOKEN` set the clones and pulls go over https with that token. |
+| `reprobe <id> [--dry-run]` | Detect format and roots again and update the manifest. It prints the old and new format and roots; `--dry-run` prints them without writing. |
+| `sync` | Clone shards missing on this machine, pull globu-owned clones, fetch user-owned ones. With `GLOBU_GIT_TOKEN` set the clones and pulls go over https with that token. Reminds about `globu claude sync` when it cloned anything. |
 
 Other `register` flags: `--id`, `--description`, `--use-when`.
 
 Behaviours worth knowing:
 
 - The id defaults to the repo name. Two URL spellings of the same repo (ssh and https) count as the same shard.
-- Registering a repo that is already in the manifest attaches a local clone to the existing entry. That is how a manifest synced from another machine gets its paths.
-- A repo with no `origin` remote can be registered, but its manifest entry has no URL and other machines cannot sync it.
+- Registering a repo that is already in the manifest attaches a local clone to the existing entry. That is how a manifest synced from another machine gets its paths, and how an imported shard that `sync` cloned read-only is pointed at the clone you already had: the read-only clone under `~/.globu/clones` is deleted in that case, since Globu owns it.
+- The repo URL is read from the `origin` remote, or from the only remote when there is no `origin`. A repo with no remote, or with several and none called `origin`, can be registered, but its manifest entry has no URL and other machines cannot sync it.
 - `--mode` takes `read`, `ask` or `write`. `ask` lets sessions inside the shard's repo edit it and makes every other session prompt first. `--access` takes `read` or `write`.
 - `--mode write` and `--mode ask` are refused for a globu-owned clone. Register the URL again with `--path` to get an editable clone.
 
@@ -47,11 +47,15 @@ Behaviours worth knowing:
 
 | Command | Purpose |
 |---|---|
-| `import [locator]` | Merge a team manifest into this machine's manifest. The locator is a manifest file, a directory holding `.globu/manifest.yaml` or a git URL of a repo holding it. Without `--yes` it only prints what would be added, updated and defined. With no locator it refreshes every import recorded earlier. |
+| `import [locator]` | Merge a team manifest into this machine's manifest. The locator is a manifest file, a directory holding `.globu/manifest.yaml`, a git URL of a repo holding it, or a browser link to the file inside the repo on GitHub or GitLab. Without `--yes` it only prints what would be added, updated and defined, and the full command that applies it. With no locator it refreshes every import recorded earlier. |
 
-Flags: `--file <path>` names the manifest inside the repo or directory, `--context <name>` makes that context active once the import is written, `--yes` writes.
+Flags: `--file <path>` names the manifest inside the repo or directory, `--context <name>` makes that context active once the import is written, `--yes` writes, `--sync` runs `globu sync` right after a `--yes` import.
 
-Ids are global: a team shard whose id or repo is already registered under something else is an error and nothing is written. A team shard that matches a local one by id and repo updates its manifest entry and leaves the clone, mode and path alone. The import is one level deep. New shards have no clone until `globu sync` runs. The reasoning and a CI example are in [unattended runs](./unattended-runs.md).
+A browser link such as `https://gitlab.example.com/group/repo/-/blob/main/.globu/manifest.yaml` (GitLab `/-/blob/` and `/-/raw/`, GitHub `/blob/` and `/raw/`, and `raw.githubusercontent.com`) is split into the repo URL, the ref and the file. The repo is cloned at that ref and the record under `imports` keeps all three, so a refresh reads the same file at the same ref. A ref the clone cannot check out, for example a commit id, is an error that says which repo URL and `--file` to pass instead.
+
+Each import records the commit of the team repo it read, when the source is a git URL or a directory inside a repo. The output shows that commit and the one read last time, so a refresh says whether the team manifest moved. When a team manifest defines exactly one context and it is not the active one, the preview puts `--context <name>` into the suggested command and a written import says how to activate it.
+
+Ids are global: a team shard whose id or repo is already registered under something else is an error and nothing is written. A team shard that matches a local one by id and repo updates its manifest entry and leaves the clone, mode and path alone. The import is one level deep. New shards have no clone until `globu sync` runs, which clones them read-only. A written import that added shards therefore ends with the three steps that follow: `globu register <path>` for each repo already cloned on the machine, so that clone is attached editable and no second copy is made, then `globu sync` for the rest, then `globu claude sync`. The reasoning and a CI example are in [unattended runs](./unattended-runs.md).
 
 ## Contexts
 
@@ -85,6 +89,8 @@ Each failure names its reason: the shard is not in the active context, it has no
 
 ## Diagnostics
 
-`doctor` reports, per shard: missing or wrong clone, origin mismatch, format or roots that changed since registration and missing routing text. Exit code 1 when any finding is an error.
+`doctor` reports, per shard: missing or wrong clone, origin mismatch, a clone that is behind its remote as last fetched, format or roots that changed since registration, a missing entry file and missing routing text. After the shards it checks the paths it added to the Claude settings and reports, under the id `claude-settings`, any that no longer exists or belongs to no registered shard. Exit code 1 when any finding is an error.
 
 An origin mismatch is what a repo transfer or a changed remote leaves behind: `the clone's origin does not match the manifest` names the URL the manifest still holds. No command changes a shard's repo URL, so edit `repo:` under that shard's `source` in `~/.globu/manifest.yaml` to the clone's new origin, exactly as `git remote get-url origin` prints it, and run `doctor` again.
+
+The probe runs on the working tree of the main checkout, not on the default branch, so a format or roots finding says what it found and where: `format is now "generic" (no index.md with an okf_version marker) in the working tree at <path>`. Before trusting it, check that the clone is up to date (the behind warning says so) and on the branch that carries the base, then preview the change with `globu reprobe <id> --dry-run`. Versions before 0.6.0 only recognised a base in a directory called `docs`, so a base at `wiki/index.md` probed as generic until the plugin's pinned CLI was updated.

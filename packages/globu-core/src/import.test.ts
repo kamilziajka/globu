@@ -2,7 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { baseIndex, commitAll, type GitServer, initRepo, read, serveGit, tempDir, write } from "../../testing/index.js";
+import {
+  baseIndex,
+  commitAll,
+  type GitServer,
+  git,
+  initRepo,
+  read,
+  serveGit,
+  tempDir,
+  write
+} from "../../testing/index.js";
 import { importManifests } from "./import.js";
 import { loadManifest, type Manifest, saveManifest } from "./manifest.js";
 import { clonesDir, manifestPath, statePath } from "./paths.js";
@@ -70,7 +80,19 @@ describe("import from a file", () => {
       applied: false,
       manifestPath: manifestPath(),
       context: "team",
-      plans: [{ source: file, file: null, added: ["product", "backend"], updated: [], contexts: ["team"] }]
+      suggestedContext: null,
+      plans: [
+        {
+          source: file,
+          file: null,
+          ref: null,
+          commit: null,
+          previousCommit: null,
+          added: ["product", "backend"],
+          updated: [],
+          contexts: ["team"]
+        }
+      ]
     });
     expect(fs.existsSync(manifestPath())).toBe(false);
 
@@ -105,7 +127,18 @@ describe("import from a file", () => {
 
     write(dir, ".globu/manifest.yaml", teamManifest([{ id: "product", repo: product, description: "Product truth" }]));
     const refreshed = run(undefined);
-    expect(refreshed.plans).toEqual([{ source: dir, file: null, added: [], updated: ["product"], contexts: [] }]);
+    expect(refreshed.plans).toEqual([
+      {
+        source: dir,
+        file: null,
+        ref: null,
+        commit: null,
+        previousCommit: null,
+        added: [],
+        updated: ["product"],
+        contexts: []
+      }
+    ]);
     expect(loadManifest().shards[0]).toMatchObject({ description: "Product truth" });
     expect(loadManifest().shards[0].access).toBeUndefined();
     expect(loadManifest().imports).toEqual([{ source: dir }]);
@@ -199,14 +232,65 @@ describe("import from a repo", () => {
     initRepo(teamDir, { ".globu/manifest.yaml": teamManifest([{ id: "notes", repo: notes }], { work: ["notes"] }) });
     const url = `file://${teamDir}`;
 
-    expect(run(url).plans[0]).toEqual({ source: url, file: null, added: ["notes"], updated: [], contexts: ["work"] });
-    expect(loadManifest().imports).toEqual([{ source: url }]);
+    const first = git(teamDir, "rev-parse", "HEAD");
+    expect(run(url).plans[0]).toEqual({
+      source: url,
+      file: null,
+      ref: null,
+      commit: first,
+      previousCommit: null,
+      added: ["notes"],
+      updated: [],
+      contexts: ["work"]
+    });
+    expect(loadManifest().imports).toEqual([{ source: url, commit: first }]);
     expect(fs.existsSync(clonesDir())).toBe(false);
 
     write(teamDir, "other.yaml", teamManifest([{ id: "other", repo: remoteRepo("other") }]));
     commitAll(teamDir);
-    expect(run(url, { file: "other.yaml" }).plans[0].added).toEqual(["other"]);
+    const second = git(teamDir, "rev-parse", "HEAD");
+    expect(run(url, { file: "other.yaml" }).plans[0]).toMatchObject({
+      added: ["other"],
+      commit: second,
+      previousCommit: first
+    });
+    expect(loadManifest().imports).toEqual([{ source: url, file: "other.yaml", commit: second }]);
+    expect(run(teamDir).plans[0]).toMatchObject({ source: teamDir, commit: second, previousCommit: null });
     expect(() => run(url, { file: "nope.yaml" })).toThrow(/no manifest at nope\.yaml in file:/);
+  });
+
+  it("splits a link to a file inside a repo into repo, ref and file", async () => {
+    const root = path.join(sandbox, "served");
+    const notes = remoteRepo("notes");
+    const teamDir = initRepo(path.join(root, "team.git"), {
+      ".globu/manifest.yaml": teamManifest([{ id: "notes", repo: notes }], { work: ["notes"] })
+    });
+    git(teamDir, "checkout", "-q", "-b", "draft");
+    write(teamDir, "manifests/draft.yaml", teamManifest([{ id: "draft", repo: remoteRepo("draft") }]));
+    commitAll(teamDir);
+    git(teamDir, "checkout", "-q", "main");
+    const served = await serveGit(root, null);
+    server = served;
+    const base = served.url("team.git");
+
+    expect(run(`${base}/-/blob/main/.globu/manifest.yaml`).plans[0]).toMatchObject({
+      source: base,
+      file: ".globu/manifest.yaml",
+      ref: "main",
+      added: ["notes"],
+      contexts: ["work"]
+    });
+    expect(run(`${base}/blob/draft/manifests/draft.yaml?ref_type=heads`).plans[0]).toMatchObject({
+      ref: "draft",
+      added: ["draft"]
+    });
+    expect(loadManifest().imports).toEqual([
+      { source: base, file: "manifests/draft.yaml", ref: "draft", commit: git(teamDir, "rev-parse", "draft") }
+    ]);
+    expect(run(undefined).plans[0]).toMatchObject({ source: base, ref: "draft", added: [], updated: [] });
+
+    expect(() => run(`${base}/-/blob/nope/x.yaml`)).toThrow(/could not clone .* at "nope"[\s\S]*--file x\.yaml/);
+    expect(() => run(`${base}/blob/main/x.yaml`, { file: "y.yaml" })).toThrow(/--file cannot be combined/);
   });
 
   it("uses the token for http clones and pulls", async () => {

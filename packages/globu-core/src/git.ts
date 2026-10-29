@@ -106,16 +106,32 @@ export function pathsNamed(dir: string, revision: string, name: string): string[
   }
 }
 
-export function originUrl(dir: string): string | null {
+export function remoteUrl(dir: string): string | null {
   try {
     return git(["remote", "get-url", "origin"], dir);
+  } catch {
+    const remotes = git(["remote"], dir).split("\n").filter(Boolean);
+    return remotes.length === 1 ? git(["remote", "get-url", remotes[0]], dir) : null;
+  }
+}
+
+export function headCommit(dir: string): string | null {
+  try {
+    return git(["rev-parse", "HEAD"], dir);
   } catch {
     return null;
   }
 }
 
-export function clone(repoUrl: string, destDir: string, shallow: boolean): void {
-  git([...gitAuthArgs(repoUrl), "clone", ...(shallow ? ["--depth", "1"] : []), repoUrl, destDir]);
+export function commitsBehind(dir: string): number {
+  const revision = defaultRevision(dir);
+  return revision === "HEAD" ? 0 : Number(git(["rev-list", "--count", `HEAD..${revision}`], dir));
+}
+
+export function clone(repoUrl: string, destDir: string, shallow: boolean, ref?: string): void {
+  const depth = shallow ? ["--depth", "1"] : [];
+  const branch = ref === undefined ? [] : ["--branch", ref];
+  git([...gitAuthArgs(repoUrl), "clone", ...depth, ...branch, repoUrl, destDir]);
 }
 
 export function pull(dir: string, repoUrl: string | null): void {

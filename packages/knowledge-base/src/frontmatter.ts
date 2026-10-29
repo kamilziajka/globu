@@ -13,7 +13,8 @@ export function textOf(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-export function parseFrontmatter(content: string): ParsedDoc {
+export function parseFrontmatter(raw: string): ParsedDoc {
+  const content = raw.replace(/^\uFEFF/, "");
   const match = FRONTMATTER_RE.exec(content);
   if (!match) return { data: {}, body: content, hasFrontmatter: false };
   const parsed: unknown = YAML.parse(match[1]);

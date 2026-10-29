@@ -40,9 +40,9 @@ The easiest way to write one is to register the shards on a laptop and copy the 
 
 ## Import
 
-`globu import <locator>` merges a team manifest into the local one. The locator is a path to a manifest file, a directory holding `.globu/manifest.yaml` or a git URL of a repo holding it. A URL is cloned shallowly into a temporary directory that is removed after the file is read. `--file <path>` names another file inside the repo or directory.
+`globu import <locator>` merges a team manifest into the local one. The locator is a path to a manifest file, a directory holding `.globu/manifest.yaml`, a git URL of a repo holding it, or the browser link to the file on GitHub or GitLab (`.../-/blob/main/.globu/manifest.yaml`), which is split into repo, ref and file. A URL is cloned shallowly into a temporary directory that is removed after the file is read. `--file <path>` names another file inside the repo or directory.
 
-Without `--yes` the command only prints what it would add, update and define. With `--yes` it writes the manifest and records the locator under `imports`, so a bare `globu import --yes` later refreshes every recorded import. `--context <name>` makes one of the merged contexts active in the same step.
+Without `--yes` the command only prints what it would add, update and define, followed by the full command that applies it. With `--yes` it writes the manifest and records the locator, the file, the ref and the commit it read under `imports`, so a bare `globu import --yes` later refreshes every recorded import and says whether the team manifest moved. `--context <name>` makes one of the merged contexts active in the same step; when the team manifest defines exactly one context the preview suggests it. `--sync` runs `globu sync` in the same command.
 
 The rules of the merge:
 
@@ -51,7 +51,7 @@ The rules of the merge:
 - Team contexts replace local contexts of the same name.
 - The import is one level deep. An `imports` list inside the team manifest is ignored.
 
-Imported shards have no clone until `globu sync` runs, which clones them read-only under `~/.globu/clones`. A checkout that already exists, such as the job's own repository, is attached with `globu register <path>` before `sync`, and is then editable and fetched rather than cloned again.
+Imported shards have no clone until `globu sync` runs, which clones them read-only under `~/.globu/clones`. A checkout that already exists, such as the job's own repository or a developer's working copy, is attached with `globu register <path>` before `sync`, and is then editable and fetched rather than cloned again. Done after `sync`, the same `register <path>` still attaches the existing checkout and deletes the read-only copy `sync` made. A written import that added shards prints these steps, and `sync` and `unregister` remind about `globu claude sync` when the Claude settings need to follow.
 
 ## Clones with a token
 

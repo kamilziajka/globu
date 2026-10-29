@@ -1,12 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { claudeSettingsPath, manifestPath, statePath } from "../../globu-core/src/index.js";
-import { addWorktree, baseIndex, captureIo, initRepo, read, tempDir, write } from "../../testing/index.js";
+import { claudeSettingsPath, clonesDir, manifestPath, statePath } from "../../globu-core/src/index.js";
+import {
+  addWorktree,
+  baseIndex,
+  captureIo,
+  commitAll,
+  type GitServer,
+  git,
+  initRepo,
+  read,
+  serveGit,
+  tempDir,
+  write
+} from "../../testing/index.js";
 import { globuMain } from "./globu.js";
 
 let sandbox: string;
+let server: GitServer | null = null;
 
 function run(argv: string[], input: unknown = "", cwd = sandbox) {
   const io = captureIo(cwd, input);
@@ -27,6 +40,11 @@ function remoteRepo(name: string): string {
 
 beforeEach(() => {
   sandbox = tempDir();
+});
+
+afterEach(async () => {
+  await server?.close();
+  server = null;
 });
 
 describe("globu help", () => {
@@ -79,8 +97,10 @@ describe("globu register, show and list", () => {
     expect(result.out).toContain("note: add routing text with `globu set hb --description ... --use-when ...`\n");
     expect(result.out).not.toContain("no origin remote");
 
-    const editable = json(["register", url, "--path", "work/hb", "--mode", "read", "--description", "x"]);
-    expect(editable).toMatchObject({ action: "attached", shard: { owner: "user", mode: "read" } });
+    const editable = run(["register", url, "--path", "work/hb", "--mode", "read", "--description", "x"]).out;
+    expect(editable).toContain("attached hb\n");
+    expect(editable).toContain(`removed the read-only clone it replaces at ${path.join(clonesDir(), "hb")}\n`);
+    expect(json(["show", "hb"])).toMatchObject({ owner: "user", mode: "read" });
   });
 
   it("shows shards in every local state", () => {
@@ -135,7 +155,19 @@ describe("globu set, reprobe, unregister and sync", () => {
 
     expect(run(["reprobe", "svc"]).out.startsWith("unchanged\n")).toBe(true);
     write(repo, "docs/index.md", baseIndex("svc"));
-    expect(run(["reprobe", "svc"]).out.startsWith("updated\n")).toBe(true);
+    const preview = run(["reprobe", "svc", "--dry-run"]).out;
+    expect(preview).toMatch(
+      /^would update\nformat: generic -> okf\nroots: {2}\. \(entry: README\.md\) -> docs \(entry: docs\/index\.md\)\n/
+    );
+    expect(preview).toContain("format:      okf\n");
+    expect(preview.endsWith("nothing written, run again without --dry-run to apply\n")).toBe(true);
+    expect(run(["show", "svc"]).out).toContain("format:      generic\n");
+    expect(run(["reprobe", "svc"]).out.startsWith("updated\nformat: generic -> okf\n")).toBe(true);
+    const plain = localRepo("plain", { "notes.txt": "x" });
+    run(["register", plain]);
+    write(plain, "docs/index.md", baseIndex("plain"));
+    expect(run(["reprobe", "plain", "--dry-run"]).out).toContain("roots:  . -> docs (entry: docs/index.md)\n");
+    run(["unregister", "plain"]);
     expect(run(["sync"])).toMatchObject({ code: 0, out: "fetched\tsvc\n" });
 
     expect(run(["unregister", "svc", "--purge"]).out).toBe("unregistered svc, clone left in place\n");
@@ -172,20 +204,41 @@ describe("globu import", () => {
     };
     write(teamDir, ".globu/manifest.yaml", YAML.stringify({ shards: [shard], contexts: { team: ["notes"] } }));
     const plan = [teamDir, "  added:    notes", "  updated:  -", "  contexts: team", "active context: team"];
+    const claudeHint =
+      "next: `globu claude sync` adds the clones to the Claude settings, so Claude reads them without a prompt";
+    const nextSteps = [
+      "next: `globu register <path>` for each added repo that is already cloned on this machine, so that clone is attached editable instead of a second copy",
+      `next: \`globu sync\` clones the rest read-only under ${clonesDir()}`,
+      claudeHint
+    ];
 
     expect(run(["import", "team", "--context", "team"])).toEqual({
       code: 0,
       err: "",
-      out: [...plan, "nothing written, run again with --yes to apply", ""].join("\n")
+      out: [...plan, "nothing written, apply with: globu import team --context team --yes", ""].join("\n")
     });
+    expect(run(["import", "team", "--file", ".globu/manifest.yaml", "--sync"])).toMatchObject({
+      code: 1,
+      err: "globu: --sync needs --yes, nothing is cloned for a preview\n"
+    });
+    expect(run(["import", "team", "--file", ".globu/manifest.yaml"]).out).toContain(
+      "apply with: globu import team --file .globu/manifest.yaml --context team --yes\n"
+    );
     expect(run(["list"]).out).toBe("no shards registered\n");
-    expect(json(["import", "team"])).toMatchObject({ applied: false, context: null, plans: [{ file: null }] });
+    expect(json(["import", "team"])).toMatchObject({
+      applied: false,
+      context: null,
+      suggestedContext: "team",
+      synced: null,
+      plans: [{ file: null, ref: null, commit: null }]
+    });
 
     expect(run(["import", "team", "--context", "team", "--yes"]).out).toBe(
-      [...plan, `written to ${manifestPath()}`, "next: `globu sync` clones the new shards", ""].join("\n")
+      [...plan, `written to ${manifestPath()}`, ...nextSteps, ""].join("\n")
     );
     expect(run(["list"]).out).toBe("context: team\nnotes\tgeneric\tread\t(not synced)\n");
-    expect(run(["sync"]).out).toBe("cloned\tnotes\n");
+    expect(run(["sync"]).out).toBe(`cloned\tnotes\n${claudeHint}\n`);
+    expect(run(["import"]).out).toContain("nothing written, apply with: globu import --yes\n");
     expect(run(["import", "--yes"]).out).toBe(
       [teamDir, "  added:    -", "  updated:  -", "  contexts: team", `written to ${manifestPath()}`, ""].join("\n")
     );
@@ -198,6 +251,56 @@ describe("globu import", () => {
       [teamDir, "  added:    -", "  updated:  notes", "  contexts: -", `written to ${manifestPath()}`, ""].join("\n")
     );
     expect(run(["show", "notes"]).out).toContain("description: Team notes\n");
+  });
+
+  it("clones right after the import with --sync and shows the commit it read", () => {
+    const teamDir = initRepo(path.join(sandbox, "team"));
+    const shards = [
+      { id: "notes", source: { type: "git", repo: remoteRepo("notes") }, format: "generic", roots: [{ path: "." }] },
+      { id: "gone", source: { type: "git", repo: "file:///nowhere/gone" }, format: "generic", roots: [{ path: "." }] }
+    ];
+    write(teamDir, ".globu/manifest.yaml", YAML.stringify({ shards, contexts: { team: ["notes", "gone"] } }));
+    commitAll(teamDir);
+    const commit = git(teamDir, "rev-parse", "HEAD").slice(0, 7);
+
+    expect(run(["import", "team"]).out).toContain(
+      `  commit:   ${commit}\nnothing written, apply with: globu import team --context team --yes\n`
+    );
+    const result = run(["import", "team", "--yes", "--sync"]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("note: the team manifest defines the context team, `globu use team` activates it\n");
+    expect(result.out).toContain("cloned\tnotes\nerror\tgone\tgit ");
+    expect(result.out).toContain("next: `globu claude sync` adds the clones");
+    expect(result.out).not.toContain("globu register <path>");
+    expect(run(["list", "--all"]).out).toContain(`notes\tgeneric\tread\t${path.join(clonesDir(), "notes")}\n`);
+
+    write(teamDir, ".globu/manifest.yaml", YAML.stringify({ shards: [shards[0]], contexts: { team: ["notes"] } }));
+    commitAll(teamDir);
+    const next = git(teamDir, "rev-parse", "HEAD").slice(0, 7);
+    expect(run(["import", "--yes"]).out).toContain(`  commit:   ${next} (was ${commit})\n`);
+    expect(run(["import", "team", "--yes", "--sync"])).toMatchObject({
+      code: 1,
+      out: expect.stringContaining("error\tgone")
+    });
+  });
+
+  it("imports from a link to the manifest file inside a repo", async () => {
+    const root = path.join(sandbox, "served");
+    const shard = {
+      id: "notes",
+      source: { type: "git", repo: remoteRepo("notes") },
+      format: "generic",
+      roots: [{ path: "." }]
+    };
+    initRepo(path.join(root, "team.git"), { "manifests/team.yaml": YAML.stringify({ shards: [shard] }) });
+    server = await serveGit(root, null);
+    const base = server.url("team.git");
+
+    const preview = run(["import", `${base}/-/blob/main/manifests/team.yaml`]).out;
+    expect(preview.startsWith(`${base} (manifests/team.yaml) at main\n  added:    notes\n`)).toBe(true);
+    expect(preview).toContain(`apply with: globu import ${base}/-/blob/main/manifests/team.yaml --yes\n`);
+    expect(run(["import", `${base}/-/blob/main/manifests/team.yaml`, "--yes"]).code).toBe(0);
+    expect(json(["show", "notes"])).toMatchObject({ source: { repo: shard.source.repo } });
   });
 
   it("rejects bad arguments", () => {
@@ -253,6 +356,10 @@ describe("globu index, doctor and claude sync", () => {
     const repo = localRepo("notes");
     run(["register", repo]);
     expect(run(["claude", "sync"]).out).toBe(`updated ${claudeSettingsPath()}\n${repo}\n`);
+    expect(run(["unregister", "notes"]).out).toBe(
+      "unregistered notes, clone left in place\nnext: `globu claude sync` removes its path from the Claude settings\n"
+    );
+    run(["register", repo]);
     expect(run(["claude", "sync"]).out).toBe(`unchanged ${claudeSettingsPath()}\n${repo}\n`);
     expect(run(["claude", "sync", "--remove"]).out).toBe(`updated ${claudeSettingsPath()}\n`);
     expect(JSON.parse(read(claudeSettingsPath()))).toEqual({ permissions: { additionalDirectories: [] } });

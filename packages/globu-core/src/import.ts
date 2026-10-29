@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clone } from "./git.js";
-import { looksLikeRepoUrl, sameRepo } from "./giturl.js";
+import { clone, headCommit } from "./git.js";
+import { looksLikeRepoUrl, sameRepo, splitFileLink } from "./giturl.js";
 import {
   loadManifest,
   type Manifest,
@@ -20,27 +20,45 @@ export type ImportOptions = { locator?: string; file?: string; context?: string;
 export type ImportPlan = {
   source: string;
   file: string | null;
+  ref: string | null;
+  commit: string | null;
+  previousCommit: string | null;
   added: string[];
   updated: string[];
   contexts: string[];
 };
-export type ImportResult = { applied: boolean; manifestPath: string; context: string | null; plans: ImportPlan[] };
+export type ImportResult = {
+  applied: boolean;
+  manifestPath: string;
+  context: string | null;
+  suggestedContext: string | null;
+  plans: ImportPlan[];
+};
 
-function fetchTeamManifest(entry: ManifestImport): Manifest {
+type TeamManifest = { manifest: Manifest; commit: string | null };
+
+function fetchTeamManifest(entry: ManifestImport): TeamManifest {
   const file = entry.file ?? DEFAULT_IMPORT_FILE;
   if (!looksLikeRepoUrl(entry.source)) {
     const target = fs.statSync(entry.source, { throwIfNoEntry: false })?.isDirectory()
       ? path.join(entry.source, file)
       : entry.source;
     if (!fs.existsSync(target)) throw new Error(`no manifest at ${target}`);
-    return readManifestFile(target);
+    return { manifest: readManifestFile(target), commit: headCommit(path.dirname(target)) };
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "globu-import-"));
   try {
-    clone(entry.source, tmp, true);
+    try {
+      clone(entry.source, tmp, true, entry.ref);
+    } catch (err) {
+      if (entry.ref === undefined) throw err;
+      throw new Error(
+        `could not clone ${entry.source} at "${entry.ref}": ${(err as Error).message}. Pass the repo URL with --file ${file} to read its default branch instead`
+      );
+    }
     const target = path.join(tmp, file);
     if (!fs.existsSync(target)) throw new Error(`no manifest at ${file} in ${entry.source}`);
-    return readManifestFile(target);
+    return { manifest: readManifestFile(target), commit: headCommit(tmp) };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -57,9 +75,18 @@ function shardKey(shard: Shard): string {
   ]);
 }
 
-function merge(manifest: Manifest, team: Manifest, entry: ManifestImport): ImportPlan {
-  const plan: ImportPlan = { source: entry.source, file: entry.file ?? null, added: [], updated: [], contexts: [] };
-  for (const shard of team.shards) {
+function merge(manifest: Manifest, team: TeamManifest, entry: ManifestImport, previous: ManifestImport | undefined) {
+  const plan: ImportPlan = {
+    source: entry.source,
+    file: entry.file ?? null,
+    ref: entry.ref ?? null,
+    commit: team.commit,
+    previousCommit: previous?.commit ?? null,
+    added: [],
+    updated: [],
+    contexts: []
+  };
+  for (const shard of team.manifest.shards) {
     if (shard.source.repo === null) {
       throw new Error(`shard "${shard.id}" in ${entry.source} has no repo URL, so it cannot be imported`);
     }
@@ -77,17 +104,28 @@ function merge(manifest: Manifest, team: Manifest, entry: ManifestImport): Impor
       plan.updated.push(shard.id);
     }
   }
-  for (const [name, patterns] of Object.entries(team.contexts)) {
+  for (const [name, patterns] of Object.entries(team.manifest.contexts)) {
     manifest.contexts[name] = patterns;
     plan.contexts.push(name);
   }
   return plan;
 }
 
-function recordImport(manifest: Manifest, entry: ManifestImport): void {
+function recordImport(manifest: Manifest, entry: ManifestImport, commit: string | null): void {
+  const record = commit === null ? entry : { ...entry, commit };
   const index = manifest.imports.findIndex((known) => known.source === entry.source);
-  if (index === -1) manifest.imports.push(entry);
-  else manifest.imports[index] = entry;
+  if (index === -1) manifest.imports.push(record);
+  else manifest.imports[index] = record;
+}
+
+function entryFor(locator: string, file: string | undefined, cwd: string): ManifestImport {
+  const link = splitFileLink(locator);
+  if (link !== null) {
+    if (file !== undefined) throw new Error("--file cannot be combined with a link to a file inside a repo");
+    return { source: link.repo, file: link.file, ref: link.ref };
+  }
+  const source = looksLikeRepoUrl(locator) ? locator : path.resolve(cwd, locator);
+  return file === undefined ? { source } : { source, file };
 }
 
 export function importManifests(options: ImportOptions): ImportResult {
@@ -97,21 +135,29 @@ export function importManifests(options: ImportOptions): ImportResult {
   if (options.locator === undefined) {
     if (options.file !== undefined) throw new Error("--file needs a path or a repo URL to read it from");
     if (manifest.imports.length === 0) throw new Error("nothing to import: give a path or a repo URL");
-    entries = manifest.imports;
+    entries = manifest.imports.map(({ commit: _commit, ...entry }) => entry);
   } else {
-    const source = looksLikeRepoUrl(options.locator) ? options.locator : path.resolve(options.cwd, options.locator);
-    entries = [options.file === undefined ? { source } : { source, file: options.file }];
+    entries = [entryFor(options.locator, options.file, options.cwd)];
   }
 
+  const previous = manifest.imports.map((entry) => ({ ...entry }));
   const plans = entries.map((entry) => {
-    const plan = merge(manifest, fetchTeamManifest(entry), entry);
-    recordImport(manifest, entry);
+    const team = fetchTeamManifest(entry);
+    const plan = merge(
+      manifest,
+      team,
+      entry,
+      previous.find((known) => known.source === entry.source)
+    );
+    recordImport(manifest, entry, team.commit);
     return plan;
   });
   const context = options.context ?? null;
   if (context !== null && !Object.hasOwn(manifest.contexts, context)) {
     throw new Error(`unknown context "${context}" (known: ${Object.keys(manifest.contexts).join(", ") || "none"})`);
   }
+  const defined = [...new Set(plans.flatMap((plan) => plan.contexts))];
+  const suggestedContext = context === null && defined.length === 1 && state.current !== defined[0] ? defined[0] : null;
 
   if (options.apply) {
     saveManifest(manifest);
@@ -120,5 +166,5 @@ export function importManifests(options: ImportOptions): ImportResult {
       saveState(state);
     }
   }
-  return { applied: options.apply, manifestPath: manifestPath(), context, plans };
+  return { applied: options.apply, manifestPath: manifestPath(), context, suggestedContext, plans };
 }

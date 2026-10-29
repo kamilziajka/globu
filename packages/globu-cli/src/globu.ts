@@ -2,6 +2,7 @@ import path from "node:path";
 import { Option } from "commander";
 import {
   type Access,
+  clonesDir,
   commandTargets,
   DEFAULT_IMPORT_FILE,
   doctor,
@@ -12,6 +13,7 @@ import {
   locate,
   type Mode,
   type RefResult,
+  type ReprobeResult,
   type ResolvedShard,
   register,
   removeContext,
@@ -21,6 +23,7 @@ import {
   resolveAll,
   resolveRefs,
   type SessionShard,
+  type SyncEntry,
   sessionHome,
   setContext,
   sync,
@@ -89,24 +92,91 @@ function guardReason({ decision, shard, target }: Verdict, viaCommand: boolean):
   return `globu: ${subject} asks before edits from sessions in other repos. Approve only if you want this session to change it.`;
 }
 
+const CLAUDE_SYNC_HINT =
+  "next: `globu claude sync` adds the clones to the Claude settings, so Claude reads them without a prompt";
+
+function shortCommit(commit: string): string {
+  return commit.slice(0, 7);
+}
+
 function importPlanLines(plan: ImportPlan): string[] {
-  return [
-    `${plan.source}${plan.file === null ? "" : ` (${plan.file})`}`,
+  const at = plan.ref === null ? "" : ` at ${plan.ref}`;
+  const lines = [
+    `${plan.source}${plan.file === null ? "" : ` (${plan.file})`}${at}`,
     `  added:    ${plan.added.join(", ") || "-"}`,
     `  updated:  ${plan.updated.join(", ") || "-"}`,
     `  contexts: ${plan.contexts.join(", ") || "-"}`
   ];
+  if (plan.commit !== null) {
+    const was =
+      plan.previousCommit === null || plan.previousCommit === plan.commit
+        ? ""
+        : ` (was ${shortCommit(plan.previousCommit)})`;
+    lines.push(`  commit:   ${shortCommit(plan.commit)}${was}`);
+  }
+  return lines;
 }
 
-function importText(result: ImportResult): string {
+type ImportArgs = { locator?: string; file?: string; context?: string; sync?: boolean };
+
+function applyCommand(args: ImportArgs, result: ImportResult): string {
+  const context = args.context ?? result.suggestedContext;
+  return [
+    "globu import",
+    ...(args.locator === undefined ? [] : [args.locator]),
+    ...(args.file === undefined ? [] : [`--file ${args.file}`]),
+    ...(context === null ? [] : [`--context ${context}`]),
+    "--yes"
+  ].join(" ");
+}
+
+function syncLines(report: SyncEntry[]): string[] {
+  return report.map((entry) => [entry.action, entry.id, ...(entry.error ? [entry.error] : [])].join("\t"));
+}
+
+function importText(args: ImportArgs, result: ImportResult, synced: SyncEntry[] | null): string {
   const lines = result.plans.flatMap(importPlanLines);
   if (result.context !== null) lines.push(`active context: ${result.context}`);
   if (!result.applied) {
-    lines.push("nothing written, run again with --yes to apply");
-  } else {
-    lines.push(`written to ${result.manifestPath}`);
-    if (result.plans.some((plan) => plan.added.length > 0)) lines.push("next: `globu sync` clones the new shards");
+    lines.push(`nothing written, apply with: ${applyCommand(args, result)}`);
+    return lines.join("\n");
   }
+  lines.push(`written to ${result.manifestPath}`);
+  if (result.suggestedContext !== null) {
+    lines.push(
+      `note: the team manifest defines the context ${result.suggestedContext}, \`globu use ${result.suggestedContext}\` activates it`
+    );
+  }
+  const added = result.plans.some((plan) => plan.added.length > 0);
+  if (synced !== null) {
+    lines.push(...syncLines(synced));
+    if (synced.some((entry) => entry.action === "cloned")) lines.push(CLAUDE_SYNC_HINT);
+  } else if (added) {
+    lines.push(
+      "next: `globu register <path>` for each added repo that is already cloned on this machine, so that clone is attached editable instead of a second copy",
+      `next: \`globu sync\` clones the rest read-only under ${clonesDir()}`,
+      CLAUDE_SYNC_HINT
+    );
+  }
+  return lines.join("\n");
+}
+
+function rootsText(shard: { roots: ResolvedShard["roots"] }): string {
+  return shard.roots
+    .map((root) => `${root.path}${root.entry === undefined ? "" : ` (entry: ${root.entry})`}`)
+    .join(", ");
+}
+
+function reprobeText(result: ReprobeResult): string {
+  const verb = result.changed ? (result.applied ? "updated" : "would update") : "unchanged";
+  const lines = [verb];
+  const { previous, probed } = result;
+  if (probed.format !== previous.format) lines.push(`format: ${previous.format} -> ${probed.format}`);
+  if (JSON.stringify(probed.roots) !== JSON.stringify(previous.roots)) {
+    lines.push(`roots:  ${rootsText(previous)} -> ${rootsText(probed)}`);
+  }
+  lines.push(shardDetails({ ...result.shard, format: result.probed.format, roots: result.probed.roots }));
+  if (result.changed && !result.applied) lines.push("nothing written, run again without --dry-run to apply");
   return lines.join("\n");
 }
 
@@ -149,6 +219,7 @@ export function globuMain(argv: string[], io: Io): number {
               useWhen: options.useWhen
             });
             const lines = [`${result.action} ${result.shard.id}`, shardDetails(result.shard)];
+            if (result.replaced !== null) lines.push(`removed the read-only clone it replaces at ${result.replaced}`);
             if (!result.portable) {
               lines.push("note: this repo has no origin remote, so other machines cannot sync it");
             }
@@ -165,7 +236,9 @@ export function globuMain(argv: string[], io: Io): number {
         .option("--purge", "also delete a clone that globu owns")
         .action((id: string, options: JsonOption & { purge?: boolean }) => {
           const result = unregister(id, options.purge === true);
-          print(io, options.json, result, `unregistered ${result.id}${UNREGISTER_SUFFIX[result.clone]}`);
+          const lines = [`unregistered ${result.id}${UNREGISTER_SUFFIX[result.clone]}`];
+          if (result.claudeListed) lines.push("next: `globu claude sync` removes its path from the Claude settings");
+          print(io, options.json, result, lines.join("\n"));
         });
 
       command(program, "list", "list the shards in the active context")
@@ -207,16 +280,17 @@ export function globuMain(argv: string[], io: Io): number {
           }
         );
 
-      command(program, "reprobe <id>", "detect a shard's format and roots again").action(
-        (id: string, options: JsonOption) => {
-          const result = reprobe(id);
-          print(io, options.json, result, `${result.changed ? "updated" : "unchanged"}\n${shardDetails(result.shard)}`);
-        }
-      );
+      command(program, "reprobe <id>", "detect a shard's format and roots again")
+        .option("--dry-run", "show what would change without writing the manifest")
+        .action((id: string, options: JsonOption & { dryRun?: boolean }) => {
+          const result = reprobe(id, options.dryRun !== true);
+          print(io, options.json, result, reprobeText(result));
+        });
 
       command(program, "sync", "clone missing shards and update the existing clones").action((options: JsonOption) => {
         const report = sync();
-        const lines = report.map((entry) => [entry.action, entry.id, ...(entry.error ? [entry.error] : [])].join("\t"));
+        const lines = syncLines(report);
+        if (report.some((entry) => entry.action === "cloned")) lines.push(CLAUDE_SYNC_HINT);
         print(io, options.json, report, lines.join("\n") || "no shards registered");
         if (report.some((entry) => entry.action === "error")) exit(1);
       });
@@ -225,18 +299,20 @@ export function globuMain(argv: string[], io: Io): number {
         .option("--file <path>", `the manifest inside a repo or directory, default ${DEFAULT_IMPORT_FILE}`)
         .option("--context <name>", "make this context active once the import is written")
         .option("--yes", "write the merged manifest; without it the command only shows what would change")
-        .action(
-          (locator: string | undefined, options: JsonOption & { file?: string; context?: string; yes?: boolean }) => {
-            const result = importManifests({
-              locator,
-              file: options.file,
-              context: options.context,
-              apply: options.yes === true,
-              cwd: io.cwd
-            });
-            print(io, options.json, result, importText(result));
-          }
-        );
+        .option("--sync", "with --yes, run `globu sync` right after the import")
+        .action((locator: string | undefined, options: JsonOption & ImportArgs & { yes?: boolean }) => {
+          if (options.sync && !options.yes) throw new Error("--sync needs --yes, nothing is cloned for a preview");
+          const result = importManifests({
+            locator,
+            file: options.file,
+            context: options.context,
+            apply: options.yes === true,
+            cwd: io.cwd
+          });
+          const synced = options.sync ? sync() : null;
+          print(io, options.json, { ...result, synced }, importText({ ...options, locator }, result, synced));
+          if (synced?.some((entry) => entry.action === "error")) exit(1);
+        });
 
       command(program, "use [context]", "make a context active for new sessions")
         .option("--all", "clear the active context so every shard is active")

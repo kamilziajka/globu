@@ -18,6 +18,14 @@ describe("parseFrontmatter", () => {
     expect(parseFrontmatter("---\n- a\n- b\n---\nBody").data).toEqual({});
   });
 
+  it("ignores a byte order mark before the frontmatter", () => {
+    expect(parseFrontmatter('\uFEFF---\nokf_version: "0.2"\n---\nBody')).toEqual({
+      data: { okf_version: "0.2" },
+      body: "Body",
+      hasFrontmatter: true
+    });
+  });
+
   it("throws on invalid YAML", () => {
     expect(() => parseFrontmatter("---\nkey: [unclosed\n---\n")).toThrow();
   });
