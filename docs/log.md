@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-04
+* The README links the site at globu.kazet.blog under its intro, and the npm package and the plugin manifest name it as their `homepage` (the npm page shows it from the next release). Shortened the [unattended runs](./unattended-runs.md) description to fit 160 characters and dropped the Oxford comma from the [overview](./overview.md) description.
+
 ## 2026-10-29
 * Import, register, reprobe and doctor follow a team's first import: `globu import` takes a GitHub or GitLab browser link to the manifest file (split into repo, ref and file), records the commit it read and prints the apply command after a preview, the three steps after a written import (`register <path>` for repos already cloned, `sync`, `claude sync`) and a suggested `--context`; `--sync` clones in the same command. `register <path>` on a shard that `sync` cloned read-only deletes that managed clone, and the repo URL falls back to the only remote when there is no `origin`. `reprobe` prints the old and new format and roots and takes `--dry-run`. `doctor` warns when a clone is behind its remote as last fetched, when an entry file is missing and when a path in the Claude settings is stale, and its format finding says what the probe found and where. `sync` and `unregister` remind about `globu claude sync`. The frontmatter parser ignores a byte order mark. Updated [globu CLI](./globu-cli.md), [unattended runs](./unattended-runs.md), [architecture](./architecture.md) and the register skill.
 

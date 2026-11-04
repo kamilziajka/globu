@@ -4,6 +4,7 @@
   "description": "Knowledge bases inside a repo and a registry of knowledge shards for Claude Code",
   "author": "Kamil Ziajka",
   "license": "MIT",
+  "homepage": "https://globu.kazet.blog",
   "type": "module",
   "bin": {
     "globu": "dist/globu.mjs"

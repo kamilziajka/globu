@@ -1,7 +1,7 @@
 ---
 type: "Guide"
 title: "Unattended runs"
-description: "How a Claude Code run that did not start on a configured laptop, such as a GitHub Actions job, gets Globu's index, guard and write-back: a team manifest, import, a token for clones and a way to load the plugin."
+description: "How a Claude Code run away from a configured laptop, such as a GitHub Actions job, gets Globu's index, guard and write-back."
 ---
 
 # Unattended runs
