@@ -2,6 +2,8 @@
 
 Globu joins your knowledge bases and plugs into Claude Code so Claude can find the right knowledge for a task and write new knowledge back after a session.
 
+Website and docs: [globu.kazet.blog](https://globu.kazet.blog)
+
 This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, with five skills:
 
 - `/globu:setup-knowledge-base` bootstraps or upgrades an [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base (a `docs/` directory) inside a repo. A repo can hold many.

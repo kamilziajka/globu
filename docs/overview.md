@@ -1,7 +1,7 @@
 ---
 type: "Overview"
 title: "Overview"
-description: "The problems Globu solves, for whom, and a worked example from an empty repo to a session that finds and updates knowledge across repos."
+description: "The problems Globu solves and for whom, with a worked example from an empty repo to a session that finds and updates knowledge across repos."
 ---
 
 # Overview
