@@ -24,6 +24,14 @@ claude plugin install globu@globu
 claude plugin install globu-status@globu
 ```
 
+To pick up a new release later:
+
+```sh
+claude plugin marketplace update globu
+claude plugin update globu@globu
+claude plugin update globu-status@globu
+```
+
 The plugin runs its CLI from an npm package that Claude Code installs with it, so `node` (22 or newer) and `npm` must be on the `PATH`.
 
 The CLI also works on its own in a terminal:

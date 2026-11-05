@@ -40,4 +40,10 @@ These names are a contract between the mod and the rest of Globu: renaming a ski
 /plugin install globu-status@globu
 ```
 
+To pick up a new release later:
+
+```
+/plugin update globu-status@globu
+```
+
 The state lives in the session, so a resumed session starts from `nothing to update`. Decisions made in conversation alone, with no file change, are not detected.

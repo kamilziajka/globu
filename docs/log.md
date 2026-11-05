@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-05
+* Added the plugin update commands next to the install commands in the README and [globu-status](./globu-status.md).
+
 ## 2026-11-04
 * The README links the site at globu.kazet.blog under its intro, and the npm package and the plugin manifest name it as their `homepage` (the npm page shows it from the next release). Shortened the [unattended runs](./unattended-runs.md) description to fit 160 characters and dropped the Oxford comma from the [overview](./overview.md) description.
 
