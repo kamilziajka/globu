@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-05
+* [Knowledge bases](./knowledge-base.md) says that `name`, `description` and `knowledge_base_version` in a root `index.md` are Globu's extension to OKF §8, which allows only `okf_version` there, and what each key is read for.
 * The OKF spec link follows the spec to its own repo, `GoogleCloudPlatform/open-knowledge-format`: `OKF_SPEC_URL`, the authoring guide that `base setup` writes, the README, the [overview](./overview.md) and [knowledge bases](./knowledge-base.md). An existing base picks the new link up when `base setup` is re-run on it.
 * `base setup` now creates a base in `wiki` by default instead of `docs`, and the setup skill recommends `wiki`; [knowledge bases](./knowledge-base.md), the [overview](./overview.md) and the READMEs say so
 * [Development](./development.md) has a writing style section: no em or en dashes, no Oxford comma and directories named without a trailing slash (`wiki`, not `wiki/`); directory mentions across the base follow it
