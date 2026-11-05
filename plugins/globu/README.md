@@ -1,6 +1,6 @@
 # globu
 
-Claude Code plugin that keeps [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge bases inside a repo and gives Claude a per-user registry of knowledge shards across repos.
+Claude Code plugin that keeps [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) knowledge bases inside a repo and gives Claude a per-user registry of knowledge shards across repos.
 
 - `/globu:setup-knowledge-base [path]` bootstraps or upgrades a base, in `wiki` by default, or in `docs`, `knowledge` or a directory of your choice.
 - `/globu:register-knowledge-base` adds a shard to the registry and drafts its routing text.

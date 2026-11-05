@@ -6,7 +6,7 @@ description: "How OKF knowledge bases inside one repo work: base discovery, owne
 
 # Knowledge bases
 
-The single-repo half of Globu: keeping [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge bases inside one repo. Source: `packages/knowledge-base` (the library), the `base` command group in `packages/globu-cli/src/base.ts` and, in the `globu` plugin, the edit hook and the `setup-knowledge-base` and `update-knowledge` skills. None of it needs a registered shard, and the library never imports from `packages/globu-core`.
+The single-repo half of Globu: keeping [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) knowledge bases inside one repo. Source: `packages/knowledge-base` (the library), the `base` command group in `packages/globu-cli/src/base.ts` and, in the `globu` plugin, the edit hook and the `setup-knowledge-base` and `update-knowledge` skills. None of it needs a registered shard, and the library never imports from `packages/globu-core`.
 
 ## Model
 

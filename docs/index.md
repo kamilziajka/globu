@@ -20,7 +20,7 @@ A repo can hold more than one base. A base is any directory whose `index.md` car
 
 ## How to add or update knowledge here
 
-This is a plain [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle: Markdown files with YAML frontmatter, versioned in git. No special tool is required to read or edit it. Any agent or person can create, edit or delete files here directly.
+This is a plain [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) bundle: Markdown files with YAML frontmatter, versioned in git. No special tool is required to read or edit it. Any agent or person can create, edit or delete files here directly.
 
 - **Concept docs** are any `.md` file in this directory (or subdirectories) other than `index.md` and `log.md`. Each one must start with frontmatter:
   ```yaml

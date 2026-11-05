@@ -6,7 +6,7 @@ Website and docs: [globu.kazet.blog](https://globu.kazet.blog)
 
 This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, with five skills:
 
-- `/globu:setup-knowledge-base` bootstraps or upgrades an [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) knowledge base (a `wiki` directory by default) inside a repo. A repo can hold many.
+- `/globu:setup-knowledge-base` bootstraps or upgrades an [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) knowledge base (a `wiki` directory by default) inside a repo. A repo can hold many.
 - `/globu:register-knowledge-base` adds a repo to a per-user registry of knowledge shards, so every session knows which knowledge exists on this machine, when to consult it and where it may write.
 - `/globu:update-knowledge` writes what a session learned to the right base or shard.
 - `/globu:issue-check` checks that every doc and code reference in a Jira issue resolves to a file a coding agent will be able to open.
