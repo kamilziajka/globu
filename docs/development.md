@@ -28,7 +28,7 @@ A linked git worktree, such as the ones Claude Code sessions run in under `.clau
 | `npm run lint` | Biome check |
 | `npm run lint:fix` | Biome with fixes applied |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run build` | bundle the CLI into `packages/globu-cli/dist` and link it into the plugin |
+| `npm run build` | bundle the CLI into `packages/globu-cli/dist` and the worker into `packages/globu-worker/dist`, and link the CLI into the plugin |
 | `npm run pin` | pack the CLI into `release` and pin the plugin to that tarball |
 | `npm run verify:mod` | validate and test the globu-status mod with `claude plugin validate` and `claude plugin test` |
 | `npm test` | run the tests once |
@@ -42,7 +42,7 @@ All of these run in `npm run verify`, in the pre-commit hook and in CI.
 - **Biome** for formatting and lint, with the recommended rule set. Formatting is 2 spaces, double quotes, semicolons, no trailing commas and a 120 column line.
 - **TypeScript in strict mode**, with unused locals and parameters as errors. Code is ESM and imports carry explicit `.js` extensions.
 - **100% coverage** of statements, branches, functions and lines over `packages`, excluding tests, the test helpers, the thin entry file in `packages/globu-cli/src/bin` and the process-bound `Io` in `packages/globu-cli/src/cli/process-io.ts`.
-- **Package version up to date.** The build copies the root version into `packages/globu-cli/package.json` before the tests run, and the hook and CI fail when that file differs from what is committed.
+- **Package version up to date.** The build copies the root version into `packages/globu-cli/package.json` and `packages/globu-worker/package.json` before the tests run, and the hook and CI fail when those files differ from what is committed.
 
 ## Comments
 
@@ -95,7 +95,7 @@ claude --plugin-dir ./plugins/globu --plugin-dir ./mods/globu-status
 
 The root `package.json` holds the version. The build copies it into `packages/globu-cli/package.json`, and `globu base setup` stamps it into every base it touches as `knowledge_base_version`.
 
-A release publishes the CLI, pins the plugin to it and then updates the public site. In Claude Code the project skill `/release <version>` (`.claude/skills/release/SKILL.md`) does all of it; the steps are:
+A release publishes the CLI, pins the plugin to it and then updates the public site. The worker package is built and versioned with the CLI but not yet published by the workflow; its first release is done by hand with `npm publish ./packages/globu-worker` once the package exists on npm, and then bound to the workflow like the CLI. In Claude Code the project skill `/release <version>` (`.claude/skills/release/SKILL.md`) does all of it; the steps are:
 
 1. Bump the version with `npm version <version> --no-git-tag-version`, run `npm run build` and merge that to `main`. The command also updates the root `package-lock.json`, and the build updates the CLI's `package.json`, so the bump commit touches three files.
 2. Run the `Release` workflow (`.github/workflows/release.yml`) from the Actions tab, or with `gh workflow run release.yml --ref main` and then `gh run watch <run-id> --exit-status`. A run takes about six minutes, most of it waiting for the tarball.

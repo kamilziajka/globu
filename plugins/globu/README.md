@@ -7,6 +7,7 @@ Claude Code plugin that keeps [OKF](https://github.com/GoogleCloudPlatform/open-
 - `/globu:update-knowledge` writes what a session learned to the right base or shard.
 - `/globu:issue-check` reads a Jira issue and checks with `globu resolve` that each reference exists on its repo's default branch.
 - `/globu:issue-fix` runs that check and rewrites the broken references in the issue after the user confirms the edit.
+- `/globu:implement-issue` implements an issue from a brief that names the issue, the worktree and the referenced files, and writes a handback. The `globu-worker` program runs it unattended.
 - A session hook tells Claude which shards exist on this machine and when to consult them.
 - A guard hook blocks edits to read-only shards and makes Claude Code ask before edits to shards in `ask` mode. It covers the file tools and, best effort, shell commands.
 - An edit hook validates a base right after Claude edits a file in it.

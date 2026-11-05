@@ -47,5 +47,6 @@ This is a plain [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-form
 * [globu-status mod](./globu-status.md) - the session indicator for pending knowledge updates
 * [Claude Code hook contract](./claude-code-hooks.md) - the hook behaviours the session and guard hooks rely on, and which are untested
 * [Unattended runs](./unattended-runs.md) - bootstrapping a CI job or a fresh machine from a team manifest: import, token clones and loading the plugin
+* [globu-worker](./worker.md) - the worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its own homes, `worker.yaml`, the `once` and `run` commands and a run step by step
 * [Development](./development.md) - tooling, quality gates, tests, CI and releasing
 * [Update log](./log.md) - chronological history of changes to this base

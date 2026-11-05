@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-06
+* New program [globu-worker](./worker.md) (`packages/globu-worker`, npm `@kazet/globu-worker`): polls a Jira project by JQL, claims an eligible issue, resolves its shard-qualified references with the resolver, runs `claude -p` with the new `implement-issue` skill in a worktree of the target shard under its own `GLOBU_HOME` and `CLAUDE_CONFIG_DIR`, pushes, opens a draft pull request with `gh` and hands back on the issue; a failed run releases the issue with an `agent-blocked` label. [Architecture](./architecture.md) names it as the third program and in the layout, [development](./development.md) covers the second bundle and the unpublished package, the [hook contract](./claude-code-hooks.md) lists the five Claude Code behaviours it relies on untested, and the READMEs list the sixth skill. `gitAuthArgs` in globu-core takes explicit credentials so the push can use `GH_TOKEN`.
+
 ## 2026-11-05
 * [Development](./development.md) writing style: a doc's `description` stays within 160 characters because the site uses it as the meta description and the lede.
 * Two explainer pages for the site: [Globu and the LLM wiki](./llm-wiki.md) maps Karpathy's gist onto Globu (wiki to base, schema to authoring guide, ingest to `update-knowledge`, query to the session index, lint to `base validate`) and says what Globu adds and where the gist still goes further; [OKF in Globu](./okf.md) lists the reserved files, what `base validate` checks, the optional v0.2 families Globu passes through and the two places it extends the spec. Both listed in the index; they reach globu.kazet.blog with the next release's docs snapshot.

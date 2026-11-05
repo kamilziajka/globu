@@ -14,13 +14,19 @@ function httpTarget(repo: string): HttpTarget | null {
   return null;
 }
 
-export function gitAuthArgs(repo: string | null): string[] {
+export type GitCredentials = { token: string; user?: string };
+
+function envCredentials(): GitCredentials | null {
   const token = process.env.GLOBU_GIT_TOKEN;
-  if (!token || repo === null) return [];
+  return token ? { token, user: process.env.GLOBU_GIT_USER } : null;
+}
+
+export function gitAuthArgs(repo: string | null, credentials: GitCredentials | null = envCredentials()): string[] {
+  if (credentials === null || repo === null) return [];
   const target = httpTarget(repo);
   if (target === null) return [];
-  const user = process.env.GLOBU_GIT_USER || "x-access-token";
-  const header = `Authorization: Basic ${Buffer.from(`${user}:${token}`).toString("base64")}`;
+  const user = credentials.user || "x-access-token";
+  const header = `Authorization: Basic ${Buffer.from(`${user}:${credentials.token}`).toString("base64")}`;
   return [
     "-c",
     `http.${target.base}.extraheader=${header}`,
