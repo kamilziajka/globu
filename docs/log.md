@@ -1,6 +1,8 @@
 # Knowledge base update log
 
 ## 2026-11-05
+* [Development](./development.md) writing style: a doc's `description` stays within 160 characters because the site uses it as the meta description and the lede.
+* Two explainer pages for the site: [Globu and the LLM wiki](./llm-wiki.md) maps Karpathy's gist onto Globu (wiki to base, schema to authoring guide, ingest to `update-knowledge`, query to the session index, lint to `base validate`) and says what Globu adds and where the gist still goes further; [OKF in Globu](./okf.md) lists the reserved files, what `base validate` checks, the optional v0.2 families Globu passes through and the two places it extends the spec. Both listed in the index; they reach globu.kazet.blog with the next release's docs snapshot.
 * [Knowledge bases](./knowledge-base.md) says that `name`, `description` and `knowledge_base_version` in a root `index.md` are Globu's extension to OKF §8, which allows only `okf_version` there, and what each key is read for.
 * The OKF spec link follows the spec to its own repo, `GoogleCloudPlatform/open-knowledge-format`: `OKF_SPEC_URL`, the authoring guide that `base setup` writes, the README, the [overview](./overview.md) and [knowledge bases](./knowledge-base.md). An existing base picks the new link up when `base setup` is re-run on it.
 * `base setup` now creates a base in `wiki` by default instead of `docs`, and the setup skill recommends `wiki`; [knowledge bases](./knowledge-base.md), the [overview](./overview.md) and the READMEs say so

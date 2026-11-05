@@ -57,6 +57,7 @@ These apply to docs, skills, READMEs and commit messages.
 - No em dashes or en dashes. Use a hyphen, a comma, a colon or a full stop.
 - No Oxford comma.
 - Name a directory without a trailing slash: `wiki`, not `wiki/`, and `packages/globu-cli/dist`, not `packages/globu-cli/dist/`. A path to a file keeps its slashes, such as `wiki/index.md`, and so do relative-path prefixes such as `./` and `../`. Directory trees drawn in code blocks may keep the slash, since it marks what is a directory there.
+- Keep the `description` of a doc in `docs` within 160 characters. The site uses it as the page's meta description and as the lede under the title.
 
 ## Tests
 
