@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_DOCS_DIRNAME, INDEX_FILENAME, LOG_FILENAME, OKF_VERSION, VERSION } from "./constants.js";
+import { DEFAULT_BASE_DIRNAME, INDEX_FILENAME, LOG_FILENAME, OKF_VERSION, VERSION } from "./constants.js";
 import { type Frontmatter, parseFrontmatter, stringifyFrontmatter, textOf } from "./frontmatter.js";
 import { upsertAuthoringGuide } from "./guide.js";
 import { DEFAULT_LOG_BODY } from "./log.js";
@@ -31,7 +31,7 @@ function writeIfChanged(filePath: string, next: string, summary: SetupSummary): 
 }
 
 function resolveDocsDir(resolved: string, dir: string | undefined): string {
-  const dirname = dir ?? DEFAULT_DOCS_DIRNAME;
+  const dirname = dir ?? DEFAULT_BASE_DIRNAME;
   if (path.basename(resolved) === dirname || readBaseIndex(resolved)) return resolved;
   const existing = dir === undefined ? childBase(resolved) : null;
   return existing ?? path.join(resolved, dirname);

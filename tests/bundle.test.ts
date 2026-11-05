@@ -99,7 +99,7 @@ describe("bundled CLI", () => {
   it("manages knowledge bases and validates edits", () => {
     const repo = tempDir();
     expect(runBundle(GLOBU, ["base", "setup", repo, "--name", "demo"]).status).toBe(0);
-    const bad = write(repo, "docs/bad.md", "bare\n");
+    const bad = write(repo, "wiki/bad.md", "bare\n");
     const hook = runBundle(GLOBU, ["hook", "validate-edit"], { tool_input: { file_path: bad } });
     expect(hook.status).toBe(2);
     expect(hook.stderr).toContain("missing YAML frontmatter block");

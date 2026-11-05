@@ -23,7 +23,7 @@ export function defineBaseCommands(base: Command, io: Io, exit: Exit): void {
   command(base, "setup [path]", "bootstrap a base or upgrade one in place")
     .option("--name <name>", "name of the base")
     .option("--description <text>", "one sentence describing the base")
-    .option("--dir <name>", "name of the base directory, docs by default")
+    .option("--dir <name>", "name of the base directory, wiki by default")
     .action((dir: string | undefined, options: JsonOption & { name?: string; description?: string; dir?: string }) => {
       const summary = setupBase(target(io, dir), {
         name: options.name,

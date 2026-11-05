@@ -13,7 +13,7 @@
         "path": "plugins/globu",
         "ref": "stable"
       },
-      "description": "Keep OKF knowledge bases (docs/ directories) inside a repo, register knowledge shards across repos, tell Claude which knowledge exists and where it may write, and update it with what a session learned"
+      "description": "Keep OKF knowledge bases (wiki directories by default) inside a repo, register knowledge shards across repos, tell Claude which knowledge exists and where it may write, and update it with what a session learned"
     },
     {
       "name": "globu-status",

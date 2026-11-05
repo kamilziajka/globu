@@ -14,11 +14,11 @@ npm install
 npm run verify
 ```
 
-`.nvmrc` pins the Node version used for development and CI. The scripts in `scripts/` are TypeScript files run directly by Node, which needs a recent version. The bundled CLI itself targets Node 22, the oldest release line still supported, and the published package declares `node >=22`.
+`.nvmrc` pins the Node version used for development and CI. The scripts in `scripts` are TypeScript files run directly by Node, which needs a recent version. The bundled CLI itself targets Node 22, the oldest release line still supported, and the published package declares `node >=22`.
 
 `npm install` also installs the Husky pre-commit hook.
 
-A linked git worktree, such as the ones Claude Code sessions run in under `.claude/worktrees/`, needs its own install. Run `npm ci` there before the first build. A build that stops with `Could not resolve "commander"` means the worktree's `node_modules` is missing or incomplete. The shell that commits needs the Node version from `.nvmrc` as well, because the pre-commit hook runs `npm run verify`.
+A linked git worktree, such as the ones Claude Code sessions run in under `.claude/worktrees`, needs its own install. Run `npm ci` there before the first build. A build that stops with `Could not resolve "commander"` means the worktree's `node_modules` is missing or incomplete. The shell that commits needs the Node version from `.nvmrc` as well, because the pre-commit hook runs `npm run verify`.
 
 ## Commands
 
@@ -29,7 +29,7 @@ A linked git worktree, such as the ones Claude Code sessions run in under `.clau
 | `npm run lint:fix` | Biome with fixes applied |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | bundle the CLI into `packages/globu-cli/dist` and link it into the plugin |
-| `npm run pin` | pack the CLI into `release/` and pin the plugin to that tarball |
+| `npm run pin` | pack the CLI into `release` and pin the plugin to that tarball |
 | `npm run verify:mod` | validate and test the globu-status mod with `claude plugin validate` and `claude plugin test` |
 | `npm test` | run the tests once |
 | `npm run test:watch` | run the tests in watch mode |
@@ -41,14 +41,22 @@ All of these run in `npm run verify`, in the pre-commit hook and in CI.
 
 - **Biome** for formatting and lint, with the recommended rule set. Formatting is 2 spaces, double quotes, semicolons, no trailing commas and a 120 column line.
 - **TypeScript in strict mode**, with unused locals and parameters as errors. Code is ESM and imports carry explicit `.js` extensions.
-- **100% coverage** of statements, branches, functions and lines over `packages/`, excluding tests, the test helpers, the thin entry file in `packages/globu-cli/src/bin` and the process-bound `Io` in `packages/globu-cli/src/cli/process-io.ts`.
+- **100% coverage** of statements, branches, functions and lines over `packages`, excluding tests, the test helpers, the thin entry file in `packages/globu-cli/src/bin` and the process-bound `Io` in `packages/globu-cli/src/cli/process-io.ts`.
 - **Package version up to date.** The build copies the root version into `packages/globu-cli/package.json` before the tests run, and the hook and CI fail when that file differs from what is committed.
 
 ## Comments
 
-Comments are a convention, not a gate. The default is no comments: the code should explain itself and the reasoning lives here in `docs/` or in the commit message.
+Comments are a convention, not a gate. The default is no comments: the code should explain itself and the reasoning lives here in `docs` or in the commit message.
 
 A comment is allowed only when it is critical, meaning a reader would misread or break the code without it and no better name, type or smaller function can carry the point. Such a comment is short and says why, not what. `CLAUDE.md` carries the same rule for Claude Code.
+
+## Writing style
+
+These apply to docs, skills, READMEs and commit messages.
+
+- No em dashes or en dashes. Use a hyphen, a comma, a colon or a full stop.
+- No Oxford comma.
+- Name a directory without a trailing slash: `wiki`, not `wiki/`, and `packages/globu-cli/dist`, not `packages/globu-cli/dist/`. A path to a file keeps its slashes, such as `wiki/index.md`, and so do relative-path prefixes such as `./` and `../`. Directory trees drawn in code blocks may keep the slash, since it marks what is a directory there.
 
 ## Tests
 
@@ -67,7 +75,7 @@ A comment is allowed only when it is critical, meaning a reader would misread or
 
 ## The mod
 
-`mods/globu-status` is a Claude Code mod: a plugin of function hooks, written against the engine's own TypeScript API. It has no build. `claude plugin validate` reads it the way the engine will and `claude plugin test` runs its `tests/*.test.ts` against the engine, so both need the `claude` binary; `npm run verify:mod` runs them, the pre-commit hook runs it after `npm run verify`, and CI installs Claude Code for that step. When a session loads the mod from the working tree, the engine writes `.claude-plugin/types/` and a `tsconfig.json` beside it; both are ignored by git, and `tsc -p mods/globu-status` type-checks the mod once they exist. Biome formats and lints the mod like the rest of the repo.
+`mods/globu-status` is a Claude Code mod: a plugin of function hooks, written against the engine's own TypeScript API. It has no build. `claude plugin validate` reads it the way the engine will and `claude plugin test` runs its `tests/*.test.ts` against the engine, so both need the `claude` binary; `npm run verify:mod` runs them, the pre-commit hook runs it after `npm run verify`, and CI installs Claude Code for that step. When a session loads the mod from the working tree, the engine writes `.claude-plugin/types` and a `tsconfig.json` beside it; both are ignored by git, and `tsc -p mods/globu-status` type-checks the mod once they exist. Biome formats and lints the mod like the rest of the repo.
 
 ## Continuous integration
 
@@ -91,13 +99,13 @@ A release publishes the CLI, pins the plugin to it and then updates the public s
 1. Bump the version with `npm version <version> --no-git-tag-version`, run `npm run build` and merge that to `main`. The command also updates the root `package-lock.json`, and the build updates the CLI's `package.json`, so the bump commit touches three files.
 2. Run the `Release` workflow (`.github/workflows/release.yml`) from the Actions tab, or with `gh workflow run release.yml --ref main` and then `gh run watch <run-id> --exit-status`. A run takes about six minutes, most of it waiting for the tarball.
 3. Pull `main` afterwards. The workflow adds the pin commit, so a local `main` is one commit behind.
-4. Update the site. globu.kazet.blog is the `kamilziajka/globu-website` repo (registered with Globu as the shard `globu-website`) and has no dependency on this repo: it shows the version in its `release.json` and renders the docs from a snapshot of `docs/` in its `content/`, both at that repo's root. The release skill writes both and opens that pull request; by hand, on a branch from `origin/main`, copy `docs/*.md` except `index.md` and `log.md` into `content/`, set `release.json`, list any new doc in `src/docs/nav.ts`, run `npm run verify`, `npm run build:prod` and `npm run verify:prerender`, add a log entry to the site's `docs/log.md` and open the pull request with `Globu <version>` in its title. The site shows the new version once that merges and deploys. `.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm version and `https://globu.kazet.blog/version.json` at the end of every session here and reports an unreleased bump or a site that lags without an open pull request titled `Globu <version>` in `kamilziajka/globu-website`.
+4. Update the site. globu.kazet.blog is the `kamilziajka/globu-website` repo (registered with Globu as the shard `globu-website`) and has no dependency on this repo: it shows the version in its `release.json` and renders the docs from a snapshot of `docs` in its `content`, both at that repo's root. The release skill writes both and opens that pull request; by hand, on a branch from `origin/main`, copy `docs/*.md` except `index.md` and `log.md` into `content`, set `release.json`, list any new doc in `src/docs/nav.ts`, run `npm run verify`, `npm run build:prod` and `npm run verify:prerender`, add a log entry to the site's `docs/log.md` and open the pull request with `Globu <version>` in its title. The site shows the new version once that merges and deploys. `.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm version and `https://globu.kazet.blog/version.json` at the end of every session here and reports an unreleased bump or a site that lags without an open pull request titled `Globu <version>` in `kamilziajka/globu-website`.
 
 Every release needs a new version. npm never accepts a version twice, so a run on an already published version fails at the publish step. `npm view @kazet/globu versions` shows what is taken.
 
 The workflow runs `npm run verify`, then:
 
-1. `npm run pin` packs the CLI into `release/`, writes `plugins/globu/package.json` and `package-lock.json` with the integrity hash of that tarball and sets `version` in `plugin.json`.
+1. `npm run pin` packs the CLI into `release`, writes `plugins/globu/package.json` and `package-lock.json` with the integrity hash of that tarball and sets `version` in `plugin.json`.
 2. `npm publish` uploads exactly that tarball as a public package, which `publishConfig.access` in its `package.json` sets. The path needs its leading `./`, because npm reads a bare `release/<file>` as a GitHub `owner/repo` shorthand. It authenticates through npm trusted publishing, so the workflow holds no token.
 3. The workflow waits until the tarball can be downloaded. npm accepts a publish before the files are served, and that can take a few minutes.
 4. The pin is committed to `main` and `stable` is moved to that commit. The installed plugin updates from `stable` because the `plugin.json` version changed.
@@ -124,4 +132,4 @@ npm trust github @kazet/globu --file release.yml --repo kamilziajka/globu --allo
 
 Packing is reproducible. If a release fails after publishing, `npm run build && npm run pin` on the released commit writes the same pin again.
 
-To check the pin script without releasing, stage the plugin files, run `npm run pin`, read `git diff -- plugins/globu` and then `git checkout -- plugins/globu` and delete `release/`. Only the integrity hash should differ, because the working tree's tarball is not the published one. Stage first: `git checkout` restores the index, and an unstaged hand-written pin is lost.
+To check the pin script without releasing, stage the plugin files, run `npm run pin`, read `git diff -- plugins/globu` and then `git checkout -- plugins/globu` and delete `release`. Only the integrity hash should differ, because the working tree's tarball is not the published one. Stage first: `git checkout` restores the index, and an unstaged hand-written pin is lost.

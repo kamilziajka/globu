@@ -1,6 +1,8 @@
 # Knowledge base update log
 
 ## 2026-11-05
+* `base setup` now creates a base in `wiki` by default instead of `docs`, and the setup skill recommends `wiki`; [knowledge bases](./knowledge-base.md), the [overview](./overview.md) and the READMEs say so
+* [Development](./development.md) has a writing style section: no em or en dashes, no Oxford comma and directories named without a trailing slash (`wiki`, not `wiki/`); directory mentions across the base follow it
 * Added the plugin update commands next to the install commands in the README and [globu-status](./globu-status.md).
 
 ## 2026-11-04

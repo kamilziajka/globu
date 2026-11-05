@@ -31,17 +31,17 @@ describe("globu base setup", () => {
     const result = run(["base", "setup", "--name", "demo", "--description", "Demo"]);
     expect(result).toEqual({
       code: 0,
-      out: "base: docs\n  created   docs/index.md\n  created   docs/log.md\n",
+      out: "base: wiki\n  created   wiki/index.md\n  created   wiki/log.md\n",
       err: ""
     });
-    expect(run(["base", "setup"]).out).toBe("base: docs\n  unchanged docs/index.md\n  unchanged docs/log.md\n");
+    expect(run(["base", "setup"]).out).toBe("base: wiki\n  unchanged wiki/index.md\n  unchanged wiki/log.md\n");
   });
 
   it("creates the base in the directory named by --dir", () => {
-    expect(run(["base", "setup", "--dir", "wiki", "--name", "demo"]).out).toBe(
-      "base: wiki\n  created   wiki/index.md\n  created   wiki/log.md\n"
+    expect(run(["base", "setup", "--dir", "docs", "--name", "demo"]).out).toBe(
+      "base: docs\n  created   docs/index.md\n  created   docs/log.md\n"
     );
-    expect(run(["base", "setup"]).out).toBe("base: wiki\n  unchanged wiki/index.md\n  unchanged wiki/log.md\n");
+    expect(run(["base", "setup"]).out).toBe("base: docs\n  unchanged docs/index.md\n  unchanged docs/log.md\n");
   });
 
   it("reports validation errors and exits 1", () => {
@@ -95,28 +95,28 @@ describe("globu base list and owner", () => {
 describe("globu base log", () => {
   it("appends entries", () => {
     run(["base", "setup"]);
-    expect(run(["base", "log", "docs", "2026-01-01", "one", "two"]).out).toBe("updated docs/log.md\n");
-    expect(read(root, "docs/log.md")).toContain("## 2026-01-01\n* one\n* two\n");
-    expect(JSON.parse(run(["base", "log", "docs", "2026-01-02", "three", "--json"]).out).logPath).toBe(
-      path.join(root, "docs/log.md")
+    expect(run(["base", "log", "wiki", "2026-01-01", "one", "two"]).out).toBe("updated wiki/log.md\n");
+    expect(read(root, "wiki/log.md")).toContain("## 2026-01-01\n* one\n* two\n");
+    expect(JSON.parse(run(["base", "log", "wiki", "2026-01-02", "three", "--json"]).out).logPath).toBe(
+      path.join(root, "wiki/log.md")
     );
   });
 
   it("opens a titled section with --title and joins it on the next call", () => {
     run(["base", "setup"]);
-    expect(run(["base", "log", "docs", "2026-10-26", "one", "--title", "what changed"]).out).toBe(
-      "updated docs/log.md\n"
+    expect(run(["base", "log", "wiki", "2026-10-26", "one", "--title", "what changed"]).out).toBe(
+      "updated wiki/log.md\n"
     );
-    expect(run(["base", "log", "docs", "2026-10-26", "two", "--title", "ignored"]).out).toBe("updated docs/log.md\n");
-    expect(read(root, "docs/log.md")).toBe(
+    expect(run(["base", "log", "wiki", "2026-10-26", "two", "--title", "ignored"]).out).toBe("updated wiki/log.md\n");
+    expect(read(root, "wiki/log.md")).toBe(
       "# Knowledge base update log\n\n## 2026-10-26 (what changed)\n* two\n* one\n"
     );
   });
 
   it("rejects incomplete arguments and unknown flags", () => {
-    expect(run(["base", "log", "docs"]).err).toBe("error: missing required argument 'date'\n");
-    expect(run(["base", "log", "docs", "2026-01-01"]).err).toBe("error: missing required argument 'entries'\n");
-    expect(run(["base", "log", "docs", "yesterday", "one"]).err).toBe(
+    expect(run(["base", "log", "wiki"]).err).toBe("error: missing required argument 'date'\n");
+    expect(run(["base", "log", "wiki", "2026-01-01"]).err).toBe("error: missing required argument 'entries'\n");
+    expect(run(["base", "log", "wiki", "yesterday", "one"]).err).toBe(
       'globu: date must be YYYY-MM-DD, got "yesterday"\n'
     );
     expect(run(["base", "log", "--nope"]).code).toBe(1);
@@ -130,21 +130,21 @@ describe("globu hook validate-edit", () => {
 
   it("fails with exit code 2 when the edited base is invalid", () => {
     run(["base", "setup"]);
-    const bad = write(root, "docs/bad.md", "bare\n");
+    const bad = write(root, "wiki/bad.md", "bare\n");
     const result = edit(bad);
     expect(result.code).toBe(2);
     expect(result.err).toBe(
-      `globu: ${path.join(root, "docs")} failed validation after this edit:\n  ${bad}: missing YAML frontmatter block\n`
+      `globu: ${path.join(root, "wiki")} failed validation after this edit:\n  ${bad}: missing YAML frontmatter block\n`
     );
   });
 
   it("stays quiet for valid bases and for files outside a base", () => {
     run(["base", "setup"]);
-    write(root, "docs/good.md", '---\ntype: "Note"\n---\n');
-    expect(edit("docs/good.md").code).toBe(0);
+    write(root, "wiki/good.md", '---\ntype: "Note"\n---\n');
+    expect(edit("wiki/good.md").code).toBe(0);
     expect(edit(write(root, "README.md", "bare\n")).code).toBe(0);
     expect(edit(path.join(tempDir(), "notes.md")).code).toBe(0);
-    expect(edit(write(root, "docs/data.json", "{}")).code).toBe(0);
+    expect(edit(write(root, "wiki/data.json", "{}")).code).toBe(0);
     expect(run(["hook", "validate-edit"], "").code).toBe(0);
   });
 });

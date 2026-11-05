@@ -10,8 +10,8 @@ describe("setupBase", () => {
   it("creates a valid base and is idempotent", () => {
     const root = path.join(tempDir(), "demo");
     const first = setupBase(root, { description: "Demo knowledge" });
-    const indexPath = path.join(root, "docs", "index.md");
-    expect(first.created).toEqual([indexPath, path.join(root, "docs", "log.md")]);
+    const indexPath = path.join(root, "wiki", "index.md");
+    expect(first.created).toEqual([indexPath, path.join(root, "wiki", "log.md")]);
     expect(first.validation.errors).toEqual([]);
 
     const index = read(indexPath);
@@ -31,11 +31,25 @@ describe("setupBase", () => {
     expect(read(indexPath)).toBe(index);
   });
 
-  it("accepts a docs directory and an explicit name", () => {
-    const docsDir = path.join(tempDir(), "docs");
+  it("accepts a wiki directory and an explicit name", () => {
+    const docsDir = path.join(tempDir(), "wiki");
     const summary = setupBase(docsDir, { name: "custom" });
     expect(summary.docsDir).toBe(docsDir);
     expect(parseFrontmatter(read(docsDir, "index.md")).data.name).toBe("custom");
+  });
+
+  it("treats a target called docs as a parent unless --dir names it", () => {
+    const docs = path.join(tempDir(), "docs");
+    expect(setupBase(docs).docsDir).toBe(path.join(docs, "wiki"));
+    const other = path.join(tempDir(), "docs");
+    expect(setupBase(other, { dir: "docs" }).docsDir).toBe(other);
+  });
+
+  it("leaves a docs directory that is not a base alone", () => {
+    const root = tempDir();
+    write(root, "docs/index.md", "# User guide\n");
+    expect(setupBase(root).docsDir).toBe(path.join(root, "wiki"));
+    expect(read(root, "docs", "index.md")).toBe("# User guide\n");
   });
 
   it("creates the base under the directory name given", () => {
@@ -57,7 +71,7 @@ describe("setupBase", () => {
     const root = tempDir();
     write(root, "docs/index.md", "---\nname: kept\nowner: team\n---\n\n# Handwritten\n\n* [Thing](./thing.md)\n");
     write(root, "docs/thing.md", "no frontmatter\n");
-    const summary = setupBase(root, { name: "ignored" });
+    const summary = setupBase(root, { name: "ignored", dir: "docs" });
 
     expect(summary.updated).toEqual([path.join(root, "docs", "index.md")]);
     expect(summary.created).toEqual([path.join(root, "docs", "log.md")]);

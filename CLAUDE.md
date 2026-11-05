@@ -12,7 +12,7 @@ Globu plugs into Claude Code so Claude can find the right knowledge for a task a
 - `npm test` runs the tests once. A single file: `npx vitest run packages/globu-core/src/registry.test.ts`.
 - `npm run lint:fix` formats and fixes lint. Do not hand-format.
 - `npm run build` bundles the CLI into `packages/globu-cli/dist` and links it into the plugin's `node_modules`.
-- `npm run pin` packs the CLI into `release/` and pins the plugin to that tarball. It is part of a release, not of daily work.
+- `npm run pin` packs the CLI into `release` and pins the plugin to that tarball. It is part of a release, not of daily work.
 
 Node version comes from `.nvmrc`.
 
@@ -29,7 +29,7 @@ Be very restrictive about comments. The default is none, and nothing enforces th
 
 - Add a comment only when it is critical: without it a reader would misread the code or break it, and no better name, type or smaller function can carry the point. A workaround for an upstream bug or a non-obvious ordering or security constraint can qualify.
 - Never write comments that restate the code, narrate a change, label sections or document signatures. No JSDoc, no TODOs, no commented-out code.
-- Reasoning goes in `docs/` or the commit message.
+- Reasoning goes in `docs` or the commit message.
 - A critical comment is one or two lines and says why, not what.
 - Tool directives such as `biome-ignore` and `@ts-expect-error` are not comments in this sense, but they need the same justification.
 - When unsure, leave it out.
@@ -38,7 +38,7 @@ Be very restrictive about comments. The default is none, and nothing enforces th
 
 - TypeScript, strict, ESM. Imports use explicit `.js` extensions (`import x from "./foo.js"` for `./foo.ts`).
 - Biome handles formatting and lint.
-- Tests sit next to the code as `*.test.ts`. Shared test helpers live in `packages/testing`. `tests/` holds only the checks that run the built bundles and the plugin hooks.
+- Tests sit next to the code as `*.test.ts`. Shared test helpers live in `packages/testing`. `tests` holds only the checks that run the built bundles and the plugin hooks.
 - Tests never touch the real `~/.globu` or `~/.claude`: `vitest.setup.ts` points `GLOBU_HOME` and `CLAUDE_CONFIG_DIR` at a fresh temp directory before every test.
 - The CLI never prompts and never calls `process.exit`. It is a commander program run through `runCli` in `packages/globu-cli/src/cli`, which sends all output through an `Io` object and returns an exit code. That is what makes it testable in-process.
 - Config files read from disk are parsed with zod schemas (`manifest.ts`, `state.ts`).
@@ -47,10 +47,11 @@ Be very restrictive about comments. The default is none, and nothing enforces th
 
 - No em dashes or en dashes. Use a hyphen, a comma, a colon or a full stop.
 - No Oxford comma.
+- Name a directory without a trailing slash: `wiki`, not `wiki/`. Paths to files inside it keep their slashes, such as `wiki/index.md`.
 
 ## Keeping docs true
 
-`docs/` is an OKF base maintained with the tools in this repo. Treat doc updates as part of the change:
+`docs` is an OKF base maintained with the tools in this repo. Treat doc updates as part of the change:
 
 - Changed a command, flag or hook? Update [docs/globu-cli.md](docs/globu-cli.md) or [docs/knowledge-base.md](docs/knowledge-base.md), and the matching skill under `plugins/globu/skills`.
 - Changed how the pieces fit together? Update [docs/architecture.md](docs/architecture.md).

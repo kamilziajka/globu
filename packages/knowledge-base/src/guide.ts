@@ -15,7 +15,7 @@ export function authoringGuideBlock(): string {
     "",
     "## Which base owns what",
     "",
-    `A repo can hold more than one base. A base is any directory whose \`${INDEX_FILENAME}\` carries \`okf_version\`, usually \`docs/\`, \`wiki/\` or \`knowledge/\`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own base owns its knowledge and everything else falls to the base at the repo root.`,
+    `A repo can hold more than one base. A base is any directory whose \`${INDEX_FILENAME}\` carries \`okf_version\`, usually \`wiki\`, \`docs\` or \`knowledge\`. Knowledge about a piece of code belongs in the nearest base walking up from that code: a package with its own base owns its knowledge and everything else falls to the base at the repo root.`,
     "",
     "## How to add or update knowledge here",
     "",
