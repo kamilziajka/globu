@@ -82,6 +82,21 @@ describe("globu-worker", () => {
     expect(missing.stderr).toContain("globu-worker: no worker configuration at");
   });
 
+  it("reads the registry from the default home when GLOBU_HOME is unset", async () => {
+    const saved = { HOME: process.env.HOME, GLOBU_HOME: process.env.GLOBU_HOME };
+    const fakeHome = tempDir();
+    process.env.HOME = fakeHome;
+    try {
+      const io = captureIo(fakeHome);
+      expect(await workerMain(["once"], io, { JIRA_EMAIL: "b", JIRA_API_TOKEN: "s" }, quiet())).toBe(1);
+      expect(io.stderr).toContain(`no worker configuration at ${path.join(fakeHome, ".globu/worker/worker.yaml")}`);
+      expect(process.env.GLOBU_HOME).toBe(path.join(fakeHome, ".globu/worker"));
+    } finally {
+      process.env.HOME = saved.HOME;
+      process.env.GLOBU_HOME = saved.GLOBU_HOME;
+    }
+  });
+
   it("builds its Jira client from the configuration and checks the shards before calling it", async () => {
     const root = prepare();
     write(process.env.GLOBU_HOME as string, "worker.yaml", CONFIG.replace("[backend]", "[ghost]"));

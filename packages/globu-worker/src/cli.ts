@@ -17,6 +17,7 @@ Secrets come from JIRA_EMAIL, JIRA_API_TOKEN and GH_TOKEN. The Claude run never 
 
 function buildDeps(io: Io, env: NodeJS.ProcessEnv, overrides: Overrides): WorkerDeps {
   const homes = ownHomes(env);
+  process.env.GLOBU_HOME = homes.home;
   const config = loadWorkerConfig(workerConfigPath(homes.home));
   const secrets = readSecrets(env);
   return {
