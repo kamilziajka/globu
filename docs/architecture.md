@@ -15,6 +15,8 @@ Globu plugs into Claude Code so Claude can find the right knowledge for a task a
 
 The dependency runs one way. The registry knows about OKF bases through its `okf` driver. The OKF library in `packages/knowledge-base` knows nothing about the registry, so the single-repo half works with no shard registered.
 
+A third program, [`globu-worker`](./worker.md), sits on top of both: it claims agent-eligible Jira issues and runs Claude Code in a worktree of the issue's shard, with the index and the guard doing what they do in any session. It is a separate package and binary because a Jira project is a work source, not a knowledge source, and because the guard, which runs before every tool call, must stay small and free of network code.
+
 ## Vocabulary
 
 - **Shard**: one registered unit of knowledge. Today a shard is one git repo.
@@ -132,7 +134,7 @@ All of it comes from the `globu` plugin, which should be enabled at user scope.
 - **PreToolUse guard** runs `globu hook guard` before `Edit`, `Write`, `NotebookEdit` and `Bash`. It finds the shard by the repo the target belongs to, so a file in any worktree maps to its shard. For a `read` shard it blocks the edit with exit code 2. For an `ask` shard it returns the PreToolUse permission decision `ask`, which makes Claude Code prompt the user, unless the session's home is that shard's repo. Home is the repo of `CLAUDE_PROJECT_DIR`, the directory the session started in. The hook's `cwd` is only the fallback because it follows `cd`, and a session must not become exempt by changing into a sibling repo. Shell commands are read as described below.
 - **`globu claude sync`** writes the active shards' paths into `permissions.additionalDirectories` in the user's Claude settings so reads need no prompt. It records which entries it added and only ever changes those. It is an explicit command and nothing calls it implicitly. The register skill offers it after a shard is registered and runs it only when the user agrees.
 - **PostToolUse edit hook** runs `globu hook validate-edit` after `Edit` and `Write` and validates the base an edited Markdown file belongs to. See [knowledge bases](./knowledge-base.md).
-- **Skills**: `setup-knowledge-base`, `register-knowledge-base`, `update-knowledge`, `issue-check` and `issue-fix`.
+- **Skills**: `setup-knowledge-base`, `register-knowledge-base`, `update-knowledge`, `issue-check`, `issue-fix` and `issue-deliver`, each described in [plugin skills](./skills.md). The last one implements an issue from a brief and writes a handback; the worker runs it unattended and a person can run it by hand.
 
 The repo a session runs in needs nothing. The hooks read `~/.globu` only.
 
@@ -149,6 +151,10 @@ A failing ref also carries candidates for the file that was meant. A rename come
 ## Unattended runs
 
 A GitHub Actions job, a cloud session or a fresh machine starts with no `~/.globu`, no clones and no plugin. [Unattended runs](./unattended-runs.md) describes the bootstrap that recreates them before Claude starts: `globu import` of a team manifest, `register` of the job's checkout, `sync` with a token from the environment and `claude sync`, with the plugin installed through the action's marketplace inputs or loaded with `--plugin-dir`. After it the hooks behave as they do on a laptop.
+
+## The worker
+
+`packages/globu-worker` is the poller described in [globu-worker](./worker.md). It imports the resolver, the registry and the git token plumbing from `globu-core` and shells out to `git`, `gh` and `claude`. Its own rule of separation: the worker detects structure (the JQL match, the repository marker, the refs it can extract without a model) and the `issue-deliver` skill handles meaning. The Claude process it starts holds no Jira or GitHub credential; the worker pushes and posts after the run ends. It never shares the interactive user's `~/.globu` or `~/.claude`: its homes default to `~/.globu/worker` and `~/.globu/worker/claude`, and it refuses to start when `GLOBU_HOME` or `CLAUDE_CONFIG_DIR` names one of the interactive ones.
 
 ## Shell commands in the guard
 
@@ -192,6 +198,7 @@ Rules that hold everywhere:
 packages/knowledge-base      OKF library: frontmatter, scan, validate, setup, log
 packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
 packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
+packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the once and run commands
 packages/testing             test helpers
 plugins/globu                the plugin: skills, session, guard and edit hooks, pinned dependency on the CLI
 mods/globu-status            the status mod: a plugin of function hooks with its own tests

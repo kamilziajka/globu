@@ -1,0 +1,26 @@
+{
+  "name": "@kazet/globu-worker",
+  "version": "0.8.0",
+  "description": "A worker that claims agent-eligible Jira issues and runs Claude Code in the right Globu shard",
+  "author": "Kamil Ziajka",
+  "license": "MIT",
+  "homepage": "https://globu.kazet.blog",
+  "type": "module",
+  "bin": {
+    "globu-worker": "dist/globu-worker.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kamilziajka/globu.git",
+    "directory": "packages/globu-worker"
+  }
+}

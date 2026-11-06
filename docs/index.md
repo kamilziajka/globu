@@ -41,11 +41,13 @@ This is a plain [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-form
 * [Overview](./overview.md) - the problems Globu solves and a worked example
 * [Architecture](./architecture.md) - the plugin and its two CLIs, the registry, probe, drivers and Claude Code integration
 * [Knowledge bases](./knowledge-base.md) - base discovery, ownership rule, the base commands, the edit hook and the skills
+* [Plugin skills](./skills.md) - the six skills of the globu plugin: what each does, when Claude picks it, what it runs and what it never does
 * [Globu and the LLM wiki](./llm-wiki.md) - how Globu relates to Karpathy's LLM wiki pattern, what maps onto what and what Globu adds across repos
 * [OKF in Globu](./okf.md) - which parts of the Open Knowledge Format Globu reads, writes and checks, and where it extends the spec
 * [globu CLI](./globu-cli.md) - command reference
 * [globu-status mod](./globu-status.md) - the session indicator for pending knowledge updates
 * [Claude Code hook contract](./claude-code-hooks.md) - the hook behaviours the session and guard hooks rely on, and which are untested
 * [Unattended runs](./unattended-runs.md) - bootstrapping a CI job or a fresh machine from a team manifest: import, token clones and loading the plugin
+* [globu-worker](./worker.md) - the worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its own homes, `worker.yaml`, the `once` and `run` commands and a run step by step
 * [Development](./development.md) - tooling, quality gates, tests, CI and releasing
 * [Update log](./log.md) - chronological history of changes to this base

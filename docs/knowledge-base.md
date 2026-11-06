@@ -42,7 +42,7 @@ The `globu` plugin runs `globu hook validate-edit` as a `PostToolUse` hook on `E
 
 ## Skills
 
-Both live in the `globu` plugin.
+Both live in the `globu` plugin, next to the four others described in [plugin skills](./skills.md).
 
 - `setup-knowledge-base`: runs `base setup` and, for a new base, asks whether the directory should be `wiki` (recommended), `docs`, `knowledge` or a custom name, then drafts a description.
 - `update-knowledge`: summarizes the session, routes each item to its owning base or to a registered shard, writes the edits, logs them and validates. With no shard registered it works on the current repo's bases alone. It also takes an explicit list of base directories. Edits stay in the working tree. See [architecture](./architecture.md#writing-knowledge-back) for the routing rules.

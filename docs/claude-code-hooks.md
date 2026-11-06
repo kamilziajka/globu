@@ -34,6 +34,18 @@ Neither point is answered by the docs, and neither was tested:
 
 Test both with a sibling repo in `ask` mode before relying on the mode for a rule that must hold.
 
+## Relied on by the worker, untested
+
+[globu-worker](./worker.md) starts Claude with `-p` and leans on these, none of which has been tried against a live run yet:
+
+- `--permission-mode dontAsk` denies, rather than hangs on, a tool call the allowlist does not cover and a hook's `ask`.
+- `--allowedTools` and `--disallowedTools` are honoured next to the config dir's own settings, and a disallowed tool wins over an allowed one.
+- `--add-dir <dir>` lets `Write` reach the run directory without a prompt under `dontAsk`.
+- `--output-format stream-json` carries a denied tool call as a `tool_result` with `is_error` and the hook's reason in its content, so blocked writes can be read from the stream.
+- `CLAUDE_CONFIG_DIR` moves plugin installs and `settings.json` together, so the worker's plugin and the `additionalDirectories` from `globu claude sync` land in the same place.
+
+Test each with a throwaway repository before the first unattended run, then move it to the table above.
+
 ## Cost
 
 The guard runs before every `Edit`, `Write`, `NotebookEdit` and `Bash` call. A call takes about 50 ms, most of it Node starting. It returns before any git process runs when no shard is in `read` or `ask` mode.

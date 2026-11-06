@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
@@ -9,6 +10,8 @@ const root = path.join(import.meta.dirname, "..");
 const GLOBU = path.join(root, "packages/globu-cli/dist/globu.mjs");
 const PLUGIN = "plugins/globu";
 const PACKAGE = "packages/globu-cli";
+const WORKER = "packages/globu-worker";
+const GLOBU_WORKER = path.join(root, WORKER, "dist/globu-worker.mjs");
 
 type HooksFile = { hooks: Record<string, { hooks: { command: string }[] }[]> };
 
@@ -106,16 +109,26 @@ describe("bundled CLI", () => {
   });
 });
 
-describe("published package", () => {
-  it("carries the root version and ships its bundle", () => {
-    const manifest = JSON.parse(read(root, PACKAGE, "package.json"));
+describe("published packages", () => {
+  it.each([PACKAGE, WORKER])("%s carries the root version and ships its bundle", (dir) => {
+    const manifest = JSON.parse(read(root, dir, "package.json"));
     expect(manifest.version).toBe(JSON.parse(read(root, "package.json")).version);
     expect(manifest.files).toEqual(["dist"]);
     expect(manifest.license).toBe("MIT");
-    expect(read(root, PACKAGE, "LICENSE")).toBe(read(root, "LICENSE"));
+    expect(read(root, dir, "LICENSE")).toBe(read(root, "LICENSE"));
     for (const bin of Object.values<string>(manifest.bin)) {
-      expect(fs.existsSync(path.join(root, PACKAGE, bin))).toBe(true);
+      expect(fs.existsSync(path.join(root, dir, bin))).toBe(true);
     }
+  });
+});
+
+describe("bundled worker", () => {
+  it("runs as a standalone executable and refuses the interactive homes", () => {
+    expect(runBundle(GLOBU_WORKER, ["--version"]).stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+    const env = { PATH: process.env.PATH, GLOBU_HOME: path.join(os.homedir(), ".globu") };
+    const result = spawnSync(GLOBU_WORKER, ["once"], { encoding: "utf8", env });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("GLOBU_HOME points at");
   });
 });
 
