@@ -12,12 +12,12 @@ import {
   resolveRefs
 } from "../../globu-core/src/index.js";
 import { renderBrief } from "./brief.js";
-import { claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
+import { type ClaudeSummary, claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
 import { type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { extractRefs } from "./refs.js";
-import { isTerminal, loadRuns, newRun, type RunRecord, runsDir, saveRun, spentOn } from "./runs.js";
+import { isTerminal, loadRun, loadRuns, newRun, type RunRecord, runsDir, saveRun, spentOn } from "./runs.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -38,6 +38,23 @@ type PresentShard = ResolvedShard & { path: string };
 type Registry = { all: ResolvedShard[]; active: ResolvedShard[]; context: string | null };
 type Worktree = { shard: PresentShard; tree: string; branch: string; base: string; pushed: boolean };
 type Candidate = { issue: JiraIssue; shardId: string | null };
+type Prepared = {
+  record: RunRecord;
+  dir: string;
+  worktrees: Worktree[];
+  target: Worktree;
+  briefFile: string;
+  handbackFile: string;
+};
+type Outcome = { timedOut: boolean; code: number | null; stderr: string; summary: ClaudeSummary };
+export type ClaimResult = {
+  record: RunRecord;
+  dir: string;
+  brief: string | null;
+  tree: string | null;
+  handback: string | null;
+  companions: { id: string; tree: string }[];
+};
 
 const SEARCH_LIMIT = 50;
 const ORIGIN = "origin/";
@@ -126,6 +143,9 @@ function resolveIssue(issue: JiraIssue, shard: PresentShard, reg: Registry) {
 function footer(record: RunRecord, now: Date): string {
   const github = record.identity.github === null ? "" : `, GitHub ${record.identity.github}`;
   const elapsed = minutes(now.getTime() - new Date(record.startedAt).getTime());
+  if (record.driver === "session") {
+    return `Run ${record.id} as ${record.identity.jira}${github} from a Claude Code session, ${elapsed}.`;
+  }
   const lines = [
     `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns, ${record.costUsd.toFixed(2)} USD, ${elapsed}. Blocked writes: ${record.blocked.length}.`,
     ...record.blocked.map((text) => `- ${text}`)
@@ -168,6 +188,19 @@ function addWorktree(shard: PresentShard, tree: string, branch: string): Worktre
   if (!base.startsWith(ORIGIN)) throw new Error(`${shard.path} has no origin/HEAD, clone it again`);
   git(["worktree", "add", "--quiet", tree, "-b", branch, base], shard.path);
   return { shard, tree, branch, base, pushed: false };
+}
+
+function storedWorktrees(worktrees: Worktree[]): RunRecord["worktrees"] {
+  return worktrees.map(({ shard, tree, branch, base }) => ({ shard: shard.id, tree, branch, base }));
+}
+
+function restoreWorktrees(record: RunRecord): Worktree[] {
+  const reg = registry();
+  return record.worktrees.map((stored) => ({
+    ...stored,
+    shard: reg.all.find((entry) => entry.id === stored.shard) as PresentShard,
+    pushed: false
+  }));
 }
 
 function commitsOn(worktree: Worktree): number {
@@ -229,136 +262,246 @@ async function openPullRequest(
   return output.split("\n").at(-1) as string;
 }
 
-async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord, dir: string): Promise<RunRecord> {
-  const { config, jira } = deps;
+async function prepare(
+  deps: WorkerDeps,
+  candidate: Candidate,
+  record: RunRecord,
+  dir: string,
+  worktrees: Worktree[]
+): Promise<Prepared | null> {
+  const { config } = deps;
   const { issue, shardId } = candidate;
-  const worktrees: Worktree[] = [];
   saveRun(dir, record);
+  if (shardId === null || !config.shards.deliverable.includes(shardId)) {
+    const accepted = config.shards.deliverable.join(", ");
+    await release(deps, record, `no deliverable repository marker, the worker delivers to ${accepted}`);
+    return null;
+  }
+  record.shard = shardId;
+  record.state = "resolving";
+  saveRun(dir, record);
+  const reg = registry();
+  const shard = reg.all.find((entry) => entry.id === shardId) as PresentShard;
+  const resolved = resolveIssue(issue, shard, reg);
+  if (resolved.failing.length > 0) {
+    const lines = resolved.failing.map(refLine).join("\n");
+    await release(deps, record, `references that are not on the default branch:\n${lines}`);
+    return null;
+  }
+
+  const companionShards = config.shards.companion.map((id) => reg.all.find((entry) => entry.id === id) as PresentShard);
+  for (const entry of [shard, ...companionShards]) {
+    if (!fetchShard(entry)) {
+      await release(
+        deps,
+        record,
+        `the repository of shard "${entry.id}" has no commits, push a first commit to its default branch`
+      );
+      return null;
+    }
+  }
+
+  const branch = `${config.git.branchPrefix}${issue.key}-${slug(issue.summary)}`;
+  record.branch = branch;
+  const target = addWorktree(shard, path.join(dir, "tree"), branch);
+  worktrees.push(target);
+  const companions = companionShards.map((companion) => {
+    const id = companion.id;
+    const worktree = addWorktree(companion, path.join(dir, "companions", id), branch);
+    worktrees.push(worktree);
+    return { id, tree: worktree.tree };
+  });
+  record.worktrees = storedWorktrees(worktrees);
+
+  const briefFile = path.join(dir, "brief.md");
+  const handbackFile = path.join(dir, "handback.md");
+  fs.writeFileSync(
+    briefFile,
+    renderBrief({
+      issue,
+      site: config.jira.site,
+      shard: shardId,
+      tree: target.tree,
+      branch,
+      companions,
+      refs: resolved.gating,
+      informational: resolved.informational,
+      handbackFile
+    })
+  );
+  record.state = "prepared";
+  saveRun(dir, record);
+  return { record, dir, worktrees, target, briefFile, handbackFile };
+}
+
+async function execute(deps: WorkerDeps, prepared: Prepared): Promise<Outcome> {
+  const { config } = deps;
+  const { record, dir, target, briefFile, handbackFile } = prepared;
+  const streamFile = path.join(dir, "claude.jsonl");
+  fs.writeFileSync(streamFile, "");
+  record.state = "running";
+  saveRun(dir, record);
+  const result = await deps.run(
+    "claude",
+    claudeArgs({
+      prompt: implementPrompt(config.claude.skill, briefFile, handbackFile),
+      runDir: dir,
+      maxTurns: config.claude.maxTurns,
+      maxBudgetUsd: config.claude.maxBudgetUsd,
+      allowedTools: config.claude.allowedTools,
+      model: config.claude.model,
+      pluginDir: config.claude.pluginDir
+    }),
+    {
+      cwd: target.tree,
+      env: {
+        ...scrubbedEnv(deps.env),
+        ...authorEnv(config),
+        GLOBU_HOME: deps.home,
+        CLAUDE_CONFIG_DIR: deps.claudeConfigDir
+      },
+      timeoutMs: config.limits.timeout,
+      stdoutFile: streamFile
+    }
+  );
+  const summary = summarizeStream(fs.readFileSync(streamFile, "utf8"));
+  record.costUsd = summary.costUsd;
+  record.turns = summary.turns;
+  record.blocked = summary.blocked;
+  return { timedOut: result.timedOut, code: result.code, stderr: result.stderr, summary };
+}
+
+async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome | null): Promise<RunRecord> {
+  const { config, jira } = deps;
+  const { record, dir, worktrees, target, handbackFile } = prepared;
+  const commits = commitsOn(target);
+  if (outcome?.timedOut) return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`);
+  if (outcome?.summary.subtype === "error_max_turns") {
+    return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`);
+  }
+  if (commits === 0) {
+    const failed = outcome !== null && outcome.code !== 0;
+    const detail = failed ? `, claude exited with ${outcome.code}: ${outcome.stderr.trim()}` : "";
+    return await release(deps, record, `the run made no commits${detail}`);
+  }
+
+  record.state = "pushing";
+  saveRun(dir, record);
+  const token = deps.secrets.githubToken;
+  if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
+  const handback = fs.existsSync(handbackFile)
+    ? fs.readFileSync(handbackFile, "utf8").trim()
+    : `The run wrote no handback. Its last message:\n\n${outcome?.summary.result ?? "(none)"}`;
+  const issue = await jira.issue(record.key);
+  const title = `${issue.key}: ${issue.summary}`;
+  for (const worktree of worktrees) {
+    if (commitsOn(worktree) === 0) continue;
+    const bodyFile = path.join(dir, `pull-request-${worktree.shard.id}.md`);
+    fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
+    record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token));
+  }
+  const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
+  await jira.comment(issue.key, `${handback}\n\n---\n\nPull requests:\n${links}\n\n${footer(record, deps.now())}`);
+  for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
+  record.state = "handed-back";
+  record.endedAt = deps.now().toISOString();
+  return record;
+}
+
+function discard(dir: string, worktrees: Worktree[]): void {
+  cleanup(worktrees);
+  fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
+}
+
+async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord, dir: string): Promise<RunRecord> {
+  const worktrees: Worktree[] = [];
   try {
-    if (shardId === null || !config.shards.deliverable.includes(shardId)) {
-      const accepted = config.shards.deliverable.join(", ");
-      return await release(deps, record, `no deliverable repository marker, the worker delivers to ${accepted}`);
-    }
-    record.shard = shardId;
-    record.state = "resolving";
-    saveRun(dir, record);
-    const reg = registry();
-    const shard = reg.all.find((entry) => entry.id === shardId) as PresentShard;
-    const resolved = resolveIssue(issue, shard, reg);
-    if (resolved.failing.length > 0) {
-      const lines = resolved.failing.map(refLine).join("\n");
-      return await release(deps, record, `references that are not on the default branch:\n${lines}`);
-    }
-
-    const companionShards = config.shards.companion.map(
-      (id) => reg.all.find((entry) => entry.id === id) as PresentShard
-    );
-    for (const entry of [shard, ...companionShards]) {
-      if (!fetchShard(entry)) {
-        return await release(
-          deps,
-          record,
-          `the repository of shard "${entry.id}" has no commits, push a first commit to its default branch`
-        );
-      }
-    }
-
-    const branch = `${config.git.branchPrefix}${issue.key}-${slug(issue.summary)}`;
-    record.branch = branch;
-    const target = addWorktree(shard, path.join(dir, "tree"), branch);
-    worktrees.push(target);
-    const companions = companionShards.map((companion) => {
-      const id = companion.id;
-      const worktree = addWorktree(companion, path.join(dir, "companions", id), branch);
-      worktrees.push(worktree);
-      return { id, tree: worktree.tree };
-    });
-
-    const briefFile = path.join(dir, "brief.md");
-    const handbackFile = path.join(dir, "handback.md");
-    const streamFile = path.join(dir, "claude.jsonl");
-    fs.writeFileSync(
-      briefFile,
-      renderBrief({
-        issue,
-        site: config.jira.site,
-        shard: shardId,
-        tree: target.tree,
-        branch,
-        companions,
-        refs: resolved.gating,
-        informational: resolved.informational,
-        handbackFile
-      })
-    );
-    fs.writeFileSync(streamFile, "");
-
-    record.state = "running";
-    saveRun(dir, record);
-    const result = await deps.run(
-      "claude",
-      claudeArgs({
-        prompt: implementPrompt(config.claude.skill, briefFile, handbackFile),
-        runDir: dir,
-        maxTurns: config.claude.maxTurns,
-        maxBudgetUsd: config.claude.maxBudgetUsd,
-        allowedTools: config.claude.allowedTools,
-        model: config.claude.model,
-        pluginDir: config.claude.pluginDir
-      }),
-      {
-        cwd: target.tree,
-        env: {
-          ...scrubbedEnv(deps.env),
-          ...authorEnv(config),
-          GLOBU_HOME: deps.home,
-          CLAUDE_CONFIG_DIR: deps.claudeConfigDir
-        },
-        timeoutMs: config.limits.timeout,
-        stdoutFile: streamFile
-      }
-    );
-    const summary = summarizeStream(fs.readFileSync(streamFile, "utf8"));
-    record.costUsd = summary.costUsd;
-    record.turns = summary.turns;
-    record.blocked = summary.blocked;
-    const commits = commitsOn(target);
-    if (result.timedOut) return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`);
-    if (summary.subtype === "error_max_turns") {
-      return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`);
-    }
-    if (commits === 0) {
-      const detail = result.code === 0 ? "" : `, claude exited with ${result.code}: ${result.stderr.trim()}`;
-      return await release(deps, record, `the run made no commits${detail}`);
-    }
-
-    record.state = "pushing";
-    saveRun(dir, record);
-    const token = deps.secrets.githubToken;
-    if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
-    const handback = fs.existsSync(handbackFile)
-      ? fs.readFileSync(handbackFile, "utf8").trim()
-      : `The run wrote no handback. Its last message:\n\n${summary.result ?? "(none)"}`;
-    const title = `${issue.key}: ${issue.summary}`;
-    for (const worktree of worktrees) {
-      if (commitsOn(worktree) === 0) continue;
-      const bodyFile = path.join(dir, `pull-request-${worktree.shard.id}.md`);
-      fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
-      record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token));
-    }
-    const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
-    await jira.comment(issue.key, `${handback}\n\n---\n\nPull requests:\n${links}\n\n${footer(record, deps.now())}`);
-    for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
-    record.state = "handed-back";
-    record.endedAt = deps.now().toISOString();
-    return record;
+    const prepared = await prepare(deps, candidate, record, dir, worktrees);
+    if (prepared === null) return record;
+    const outcome = await execute(deps, prepared);
+    return await conclude(deps, prepared, outcome);
   } catch (err) {
     return await release(deps, record, `worker error: ${(err as Error).message}`);
   } finally {
-    cleanup(worktrees);
-    fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
+    discard(dir, worktrees);
     saveRun(dir, record);
   }
+}
+
+function describe(record: RunRecord): string {
+  const reason = record.reason === null ? "" : `: ${record.reason.split("\n")[0]}`;
+  return `${record.key}\t${record.state}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`;
+}
+
+export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {
+  const { config, jira, io, home } = deps;
+  checkShards(config, home);
+  const me = await jira.myself();
+  const identity = { jira: `${me.displayName} (${me.accountId})`, github: await githubLogin(deps) };
+  const issue = await jira.issue(key);
+  if (!(await claim(deps, issue, me))) throw new Error(`${key} is claimed by someone else`);
+  const record = newRun(key, deps.now(), identity, "session");
+  const dir = path.join(runsDir(home), record.id);
+  const worktrees: Worktree[] = [];
+  let prepared: Prepared | null = null;
+  try {
+    prepared = await prepare(deps, { issue, shardId: markerShard(issue, config) }, record, dir, worktrees);
+  } catch (err) {
+    await release(deps, record, `worker error: ${(err as Error).message}`);
+  } finally {
+    if (prepared === null) discard(dir, worktrees);
+    saveRun(dir, record);
+  }
+  io.out(prepared === null ? describe(record) : `${key}\tprepared ${dir}`);
+  const companions = prepared === null ? [] : prepared.worktrees.slice(1);
+  return {
+    record,
+    dir,
+    brief: prepared === null ? null : prepared.briefFile,
+    tree: prepared === null ? null : prepared.target.tree,
+    handback: prepared === null ? null : prepared.handbackFile,
+    companions: companions.map((worktree) => ({ id: worktree.shard.id, tree: worktree.tree }))
+  };
+}
+
+function preparedRun(deps: WorkerDeps, id: string): Prepared {
+  const { dir, record } = loadRun(deps.home, id);
+  if (record.state !== "prepared") throw new Error(`run ${id} is ${record.state}, only a prepared run can be finished`);
+  const worktrees = restoreWorktrees(record);
+  return {
+    record,
+    dir,
+    worktrees,
+    target: worktrees[0],
+    briefFile: path.join(dir, "brief.md"),
+    handbackFile: path.join(dir, "handback.md")
+  };
+}
+
+export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord> {
+  const prepared = preparedRun(deps, id);
+  const { record, dir, worktrees } = prepared;
+  try {
+    await conclude(deps, prepared, null);
+  } catch (err) {
+    await release(deps, record, `worker error: ${(err as Error).message}`);
+  } finally {
+    discard(dir, worktrees);
+    saveRun(dir, record);
+  }
+  deps.io.out(describe(record));
+  return record;
+}
+
+export async function releaseRun(deps: WorkerDeps, id: string, reason: string): Promise<RunRecord> {
+  const { dir, record } = loadRun(deps.home, id);
+  if (isTerminal(record.state)) throw new Error(`run ${id} is already ${record.state}`);
+  const worktrees = restoreWorktrees(record);
+  await release(deps, record, reason);
+  discard(dir, worktrees);
+  saveRun(dir, record);
+  deps.io.out(describe(record));
+  return record;
 }
 
 async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
@@ -448,10 +591,7 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
       return runOne(deps, candidate, record, path.join(runsDir(home), record.id));
     })
   );
-  for (const record of runs) {
-    const reason = record.reason === null ? "" : `: ${record.reason.split("\n")[0]}`;
-    io.out(`${record.key}\t${record.state}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`);
-  }
+  for (const record of runs) io.out(describe(record));
   return { runs, plan };
 }
 

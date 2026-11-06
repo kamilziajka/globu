@@ -137,6 +137,13 @@ function ownHome(name: string, value: string, shared: string): string {
   return resolved;
 }
 
+export function sessionHomes(env: NodeJS.ProcessEnv): Homes {
+  return {
+    home: path.resolve(env.GLOBU_HOME || path.join(os.homedir(), ".globu")),
+    claudeConfigDir: path.resolve(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"))
+  };
+}
+
 export function ownHomes(env: NodeJS.ProcessEnv): Homes {
   const globu = path.join(os.homedir(), ".globu");
   const home = ownHome("GLOBU_HOME", env.GLOBU_HOME || path.join(globu, "worker"), globu);

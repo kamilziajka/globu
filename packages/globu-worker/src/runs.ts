@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type RunState = "claimed" | "resolving" | "running" | "pushing" | "handed-back" | "released";
+export type RunState = "claimed" | "resolving" | "prepared" | "running" | "pushing" | "handed-back" | "released";
+export type RunDriver = "worker" | "session";
+export type StoredWorktree = { shard: string; tree: string; branch: string; base: string };
 export type RunRecord = {
   id: string;
   key: string;
+  driver: RunDriver;
   shard: string | null;
   branch: string | null;
+  worktrees: StoredWorktree[];
   state: RunState;
   startedAt: string;
   endedAt: string | null;
@@ -38,12 +42,19 @@ export function newRunId(key: string, now: Date): string {
   return `${key}-${stamp}`;
 }
 
-export function newRun(key: string, now: Date, identity: RunRecord["identity"]): RunRecord {
+export function newRun(
+  key: string,
+  now: Date,
+  identity: RunRecord["identity"],
+  driver: RunDriver = "worker"
+): RunRecord {
   return {
     id: newRunId(key, now),
     key,
+    driver,
     shard: null,
     branch: null,
+    worktrees: [],
     state: "claimed",
     startedAt: now.toISOString(),
     endedAt: null,
@@ -72,6 +83,12 @@ export function loadRuns(home: string): StoredRun[] {
       const file = path.join(dir, RECORD);
       return fs.existsSync(file) ? [{ dir, record: JSON.parse(fs.readFileSync(file, "utf8")) as RunRecord }] : [];
     });
+}
+
+export function loadRun(home: string, id: string): StoredRun {
+  const found = loadRuns(home).find(({ record }) => record.id === id);
+  if (found === undefined) throw new Error(`no run ${id} in ${runsDir(home)}`);
+  return found;
 }
 
 export function spentOn(runs: StoredRun[], day: Date): number {

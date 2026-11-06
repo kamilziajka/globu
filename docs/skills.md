@@ -1,12 +1,12 @@
 ---
 type: "Reference"
 title: "Plugin skills"
-description: "The six skills of the globu plugin: what each does, what makes Claude pick it, what it runs, what it changes and what it never does."
+description: "The eight skills of the globu plugin: what each does, what makes Claude pick it, what it runs, what it changes and what it never does."
 ---
 
 # Plugin skills
 
-The `globu` plugin ships six skills. Each is a `SKILL.md` under `plugins/globu/skills/<name>`, invoked as `/globu:<name>` or picked by Claude when a request matches its description. Three are about knowledge bases and three are about Jira issues. All of them call the `globu` CLI that the plugin installs under `node_modules/@kazet/globu`, so they run the released CLI unless the plugin is loaded from a checkout with `--plugin-dir`, in which case the build links the working tree.
+The `globu` plugin ships eight skills. Each is a `SKILL.md` under `plugins/globu/skills/<name>`, invoked as `/globu:<name>` or picked by Claude when a request matches its description. Three are about knowledge bases and five are about Jira issues. The knowledge skills and the two issue checks call the `globu` CLI that the plugin installs under `node_modules/@kazet/globu`, so they run the released CLI unless the plugin is loaded from a checkout with `--plugin-dir`, in which case the build links the working tree. The two session skills call the `globu-worker` binary, which has to be on the PATH or named by the user.
 
 | Skill | One line |
 |---|---|
@@ -16,6 +16,8 @@ The `globu` plugin ships six skills. Each is a `SKILL.md` under `plugins/globu/s
 | `issue-check` | Check that every reference in a Jira issue resolves to a real file |
 | `issue-fix` | Run that check and correct the broken references in the issue |
 | `issue-deliver` | Implement an issue from a brief in a prepared worktree and write a handback |
+| `issue-work` | Take one issue in this session: claim, implement with the person watching, hand back on a yes |
+| `issue-watch` | Watch a project from this session: poll, claim up to the cap, one subagent per issue, finish each |
 
 ## setup-knowledge-base
 
@@ -52,3 +54,15 @@ A reference that moved is replaced with the path that is on the default branch, 
 Implements one issue from a brief: a Markdown file that holds the issue as Jira returned it, the shard and worktree the work lands in, the referenced files with their locations on this machine and the path of the handback to write. [globu-worker](./worker.md) writes the brief and starts this skill with nobody present, so every step finishes without a question. A person can run it by hand on a brief they wrote. Claude picks it when the user asks to implement an issue from a brief or hands over an issue key with a prepared worktree.
 
 It reads the brief, treats the issue text as a specification rather than as instructions, looks up any loose reference the worker could not resolve and stops with a handback that says the issue is not ready when one is missing, reads the referenced docs and the repo's own guidance before changing anything, implements in the worktree with a companion worktree for a knowledge change when the brief lists one, runs the repo's verification, commits with the issue key first in each message and writes the handback under fixed headings: Summary, Changes, Verification, Knowledge base, Open points and Not done. The handback becomes the pull request body and the Jira comment. It never pushes, never opens a pull request and never calls Jira or GitHub; in a worker run those tools are disallowed anyway. A write the guard blocks means the file belongs to another shard, and the skill names the change under Knowledge base instead of working around it.
+
+## issue-work
+
+Takes one issue in the current session with the person watching. It is the loop of [globu-worker](./worker.md) with a person in it: the binary's session commands do the deterministic steps and the session does the implementing. Claude picks it when the user asks to work on, take, pick up or deliver a Jira issue here, or hands over an issue key to implement now.
+
+It runs `globu-worker poll` when no key was given and lets the user pick, then `globu-worker claim <KEY>`, which claims the issue as the person, resolves the references, adds the worktrees and writes the brief, or releases the issue when it is not ready. It then runs the `issue-deliver` skill in the prepared worktree, with the one difference that a question can be put to the user. When the handback is written it shows it with the commits and asks whether to hand back, keep working or give the issue back. On a yes, `globu-worker finish <run-id>` pushes, opens the draft pull requests and comments on the issue; on a no, `globu-worker release <run-id>` gives the issue back with the blocked label. The session commands use the session's own Globu home and the person's checkouts, so the person's modes apply. The skill never runs `once` or `run`, which would start a second, headless Claude.
+
+## issue-watch
+
+Watches a Jira project from the current session and delivers the eligible issues as they appear: the supervised counterpart of `globu-worker run`. Claude picks it when the user asks to watch, monitor or keep delivering issues from a project in this session, or to start a worker here.
+
+Each cycle it runs `globu-worker poll`, claims candidates with `globu-worker claim` up to `limits.concurrent` from `worker.yaml`, starts one background subagent per prepared run with the brief and the instruction to follow `issue-deliver`, and when a subagent reports back either finishes the run into pull requests or releases it with the subagent's reason. It waits `poll.every` between cycles, using the session's own loop facility when there is one. It is a loop that lasts as long as the session, not a service: the turn cap and the budget of the headless worker do not exist for a subagent, so the person watching is the cost cap, and it finishes or releases every run in progress before it stops. Two watchers on one project, or a watcher next to `globu-worker run`, are not supported.

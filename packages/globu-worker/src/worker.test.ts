@@ -7,7 +7,7 @@ import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
-import { checkShards, loop, markerShard, once, type WorkerDeps } from "./worker.js";
+import { checkShards, claimIssue, finishRun, loop, markerShard, once, releaseRun, type WorkerDeps } from "./worker.js";
 
 const NOW = new Date("2026-11-05T10:20:30.000Z");
 
@@ -635,5 +635,119 @@ describe("loop", () => {
       }
     });
     expect(cycles).toBe(6);
+  });
+});
+
+describe("session commands", () => {
+  function session(world: World, issues: JiraIssue[], script: Script = {}, jiraOptions = {}) {
+    const jira = fakeJira(issues, jiraOptions);
+    const calls: Calls = { gh: [], claude: [] };
+    const { worker, io } = deps(world, jira, fakeRunner(script, calls));
+    return { worker, io, jira, calls };
+  }
+
+  it("claims an issue for a session, keeps the worktrees and finishes it into pull requests", async () => {
+    const world = setup({ companion: ["product"] });
+    const { worker, io, jira, calls } = session(world, [issue("MR-7")]);
+    const claimed = await claimIssue(worker, "MR-7");
+    const dir = path.join(runsDir(world.home), "MR-7-20261105T102030Z");
+    expect(claimed).toEqual({
+      record: expect.objectContaining({ state: "prepared", driver: "session", shard: "backend" }),
+      dir,
+      brief: path.join(dir, "brief.md"),
+      tree: path.join(dir, "tree"),
+      handback: path.join(dir, "handback.md"),
+      companions: [{ id: "product", tree: path.join(dir, "companions/product") }]
+    });
+    expect(claimed.record.worktrees).toEqual([
+      { shard: "backend", tree: path.join(dir, "tree"), branch: "agent/MR-7-add-the-thing", base: "origin/main" },
+      {
+        shard: "product",
+        tree: path.join(dir, "companions/product"),
+        branch: "agent/MR-7-add-the-thing",
+        base: "origin/main"
+      }
+    ]);
+    expect(fs.existsSync(path.join(dir, "brief.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "tree/src/x.ts"))).toBe(true);
+    expect(io.stdout).toBe(`MR-7\tprepared ${dir}\n`);
+    expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", assignee: "bot" });
+    expect(calls.claude).toEqual([]);
+
+    commitIn(path.join(dir, "tree"), "src/new.ts");
+    commitIn(path.join(dir, "companions/product"), "docs/new.md");
+    fs.writeFileSync(path.join(dir, "handback.md"), "## Summary\n\nDone by hand.\n");
+    const finished = await finishRun(worker, claimed.record.id);
+    expect(finished).toMatchObject({
+      state: "handed-back",
+      driver: "session",
+      pullRequests: ["https://github.com/acme/pr/2", "https://github.com/acme/pr/3"]
+    });
+    const comment = jira.comments["MR-7"][0];
+    expect(comment).toContain("## Summary\n\nDone by hand.");
+    expect(comment).toMatch(
+      /Run MR-7-20261105T102030Z as Bot \(bot\), GitHub octocat from a Claude Code session, 0\.0 min\.$/
+    );
+    expect(comment).not.toContain("turns");
+    expect(git(world.remotes.product, "rev-parse", "--verify", "agent/MR-7-add-the-thing")).toMatch(/^[0-9a-f]{40}$/);
+    expect(fs.existsSync(path.join(dir, "tree"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "companions"))).toBe(false);
+    expect(git(world.clones.backend, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "run.json"), "utf8")).state).toBe("handed-back");
+    expect(io.stdout).toContain("MR-7\thanded-back https://github.com/acme/pr/2 https://github.com/acme/pr/3");
+    await expect(finishRun(worker, claimed.record.id)).rejects.toThrow(
+      "run MR-7-20261105T102030Z is handed-back, only a prepared run can be finished"
+    );
+    await expect(releaseRun(worker, claimed.record.id, "x")).rejects.toThrow("is already handed-back");
+  });
+
+  it("releases at claim time when the issue cannot be prepared and reports a lost race", async () => {
+    const world = setup();
+    const noMarker = session(world, [issue("MR-1", { labels: [] })]);
+    const claimed = await claimIssue(noMarker.worker, "MR-1");
+    expect(claimed).toMatchObject({ brief: null, tree: null, handback: null, companions: [] });
+    expectReleased(noMarker.jira, claimed.record, "no deliverable repository marker");
+    expect(noMarker.io.stdout).toContain("MR-1\treleased: no deliverable repository marker");
+
+    const stolen = session(world, [issue("MR-2")], {}, { stolen: ["MR-2"] });
+    await expect(claimIssue(stolen.worker, "MR-2")).rejects.toThrow("MR-2 is claimed by someone else");
+
+    git(world.clones.backend, "config", "remote.origin.followRemoteHEAD", "never");
+    git(world.clones.backend, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+    const broken = session(world, [issue("MR-3")]);
+    const failed = await claimIssue(broken.worker, "MR-3");
+    expectReleased(broken.jira, failed.record, `worker error: ${world.clones.backend} has no origin/HEAD`);
+    expect(fs.existsSync(path.join(failed.dir, "tree"))).toBe(false);
+  });
+
+  it("releases a prepared run that made no commits, failed to push or was given back", async () => {
+    const world = setup();
+    const empty = session(world, [issue("MR-4")]);
+    const prepared = await claimIssue(empty.worker, "MR-4");
+    const finished = await finishRun(empty.worker, prepared.record.id);
+    expectReleased(empty.jira, finished, "the run made no commits");
+    expect(finished.reason).toBe("the run made no commits");
+
+    const ghFails = session(world, [issue("MR-5")], { ghFails: true });
+    const second = await claimIssue(ghFails.worker, "MR-5");
+    commitIn(second.tree as string, "src/new.ts");
+    const pushed = await finishRun(ghFails.worker, second.record.id);
+    expectReleased(ghFails.jira, pushed, "worker error: gh pr create");
+    expect(fs.existsSync(path.join(second.dir, "tree"))).toBe(false);
+
+    const noHandback = session(world, [issue("MR-6")]);
+    const third = await claimIssue(noHandback.worker, "MR-6");
+    commitIn(third.tree as string, "src/new.ts");
+    const handed = await finishRun(noHandback.worker, third.record.id);
+    expect(handed.state).toBe("handed-back");
+    expect(noHandback.jira.comments["MR-6"][0]).toContain("The run wrote no handback. Its last message:\n\n(none)");
+
+    const givenBack = session(world, [issue("MR-8")]);
+    const fourth = await claimIssue(givenBack.worker, "MR-8");
+    const released = await releaseRun(givenBack.worker, fourth.record.id, "the person moved on");
+    expectReleased(givenBack.jira, released, "the person moved on");
+    expect(fs.existsSync(path.join(fourth.dir, "tree"))).toBe(false);
+    expect(git(world.clones.backend, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(givenBack.io.stdout).toContain("MR-8\treleased: the person moved on");
   });
 });
