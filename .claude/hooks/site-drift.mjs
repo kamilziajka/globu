@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const PACKAGE_NAME = "@kazet/globu";
+const WORKER_PACKAGE_NAME = "@kazet/globu-worker";
 const SITE_VERSION_URL = "https://globu.kazet.blog/version.json";
 const SITE_HOST = new URL(SITE_VERSION_URL).host;
 const SITE_REPO = "kamilziajka/globu-website";
@@ -76,6 +77,10 @@ async function main() {
   const findings = [];
   if (compare(local, published) > 0) {
     findings.push(`package.json is at ${local} but npm serves ${published}: the bump is not released yet. The release skill runs the workflow and updates the site.`);
+  }
+  const worker = run("npm", ["view", WORKER_PACKAGE_NAME, "version"]);
+  if (worker !== null && worker !== published) {
+    findings.push(`npm serves ${PACKAGE_NAME}@${published} but ${WORKER_PACKAGE_NAME}@${worker}: the two packages release together, so one of them is missing a publish.`);
   }
 
   const site = await siteVersion();

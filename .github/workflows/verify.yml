@@ -28,4 +28,4 @@ jobs:
         run: npm run verify
 
       - name: Check that the committed package versions are up to date
-        run: git diff --exit-code --stat -- packages/globu-cli/package.json
+        run: git diff --exit-code --stat -- packages/globu-cli/package.json packages/globu-worker/package.json

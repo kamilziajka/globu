@@ -1,6 +1,6 @@
 npm run verify
 npm run verify:mod
-git diff --exit-code --stat -- packages/globu-cli/package.json || {
+git diff --exit-code --stat -- packages/globu-cli/package.json packages/globu-worker/package.json || {
   echo "The build updated the package versions. Stage packages/*/package.json and commit again."
   exit 1
 }

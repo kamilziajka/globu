@@ -46,6 +46,13 @@ npm install -g @kazet/globu
 globu base --help
 ```
 
+The worker is its own package, installed where the worker runs:
+
+```sh
+npm install -g @kazet/globu-worker
+globu-worker --help
+```
+
 ## Try it locally
 
 ```sh
