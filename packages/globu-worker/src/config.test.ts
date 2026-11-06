@@ -9,6 +9,7 @@ import {
   parseDuration,
   readSecrets,
   scrubbedEnv,
+  sessionHomes,
   workerConfigPath
 } from "./config.js";
 
@@ -125,6 +126,19 @@ describe("scrubbedEnv", () => {
   it("drops every secret and keeps the rest", () => {
     const env = scrubbedEnv({ PATH: "/bin", JIRA_API_TOKEN: "t", GH_TOKEN: "g", GLOBU_GIT_TOKEN: "x", HOME: "/h" });
     expect(env).toEqual({ PATH: "/bin", HOME: "/h" });
+  });
+});
+
+describe("sessionHomes", () => {
+  it("uses the session's own homes, the interactive ones by default", () => {
+    expect(sessionHomes({})).toEqual({
+      home: path.join(os.homedir(), ".globu"),
+      claudeConfigDir: path.join(os.homedir(), ".claude")
+    });
+    expect(sessionHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: "/tmp/c" })).toEqual({
+      home: "/tmp/w",
+      claudeConfigDir: "/tmp/c"
+    });
   });
 });
 

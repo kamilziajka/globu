@@ -129,8 +129,18 @@ Secrets come from the environment only: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Ji
 |---|---|
 | `once [--dry-run] [--issue <key>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how a released issue is retried and how the whole path is tested. `--json` adds the run records and the plan |
 | `run` | `once` on the configured interval until `SIGINT` or `SIGTERM`. A signal during a cycle lets the cycle finish |
+| `poll [--json]` | The dry run of `once`, for a session: what could be claimed now and why, touching nothing |
+| `claim <key> [--json]` | Steps 3 to 7 of a run for a session: claim the issue, resolve its references, add the worktrees and write the brief, then stop with the run `prepared` and the worktrees in place. Prints the run directory; `--json` adds the record and the paths of the brief, the tree, the handback and the companions |
+| `finish <run-id> [--json]` | Steps 10 and 11 for a prepared run: push the worktrees that have commits, open the pull requests, comment on the issue and remove the worktrees. A run without commits is released with that reason |
+| `release <run-id> --reason <text> [--json]` | Give a prepared run's issue back with that reason and remove its worktrees |
 
 `once` prints one line per issue it looked at (`claimed`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
+
+## From a session
+
+`once` and `run` start Claude headless. `poll`, `claim`, `finish` and `release` leave the implementing to a Claude Code session, which is the same run with a person in it: the binary does the deterministic steps and the session, or a subagent it starts, does the work of the `issue-deliver` skill in the prepared worktree. The `issue-work` and `issue-watch` skills in the plugin drive these four commands; [plugin skills](./skills.md) describes them.
+
+The four session commands use the session's own Globu home, `~/.globu` unless `GLOBU_HOME` is set, with its own `worker.yaml` and `runs` directory, and never the headless worker's home. The shards they deliver to are the person's registered checkouts, which must be editable and not in `read` mode, and the issue is claimed as the person whose `JIRA_EMAIL` and `JIRA_API_TOKEN` are in the environment. A run made by `claim` has `driver: session` in its record, its footer names the session instead of turns and cost, and it is not reconciled by anything: a run left prepared is given back with `release`.
 
 ## A run
 
@@ -148,7 +158,7 @@ Secrets come from the environment only: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Ji
 
 A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue, removes the label and either waits for the next poll or runs `once --issue <key>`.
 
-Every footer, in the pull request body and in the Jira comment, names the run id, the Jira account and GitHub login the worker acted as, turns, cost, wall time and the blocked writes. Until Atlassian ships agent identities a run acts as whoever holds the tokens, and the footer records which identity that was.
+Every footer, in the pull request body and in the Jira comment, names the run id, the Jira account and GitHub login the worker acted as, turns, cost, wall time and the blocked writes. A run driven from a session names the session instead of the turns, the cost and the blocked writes, which only the headless stream can count. Until Atlassian ships agent identities a run acts as whoever holds the tokens, and the footer records which identity that was.
 
 ## What the guard does in a run
 
