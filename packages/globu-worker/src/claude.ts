@@ -1,17 +1,11 @@
 import { DENIED_TOOLS } from "./config.js";
 
-export type RunSettings = { permissions: { allow: string[]; deny: string[] } };
-
-export function runSettings(allowedTools: string[]): RunSettings {
-  return { permissions: { allow: allowedTools, deny: DENIED_TOOLS } };
-}
-
 export type ClaudeInvocation = {
   prompt: string;
-  settingsFile: string;
   runDir: string;
-  turns: number;
-  runUsd: number;
+  maxTurns: number;
+  maxBudgetUsd: number;
+  allowedTools: string[];
   model?: string;
   pluginDir?: string;
 };
@@ -22,14 +16,16 @@ export function claudeArgs(invocation: ClaudeInvocation): string[] {
     invocation.prompt,
     "--permission-mode",
     "dontAsk",
-    "--settings",
-    invocation.settingsFile,
+    "--allowedTools",
+    ...invocation.allowedTools,
+    "--disallowedTools",
+    ...DENIED_TOOLS,
     "--add-dir",
     invocation.runDir,
     "--max-turns",
-    String(invocation.turns),
+    String(invocation.maxTurns),
     "--max-budget-usd",
-    String(invocation.runUsd),
+    String(invocation.maxBudgetUsd),
     "--output-format",
     "stream-json",
     "--verbose",

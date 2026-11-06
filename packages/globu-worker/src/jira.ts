@@ -5,6 +5,7 @@ export type JiraIssue = {
   description: string;
   labels: string[];
   status: string;
+  statusId: string;
   assignee: string | null;
   comments: JiraComment[];
   fields: Record<string, unknown>;
@@ -28,12 +29,20 @@ type RawIssue = {
     summary: string;
     description: string | null;
     labels: string[];
-    status: { name: string };
+    status: { id: string; name: string };
     assignee: { accountId: string } | null;
     comment?: { comments: { author: { displayName: string }; created: string; body: string }[] };
   };
 };
-type Transition = { id: string; to: { name: string } };
+type Transition = { id: string; to: { id: string; name: string } };
+
+export function isStatusId(status: string): boolean {
+  return /^\d+$/.test(status);
+}
+
+export function matchesStatus(candidate: { id: string; name: string }, wanted: string): boolean {
+  return isStatusId(wanted) ? candidate.id === wanted : candidate.name.toLowerCase() === wanted.toLowerCase();
+}
 
 const ISSUE_FIELDS = "*all";
 
@@ -45,6 +54,7 @@ function toIssue(raw: RawIssue): JiraIssue {
     description: description ?? "",
     labels,
     status: status.name,
+    statusId: status.id,
     assignee: assignee?.accountId ?? null,
     comments: (comment?.comments ?? []).map((entry) => ({
       author: entry.author.displayName,
@@ -87,11 +97,10 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
     },
     assign: (key, accountId) => request("PUT", `${issuePath(key)}/assignee`, { accountId }),
     async transitionTo(key, status) {
-      const wanted = status.toLowerCase();
       const { transitions } = await request<{ transitions: Transition[] }>("GET", `${issuePath(key)}/transitions`);
-      const transition = transitions.find((candidate) => candidate.to.name.toLowerCase() === wanted);
+      const transition = transitions.find((candidate) => matchesStatus(candidate.to, status));
       if (transition === undefined) {
-        const names = transitions.map((candidate) => candidate.to.name).join(", ") || "none";
+        const names = transitions.map((candidate) => `${candidate.to.name} (${candidate.to.id})`).join(", ") || "none";
         throw new Error(`${key} has no transition to "${status}", available: ${names}`);
       }
       await request("POST", `${issuePath(key)}/transitions`, { transition: { id: transition.id } });

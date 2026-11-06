@@ -31,6 +31,7 @@ describe("renderBrief", () => {
         description: "Do it.\nCarefully.",
         labels: [],
         status: "Delivery",
+        statusId: "10023",
         assignee: "bot",
         comments: [{ author: "Kamil", created: "2026-11-05", body: "Also this." }],
         fields: {}
@@ -65,6 +66,7 @@ describe("renderBrief", () => {
         description: "",
         labels: [],
         status: "Delivery",
+        statusId: "10023",
         assignee: null,
         comments: [],
         fields: {}
@@ -93,6 +95,7 @@ describe("renderBrief", () => {
         description: "",
         labels: [],
         status: "",
+        statusId: "",
         assignee: null,
         comments: [],
         fields: {}

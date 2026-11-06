@@ -11,7 +11,8 @@ export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now">> & { si
 
 const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the right Globu shard.";
 const FOOTER = `
-GLOBU_HOME and CLAUDE_CONFIG_DIR must name directories of the worker's own; worker.yaml lives in GLOBU_HOME.
+GLOBU_HOME defaults to ~/.globu/worker and CLAUDE_CONFIG_DIR to <GLOBU_HOME>/claude; worker.yaml lives in GLOBU_HOME.
+Neither may be ~/.globu or ~/.claude, which belong to interactive sessions.
 Secrets come from JIRA_EMAIL, JIRA_API_TOKEN and GH_TOKEN. The Claude run never sees them.`;
 
 function buildDeps(io: Io, env: NodeJS.ProcessEnv, overrides: Overrides): WorkerDeps {

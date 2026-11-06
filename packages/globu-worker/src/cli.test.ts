@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register } from "../../globu-core/src/index.js";
@@ -65,17 +66,17 @@ describe("globu-worker", () => {
     const io = captureIo(tempDir());
     expect(await workerMain(["--help"], io, {}, quiet())).toBe(0);
     expect(io.stdout).toContain("once [options]");
-    expect(io.stdout).toContain("GLOBU_HOME and CLAUDE_CONFIG_DIR must name directories of the worker's own");
+    expect(io.stdout).toContain("GLOBU_HOME defaults to ~/.globu/worker");
     const version = captureIo(tempDir());
     expect(await workerMain(["--version"], version, {}, quiet())).toBe(0);
     expect(version.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
     expect(await workerMain(["nope"], captureIo(tempDir()), {}, quiet())).toBe(1);
   });
 
-  it("refuses to start without its own homes or a configuration", async () => {
+  it("refuses the interactive homes and starts without a configuration", async () => {
     const io = captureIo(tempDir());
-    expect(await workerMain(["once"], io, {}, quiet())).toBe(1);
-    expect(io.stderr).toContain("globu-worker: set GLOBU_HOME to a directory of the worker's own");
+    expect(await workerMain(["once"], io, { GLOBU_HOME: path.join(os.homedir(), ".globu") }, quiet())).toBe(1);
+    expect(io.stderr).toContain("globu-worker: GLOBU_HOME points at");
     const missing = captureIo(tempDir());
     expect(await workerMain(["once"], missing, env(), quiet())).toBe(1);
     expect(missing.stderr).toContain("globu-worker: no worker configuration at");

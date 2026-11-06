@@ -1,21 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { claudeArgs, implementPrompt, runSettings, summarizeStream } from "./claude.js";
+import { claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
 import { DENIED_TOOLS } from "./config.js";
 
-describe("runSettings and claudeArgs", () => {
-  it("allow what the config lists and deny the courier's tools", () => {
-    expect(runSettings(["Read", "Edit"])).toEqual({ permissions: { allow: ["Read", "Edit"], deny: DENIED_TOOLS } });
-  });
-
-  it("build the headless invocation, with a model and a plugin dir only when given", () => {
-    const base = { prompt: "go", settingsFile: "/r/settings.json", runDir: "/r", turns: 80, runUsd: 5 };
+describe("claudeArgs", () => {
+  it("builds the headless invocation, with a model and a plugin dir only when given", () => {
+    const base = { prompt: "go", runDir: "/r", maxTurns: 80, maxBudgetUsd: 5, allowedTools: ["Read", "Edit"] };
     expect(claudeArgs(base)).toEqual([
       "-p",
       "go",
       "--permission-mode",
       "dontAsk",
-      "--settings",
-      "/r/settings.json",
+      "--allowedTools",
+      "Read",
+      "Edit",
+      "--disallowedTools",
+      ...DENIED_TOOLS,
       "--add-dir",
       "/r",
       "--max-turns",
@@ -31,8 +30,8 @@ describe("runSettings and claudeArgs", () => {
       "--plugin-dir",
       "/src/plugins/globu"
     ]);
-    expect(implementPrompt("implement-issue", "/r/brief.md", "/r/handback.md")).toBe(
-      "Implement the issue described in /r/brief.md with the implement-issue skill. Write the handback to /r/handback.md."
+    expect(implementPrompt("issue-deliver", "/r/brief.md", "/r/handback.md")).toBe(
+      "Implement the issue described in /r/brief.md with the issue-deliver skill. Write the handback to /r/handback.md."
     );
   });
 });

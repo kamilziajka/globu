@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
@@ -124,9 +125,10 @@ describe("published packages", () => {
 describe("bundled worker", () => {
   it("runs as a standalone executable and refuses the interactive homes", () => {
     expect(runBundle(GLOBU_WORKER, ["--version"]).stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
-    const result = spawnSync(GLOBU_WORKER, ["once"], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    const env = { PATH: process.env.PATH, GLOBU_HOME: path.join(os.homedir(), ".globu") };
+    const result = spawnSync(GLOBU_WORKER, ["once"], { encoding: "utf8", env });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("set GLOBU_HOME to a directory of the worker's own");
+    expect(result.stderr).toContain("GLOBU_HOME points at");
   });
 });
 

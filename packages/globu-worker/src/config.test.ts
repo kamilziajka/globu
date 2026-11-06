@@ -43,8 +43,13 @@ describe("loadWorkerConfig", () => {
     expect(config.jira.blockedLabel).toBe("agent-blocked");
     expect(config.shards.companion).toEqual([]);
     expect(config.poll.every).toBe(60_000);
-    expect(config.limits).toEqual({ concurrent: 1, perShard: 1, turns: 80, timeout: 2_700_000, runUsd: 5, dayUsd: 40 });
-    expect(config.claude).toEqual({ skill: "implement-issue", allowedTools: DEFAULT_ALLOWED_TOOLS });
+    expect(config.limits).toEqual({ concurrent: 1, perShard: 1, timeout: 2_700_000, dayUsd: 40 });
+    expect(config.claude).toEqual({
+      skill: "issue-deliver",
+      maxTurns: 80,
+      maxBudgetUsd: 5,
+      allowedTools: DEFAULT_ALLOWED_TOOLS
+    });
     expect(config.git).toEqual({ branchPrefix: "agent/" });
     expect(config.github).toEqual({ draft: true, labels: [] });
   });
@@ -62,6 +67,8 @@ limits:
 claude:
   model: claude-sonnet-5-5
   pluginDir: /src/globu/plugins/globu
+  maxTurns: 20
+  maxBudgetUsd: 2.5
 git:
   author:
     name: Acme Agent
@@ -78,6 +85,8 @@ github:
     expect(config.limits.concurrent).toBe(2);
     expect(config.claude.model).toBe("claude-sonnet-5-5");
     expect(config.claude.pluginDir).toBe("/src/globu/plugins/globu");
+    expect(config.claude.maxTurns).toBe(20);
+    expect(config.claude.maxBudgetUsd).toBe(2.5);
     expect(config.git.author).toEqual({ name: "Acme Agent", email: "agent@acme.example" });
     expect(config.github).toEqual({ draft: false, labels: ["agent"] });
   });
@@ -120,23 +129,24 @@ describe("scrubbedEnv", () => {
 });
 
 describe("ownHomes", () => {
-  it("refuses missing or shared homes", () => {
-    expect(() => ownHomes({})).toThrow("set GLOBU_HOME to a directory of the worker's own");
+  it("refuses the homes of interactive sessions", () => {
     expect(() => ownHomes({ GLOBU_HOME: path.join(os.homedir(), ".globu") })).toThrow(
       `GLOBU_HOME points at ${path.join(os.homedir(), ".globu")}`
-    );
-    expect(() => ownHomes({ GLOBU_HOME: "/tmp/w" })).toThrow(
-      "set CLAUDE_CONFIG_DIR to a directory of the worker's own"
     );
     expect(() => ownHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: path.join(os.homedir(), ".claude") })).toThrow(
       "CLAUDE_CONFIG_DIR points at"
     );
   });
 
-  it("resolves the worker's own homes", () => {
-    expect(ownHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: "/tmp/w/claude" })).toEqual({
+  it("defaults to a worker directory inside the Globu home and a claude directory inside that", () => {
+    expect(ownHomes({})).toEqual({
+      home: path.join(os.homedir(), ".globu/worker"),
+      claudeConfigDir: path.join(os.homedir(), ".globu/worker/claude")
+    });
+    expect(ownHomes({ GLOBU_HOME: "/tmp/w" })).toEqual({ home: "/tmp/w", claudeConfigDir: "/tmp/w/claude" });
+    expect(ownHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: "/tmp/c" })).toEqual({
       home: "/tmp/w",
-      claudeConfigDir: "/tmp/w/claude"
+      claudeConfigDir: "/tmp/c"
     });
   });
 });

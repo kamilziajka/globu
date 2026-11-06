@@ -27,7 +27,7 @@ const RAW_ISSUE = {
     summary: "Add the thing",
     description: "Lands in `backend`.",
     labels: ["agent-eligible", "repo:backend"],
-    status: { name: "Ready for delivery" },
+    status: { id: "10001", name: "Ready for delivery" },
     assignee: null,
     comment: { comments: [{ author: { displayName: "Kamil" }, created: "2026-11-05T10:00:00.000+0000", body: "go" }] },
     customfield_10042: { value: "backend" }
@@ -54,7 +54,7 @@ describe("jiraClient", () => {
             summary: "Bare",
             description: null,
             labels: [],
-            status: { name: "Open" },
+            status: { id: "1", name: "Open" },
             assignee: { accountId: "a1" }
           }
         }
@@ -69,6 +69,7 @@ describe("jiraClient", () => {
       description: "Lands in `backend`.",
       labels: ["agent-eligible", "repo:backend"],
       status: "Ready for delivery",
+      statusId: "10001",
       assignee: null,
       comments: [{ author: "Kamil", created: "2026-11-05T10:00:00.000+0000", body: "go" }],
       fields: { customfield_10042: { value: "backend" } }
@@ -79,14 +80,14 @@ describe("jiraClient", () => {
     expect(bare.assignee).toBe("a1");
   });
 
-  it("assigns, transitions by target status name, comments, labels and links", async () => {
+  it("assigns, transitions by target status name or id, comments, labels and links", async () => {
     const { fetchFn, calls } = fakeFetch({
       "PUT /issue/MR-7/assignee": {},
       "GET /issue/MR-7/transitions": {
         body: {
           transitions: [
-            { id: "11", to: { name: "Delivery" } },
-            { id: "21", to: { name: "Done" } }
+            { id: "11", to: { id: "10023", name: "Delivery" } },
+            { id: "21", to: { id: "10024", name: "Done" } }
           ]
         }
       },
@@ -99,6 +100,7 @@ describe("jiraClient", () => {
     await client.assign("MR-7", "a1");
     await client.assign("MR-7", null);
     await client.transitionTo("MR-7", "delivery");
+    await client.transitionTo("MR-7", "10024");
     await client.comment("MR-7", "hello");
     await client.addLabel("MR-7", "agent-blocked");
     await client.remoteLink("MR-7", "https://github.com/acme/backend/pull/1", "Pull request for MR-7");
@@ -107,6 +109,8 @@ describe("jiraClient", () => {
       { accountId: null },
       undefined,
       { transition: { id: "11" } },
+      undefined,
+      { transition: { id: "21" } },
       { body: "hello" },
       { update: { labels: [{ add: "agent-blocked" }] } },
       { object: { url: "https://github.com/acme/backend/pull/1", title: "Pull request for MR-7" } }
@@ -115,13 +119,14 @@ describe("jiraClient", () => {
 
   it("names the available transitions when none leads to the status", async () => {
     const { fetchFn } = fakeFetch({
-      "GET /issue/MR-7/transitions": { body: { transitions: [{ id: "21", to: { name: "Done" } }] } },
+      "GET /issue/MR-7/transitions": { body: { transitions: [{ id: "21", to: { id: "10024", name: "Done" } }] } },
       "GET /issue/MR-8/transitions": { body: { transitions: [] } }
     });
     const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
     await expect(client.transitionTo("MR-7", "Delivery")).rejects.toThrow(
-      'MR-7 has no transition to "Delivery", available: Done'
+      'MR-7 has no transition to "Delivery", available: Done (10024)'
     );
+    await expect(client.transitionTo("MR-7", "10023")).rejects.toThrow('MR-7 has no transition to "10023"');
     await expect(client.transitionTo("MR-8", "Delivery")).rejects.toThrow("available: none");
   });
 

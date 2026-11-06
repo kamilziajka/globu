@@ -63,17 +63,17 @@ const WorkerConfigSchema = z.object({
     .object({
       concurrent: z.number().int().min(1).default(1),
       perShard: z.number().int().min(1).default(1),
-      turns: z.number().int().min(1).default(80),
       timeout: Duration.default(45 * 60_000),
-      runUsd: z.number().positive().default(5),
       dayUsd: z.number().positive().default(40)
     })
     .prefault({}),
   claude: z
     .object({
-      skill: z.string().min(1).default("implement-issue"),
+      skill: z.string().min(1).default("issue-deliver"),
       model: z.string().min(1).optional(),
       pluginDir: z.string().min(1).optional(),
+      maxTurns: z.number().int().min(1).default(80),
+      maxBudgetUsd: z.number().positive().default(5),
       allowedTools: z.array(z.string().min(1)).default(DEFAULT_ALLOWED_TOOLS)
     })
     .prefault({}),
@@ -131,17 +131,16 @@ export function scrubbedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export type Homes = { home: string; claudeConfigDir: string };
 
-function ownHome(env: NodeJS.ProcessEnv, name: string, shared: string): string {
-  const value = env[name];
-  if (!value) throw new Error(`set ${name} to a directory of the worker's own, it never uses ${shared}`);
+function ownHome(name: string, value: string, shared: string): string {
   const resolved = path.resolve(value);
   if (resolved === shared) throw new Error(`${name} points at ${shared}, which belongs to interactive sessions`);
   return resolved;
 }
 
 export function ownHomes(env: NodeJS.ProcessEnv): Homes {
-  return {
-    home: ownHome(env, "GLOBU_HOME", path.join(os.homedir(), ".globu")),
-    claudeConfigDir: ownHome(env, "CLAUDE_CONFIG_DIR", path.join(os.homedir(), ".claude"))
-  };
+  const globu = path.join(os.homedir(), ".globu");
+  const home = ownHome("GLOBU_HOME", env.GLOBU_HOME || path.join(globu, "worker"), globu);
+  const claude = path.join(os.homedir(), ".claude");
+  const claudeConfigDir = ownHome("CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR || path.join(home, "claude"), claude);
+  return { home, claudeConfigDir };
 }

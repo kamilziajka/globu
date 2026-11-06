@@ -12,10 +12,10 @@ import {
   resolveRefs
 } from "../../globu-core/src/index.js";
 import { renderBrief } from "./brief.js";
-import { claudeArgs, implementPrompt, runSettings, summarizeStream } from "./claude.js";
+import { claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
-import type { JiraClient, JiraIssue, JiraUser } from "./jira.js";
+import { type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { extractRefs } from "./refs.js";
 import { isTerminal, loadRuns, newRun, type RunRecord, runsDir, saveRun, spentOn } from "./runs.js";
 
@@ -51,8 +51,8 @@ function registry(): Registry {
   return { all: resolveAll().shards, active, context };
 }
 
-function sameStatus(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+function sameStatus(issue: JiraIssue, wanted: string): boolean {
+  return matchesStatus({ id: issue.statusId, name: issue.status }, wanted);
 }
 
 function slug(text: string): string {
@@ -152,14 +152,18 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
 async function claim(deps: WorkerDeps, issue: JiraIssue, me: JiraUser): Promise<boolean> {
   const { jira, config } = deps;
   await jira.assign(issue.key, me.accountId);
-  if (!sameStatus(issue.status, config.jira.claimedStatus))
-    await jira.transitionTo(issue.key, config.jira.claimedStatus);
+  if (!sameStatus(issue, config.jira.claimedStatus)) await jira.transitionTo(issue.key, config.jira.claimedStatus);
   const after = await jira.issue(issue.key);
-  return after.assignee === me.accountId && sameStatus(after.status, config.jira.claimedStatus);
+  return after.assignee === me.accountId && sameStatus(after, config.jira.claimedStatus);
+}
+
+function fetchShard(shard: PresentShard): boolean {
+  const auth = gitAuthArgs(shard.source.repo);
+  git([...auth, "fetch", "--quiet"], shard.path);
+  return git([...auth, "ls-remote", "--heads", "origin"], shard.path) !== "";
 }
 
 function addWorktree(shard: PresentShard, tree: string, branch: string): Worktree {
-  git([...gitAuthArgs(shard.source.repo), "fetch", "--quiet"], shard.path);
   const base = defaultRevision(shard.path);
   if (!base.startsWith(ORIGIN)) throw new Error(`${shard.path} has no origin/HEAD, clone it again`);
   git(["worktree", "add", "--quiet", tree, "-b", branch, base], shard.path);
@@ -246,12 +250,25 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
       return await release(deps, record, `references that are not on the default branch:\n${lines}`);
     }
 
+    const companionShards = config.shards.companion.map(
+      (id) => reg.all.find((entry) => entry.id === id) as PresentShard
+    );
+    for (const entry of [shard, ...companionShards]) {
+      if (!fetchShard(entry)) {
+        return await release(
+          deps,
+          record,
+          `the repository of shard "${entry.id}" has no commits, push a first commit to its default branch`
+        );
+      }
+    }
+
     const branch = `${config.git.branchPrefix}${issue.key}-${slug(issue.summary)}`;
     record.branch = branch;
     const target = addWorktree(shard, path.join(dir, "tree"), branch);
     worktrees.push(target);
-    const companions = config.shards.companion.map((id) => {
-      const companion = reg.all.find((entry) => entry.id === id) as PresentShard;
+    const companions = companionShards.map((companion) => {
+      const id = companion.id;
       const worktree = addWorktree(companion, path.join(dir, "companions", id), branch);
       worktrees.push(worktree);
       return { id, tree: worktree.tree };
@@ -259,7 +276,6 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
 
     const briefFile = path.join(dir, "brief.md");
     const handbackFile = path.join(dir, "handback.md");
-    const settingsFile = path.join(dir, "settings.json");
     const streamFile = path.join(dir, "claude.jsonl");
     fs.writeFileSync(
       briefFile,
@@ -275,7 +291,6 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
         handbackFile
       })
     );
-    fs.writeFileSync(settingsFile, `${JSON.stringify(runSettings(config.claude.allowedTools), null, 2)}\n`);
     fs.writeFileSync(streamFile, "");
 
     record.state = "running";
@@ -284,10 +299,10 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
       "claude",
       claudeArgs({
         prompt: implementPrompt(config.claude.skill, briefFile, handbackFile),
-        settingsFile,
         runDir: dir,
-        turns: config.limits.turns,
-        runUsd: config.limits.runUsd,
+        maxTurns: config.claude.maxTurns,
+        maxBudgetUsd: config.claude.maxBudgetUsd,
+        allowedTools: config.claude.allowedTools,
         model: config.claude.model,
         pluginDir: config.claude.pluginDir
       }),
@@ -310,7 +325,7 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
     const commits = commitsOn(target);
     if (result.timedOut) return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`);
     if (summary.subtype === "error_max_turns") {
-      return await release(deps, record, `stopped at the turn cap of ${config.limits.turns}`);
+      return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`);
     }
     if (commits === 0) {
       const detail = result.code === 0 ? "" : `, claude exited with ${result.code}: ${result.stderr.trim()}`;
@@ -354,7 +369,7 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     fs.rmSync(path.join(dir, "tree"), { recursive: true, force: true });
     fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
     const issue = await jira.issue(record.key);
-    if (issue.assignee === me.accountId && sameStatus(issue.status, config.jira.claimedStatus)) {
+    if (issue.assignee === me.accountId && sameStatus(issue, config.jira.claimedStatus)) {
       await release(deps, record, "the worker restarted while this issue was claimed");
     } else {
       record.state = "released";

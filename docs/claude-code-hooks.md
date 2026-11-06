@@ -39,7 +39,7 @@ Test both with a sibling repo in `ask` mode before relying on the mode for a rul
 [globu-worker](./worker.md) starts Claude with `-p` and leans on these, none of which has been tried against a live run yet:
 
 - `--permission-mode dontAsk` denies, rather than hangs on, a tool call the allowlist does not cover and a hook's `ask`.
-- `--settings <file>` with `permissions.allow` and `permissions.deny` is honoured next to the config dir's own settings, and `deny` wins over `allow`.
+- `--allowedTools` and `--disallowedTools` are honoured next to the config dir's own settings, and a disallowed tool wins over an allowed one.
 - `--add-dir <dir>` lets `Write` reach the run directory without a prompt under `dontAsk`.
 - `--output-format stream-json` carries a denied tool call as a `tool_result` with `is_error` and the hook's reason in its content, so blocked writes can be read from the stream.
 - `CLAUDE_CONFIG_DIR` moves plugin installs and `settings.json` together, so the worker's plugin and the `additionalDirectories` from `globu claude sync` land in the same place.

@@ -1,5 +1,5 @@
 ---
-name: implement-issue
+name: issue-deliver
 description: Implement a Jira issue from a brief that names the issue, the target repository and the files it references, and write a handback for the reviewer. Used by the Globu worker in unattended runs and by hand when a person dispatches an issue to Claude Code in a worktree. Use when the user asks to implement an issue from a brief or hands over an issue key with a prepared worktree.
 ---
 
@@ -7,7 +7,7 @@ description: Implement a Jira issue from a brief that names the issue, the targe
 
 A brief is a Markdown file that holds one issue as Jira returned it, the shard and worktree the work lands in, the files the issue references with their locations on this machine and the path of the handback to write. The Globu worker writes the brief and starts this skill with no person present, so every step below must finish without asking anything. A person can run the same skill by pointing it at a brief they wrote by hand.
 
-The skill works in the worktree it is started in and writes one file outside it, the handback. It never pushes, never opens a pull request and never calls Jira or GitHub. In a worker run the settings deny those tools anyway; the worker pushes and posts after the run ends.
+The skill works in the worktree it is started in and writes one file outside it, the handback. It never pushes, never opens a pull request and never calls Jira or GitHub. In a worker run those tools are disallowed anyway; the worker pushes and posts after the run ends.
 
 ## Workflow
 

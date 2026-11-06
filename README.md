@@ -4,14 +4,14 @@ Globu joins your knowledge bases and plugs into Claude Code so Claude can find t
 
 Website and docs: [globu.kazet.blog](https://globu.kazet.blog)
 
-This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, with six skills:
+This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, with six skills, described in [plugin skills](docs/skills.md):
 
 - `/globu:setup-knowledge-base` bootstraps or upgrades an [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) knowledge base (a `wiki` directory by default) inside a repo. A repo can hold many.
 - `/globu:register-knowledge-base` adds a repo to a per-user registry of knowledge shards, so every session knows which knowledge exists on this machine, when to consult it and where it may write.
 - `/globu:update-knowledge` writes what a session learned to the right base or shard.
 - `/globu:issue-check` checks that every doc and code reference in a Jira issue resolves to a file a coding agent will be able to open.
 - `/globu:issue-fix` runs the same check and corrects the broken references in the issue once you confirm the edit.
-- `/globu:implement-issue` implements an issue from a brief in the worktree it runs in and writes a handback for the reviewer.
+- `/globu:issue-deliver` implements an issue from a brief in the worktree it runs in and writes a handback for the reviewer.
 
 Hooks index the registered shards at session start, guard edits to shards that are read-only or ask-first and validate a base right after an edit. Nothing needs a registered shard: inside one repo the bases work on their own.
 

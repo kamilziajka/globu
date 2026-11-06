@@ -70,6 +70,8 @@ github:
   return { root, home, remotes, clones, config };
 }
 
+const STATUS_IDS: Record<string, string> = { "Ready for delivery": "10001", Delivery: "10023" };
+
 function issue(key: string, overrides: Partial<JiraIssue> = {}): JiraIssue {
   return {
     key,
@@ -77,6 +79,7 @@ function issue(key: string, overrides: Partial<JiraIssue> = {}): JiraIssue {
     description: "Lands in `backend`, see product/docs/decisions/012-pricing.md and `src/x.ts`.",
     labels: ["agent-eligible", "repo:backend"],
     status: "Ready for delivery",
+    statusId: STATUS_IDS["Ready for delivery"],
     assignee: null,
     comments: [],
     fields: {},
@@ -115,7 +118,9 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
     transitionTo: async (key, status) => {
       if (options.failTransition && status === "Ready for delivery") throw new Error("no transition");
       transitions.push(`${key} -> ${status}`);
-      get(key).status = status;
+      const name = Object.keys(STATUS_IDS).find((candidate) => STATUS_IDS[candidate] === status) ?? status;
+      get(key).status = name;
+      get(key).statusId = STATUS_IDS[name] ?? "";
     },
     comment: async (key, body) => {
       comments[key] = [...(comments[key] ?? []), body];
@@ -360,7 +365,16 @@ describe("once", () => {
     expect(claude.cwd).toBe(path.join(runDir, "tree"));
     expect(claude.args.slice(0, 2)).toEqual([
       "-p",
-      `Implement the issue described in ${runDir}/brief.md with the implement-issue skill. Write the handback to ${runDir}/handback.md.`
+      `Implement the issue described in ${runDir}/brief.md with the issue-deliver skill. Write the handback to ${runDir}/handback.md.`
+    ]);
+    expect(claude.args).toContain("--allowedTools");
+    expect(claude.args).toContain("Bash(git commit *)");
+    expect(claude.args.slice(claude.args.indexOf("--disallowedTools"), claude.args.indexOf("--add-dir"))).toEqual([
+      "--disallowedTools",
+      "Bash(git push*)",
+      "Bash(gh *)",
+      "Bash(curl *)",
+      "Bash(wget *)"
     ]);
     expect(claude.env.JIRA_API_TOKEN).toBeUndefined();
     expect(claude.env.GH_TOKEN).toBeUndefined();
@@ -379,9 +393,6 @@ describe("once", () => {
     expect(brief).toContain("**Kamil, 2026-11-05**\n\n> Also read `docs/index.md`.");
     expect(brief).toContain(`- \`docs/index.md\`: ${world.clones.backend}/docs/index.md`);
     expect(brief).toContain(`- \`product\`: ${runDir}/companions/product`);
-    expect(JSON.parse(fs.readFileSync(path.join(runDir, "settings.json"), "utf8")).permissions.deny).toContain(
-      "Bash(gh *)"
-    );
     expect(fs.readFileSync(path.join(runDir, "pull-request-backend.md"), "utf8")).toContain(
       "## Summary\n\nDone.\n\n---\n\nRun MR-7"
     );
@@ -459,6 +470,30 @@ describe("once", () => {
       '- product/docs/012-pricing.md: not on origin/main of shard "product" (perhaps product/docs/decisions/012-pricing.md)'
     );
     expect(broken.io.stdout).toContain("MR-8\treleased: references that are not on the default branch:");
+  });
+
+  it("claims by status id when the configuration gives one", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, claimedStatus: "10023" };
+    const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true });
+    expect(record?.state).toBe("handed-back");
+    expect(jira.transitions).toEqual(["MR-7 -> 10023"]);
+    expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", statusId: "10023", assignee: "bot" });
+  });
+
+  it("releases an issue whose repository has no commits yet", async () => {
+    const world = setup();
+    const empty = path.join(world.root, "remotes/sandbox");
+    fs.mkdirSync(empty, { recursive: true });
+    git(empty, "init", "-q", "--bare", "-b", "main");
+    register({ locator: `file://${empty}`, cwd: world.root, dest: path.join(world.home, "work/sandbox") });
+    world.config.shards = { deliverable: ["backend", "sandbox"], companion: [] };
+    const { jira, record } = await runWith(world, [issue("MR-9", { labels: ["repo:sandbox"] })], { commit: true });
+    expectReleased(
+      jira,
+      record as RunRecord,
+      'the repository of shard "sandbox" has no commits, push a first commit to its default branch'
+    );
   });
 
   it("releases on a timeout, the turn cap, a failed run and an empty run", async () => {
