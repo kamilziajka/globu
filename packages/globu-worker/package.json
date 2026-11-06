@@ -1,6 +1,6 @@
 {
   "name": "@kazet/globu-worker",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "A worker that claims agent-eligible Jira issues and runs Claude Code in the right Globu shard",
   "author": "Kamil Ziajka",
   "license": "MIT",
