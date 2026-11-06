@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-06
+* [Development](./development.md) releasing: from a Claude Code worktree the bump goes on the worktree branch at the tip of `origin/main` and is pushed with `git push origin HEAD:main`, and the site's `main` moves during a release, so `origin/main` is merged into the site branch before pushing and before merging (the day's section of its `docs/log.md` is the usual conflict). The release skill carries the same steps, plus waiting for the run rather than npm alone, the known red `Workers Builds` check on branches and how to merge the site pull request when asked.
+
 ## 2026-11-05
 * [Development](./development.md) writing style: a doc's `description` stays within 160 characters because the site uses it as the meta description and the lede.
 * Two explainer pages for the site: [Globu and the LLM wiki](./llm-wiki.md) maps Karpathy's gist onto Globu (wiki to base, schema to authoring guide, ingest to `update-knowledge`, query to the session index, lint to `base validate`) and says what Globu adds and where the gist still goes further; [OKF in Globu](./okf.md) lists the reserved files, what `base validate` checks, the optional v0.2 families Globu passes through and the two places it extends the spec. Both listed in the index; they reach globu.kazet.blog with the next release's docs snapshot.
