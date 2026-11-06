@@ -288,7 +288,8 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
         runDir: dir,
         turns: config.limits.turns,
         runUsd: config.limits.runUsd,
-        model: config.claude.model
+        model: config.claude.model,
+        pluginDir: config.claude.pluginDir
       }),
       {
         cwd: target.tree,

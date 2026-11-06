@@ -43,7 +43,7 @@ globu sync
 globu claude sync
 ```
 
-Repeat the `register --path` step for every shard under `deliverable` and `companion` in `worker.yaml`. The other shards are cloned read-only by `sync`. Install the plugin into the worker's Claude config dir with `claude plugin marketplace add` and `claude plugin install`, or pass `--plugin-dir` as the unattended runs guide describes. `globu-worker once` checks before every cycle that each deliverable shard has an editable clone that is not read-only and each companion is in `write` mode, and refuses to poll otherwise.
+Repeat the `register --path` step for every shard under `deliverable` and `companion` in `worker.yaml`. The other shards are cloned read-only by `sync`. Install the plugin into the worker's Claude config dir with `claude plugin marketplace add` and `claude plugin install`, or point `claude.pluginDir` in `worker.yaml` at the plugin in a checkout of this repo, which the unattended runs guide describes as `--plugin-dir`. `globu-worker once` checks before every cycle that each deliverable shard has an editable clone that is not read-only and each companion is in `write` mode, and refuses to poll otherwise.
 
 Keeping the homes apart costs a second clone of each repository on a laptop. In return the worker's modes are its own policy, the person's checkouts and worktrees are never touched by a run, and a laptop and a container run the same way.
 
@@ -111,6 +111,7 @@ github:
 | `limits.dayUsd` | When the runs started today have cost this much, the worker keeps polling but claims nothing | 40 |
 | `claude.skill` | The skill the run is told to use | `implement-issue` |
 | `claude.model` | Passed as `--model` when set | Claude Code's default |
+| `claude.pluginDir` | Passed as `--plugin-dir` when set: the plugin from a checkout of this repo, for a test of an unreleased plugin or a machine without a marketplace | the plugins installed in `CLAUDE_CONFIG_DIR` |
 | `claude.allowedTools` | The permission allowlist of the run. Everything else is denied, since nobody can answer a prompt | `Read`, `Edit`, `Write`, `Glob`, `Grep`, `npm run`, `npx vitest`, `git status`, `git diff`, `git log`, `git add` and `git commit` through Bash |
 | `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
 | `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |

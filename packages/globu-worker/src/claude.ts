@@ -13,6 +13,7 @@ export type ClaudeInvocation = {
   turns: number;
   runUsd: number;
   model?: string;
+  pluginDir?: string;
 };
 
 export function claudeArgs(invocation: ClaudeInvocation): string[] {
@@ -32,7 +33,8 @@ export function claudeArgs(invocation: ClaudeInvocation): string[] {
     "--output-format",
     "stream-json",
     "--verbose",
-    ...(invocation.model === undefined ? [] : ["--model", invocation.model])
+    ...(invocation.model === undefined ? [] : ["--model", invocation.model]),
+    ...(invocation.pluginDir === undefined ? [] : ["--plugin-dir", invocation.pluginDir])
   ];
 }
 

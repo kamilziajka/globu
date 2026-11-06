@@ -7,7 +7,7 @@ describe("runSettings and claudeArgs", () => {
     expect(runSettings(["Read", "Edit"])).toEqual({ permissions: { allow: ["Read", "Edit"], deny: DENIED_TOOLS } });
   });
 
-  it("build the headless invocation, with a model only when given", () => {
+  it("build the headless invocation, with a model and a plugin dir only when given", () => {
     const base = { prompt: "go", settingsFile: "/r/settings.json", runDir: "/r", turns: 80, runUsd: 5 };
     expect(claudeArgs(base)).toEqual([
       "-p",
@@ -27,6 +27,10 @@ describe("runSettings and claudeArgs", () => {
       "--verbose"
     ]);
     expect(claudeArgs({ ...base, model: "claude-opus-5-5" }).slice(-2)).toEqual(["--model", "claude-opus-5-5"]);
+    expect(claudeArgs({ ...base, pluginDir: "/src/plugins/globu" }).slice(-2)).toEqual([
+      "--plugin-dir",
+      "/src/plugins/globu"
+    ]);
     expect(implementPrompt("implement-issue", "/r/brief.md", "/r/handback.md")).toBe(
       "Implement the issue described in /r/brief.md with the implement-issue skill. Write the handback to /r/handback.md."
     );

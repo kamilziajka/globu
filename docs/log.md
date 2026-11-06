@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-06
+* [globu-worker](./worker.md) takes `claude.pluginDir` in `worker.yaml`, passed to the run as `--plugin-dir`, so a test of an unreleased plugin or a machine without a marketplace can point at the plugin in a checkout of this repo.
 * New program [globu-worker](./worker.md) (`packages/globu-worker`, npm `@kazet/globu-worker`): polls a Jira project by JQL, claims an eligible issue, resolves its shard-qualified references with the resolver, runs `claude -p` with the new `implement-issue` skill in a worktree of the target shard under its own `GLOBU_HOME` and `CLAUDE_CONFIG_DIR`, pushes, opens a draft pull request with `gh` and hands back on the issue; a failed run releases the issue with an `agent-blocked` label. [Architecture](./architecture.md) names it as the third program and in the layout, [development](./development.md) covers the second bundle and the unpublished package, the [hook contract](./claude-code-hooks.md) lists the five Claude Code behaviours it relies on untested, and the READMEs list the sixth skill. `gitAuthArgs` in globu-core takes explicit credentials so the push can use `GH_TOKEN`.
 
 ## 2026-11-05

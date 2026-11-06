@@ -61,6 +61,7 @@ limits:
   concurrent: 2
 claude:
   model: claude-sonnet-5-5
+  pluginDir: /src/globu/plugins/globu
 git:
   author:
     name: Acme Agent
@@ -76,6 +77,7 @@ github:
     expect(config.limits.timeout).toBe(3_600_000);
     expect(config.limits.concurrent).toBe(2);
     expect(config.claude.model).toBe("claude-sonnet-5-5");
+    expect(config.claude.pluginDir).toBe("/src/globu/plugins/globu");
     expect(config.git.author).toEqual({ name: "Acme Agent", email: "agent@acme.example" });
     expect(config.github).toEqual({ draft: false, labels: ["agent"] });
   });

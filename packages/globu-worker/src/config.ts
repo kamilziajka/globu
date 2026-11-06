@@ -73,6 +73,7 @@ const WorkerConfigSchema = z.object({
     .object({
       skill: z.string().min(1).default("implement-issue"),
       model: z.string().min(1).optional(),
+      pluginDir: z.string().min(1).optional(),
       allowedTools: z.array(z.string().min(1)).default(DEFAULT_ALLOWED_TOOLS)
     })
     .prefault({}),
