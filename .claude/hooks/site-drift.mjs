@@ -44,23 +44,11 @@ function compare(a, b) {
   return 0;
 }
 
-function openSitePullRequest(version) {
-  const output = run("gh", [
-    "pr",
-    "list",
-    "--repo",
-    SITE_REPO,
-    "--state",
-    "open",
-    "--search",
-    `Globu ${version} in:title`,
-    "--json",
-    "number,title"
-  ]);
+function siteMainVersion() {
+  const output = run("gh", ["api", `repos/${SITE_REPO}/contents/release.json`, "--jq", ".content"]);
   if (output === null) return null;
   try {
-    const found = JSON.parse(output).find((pr) => pr.title.includes(version));
-    return found ? found.number : false;
+    return JSON.parse(Buffer.from(output, "base64").toString("utf8")).version;
   } catch {
     return null;
   }
@@ -76,7 +64,7 @@ async function main() {
 
   const findings = [];
   if (compare(local, published) > 0) {
-    findings.push(`package.json is at ${local} but npm serves ${published}: the bump is not released yet. The release skill runs the workflow and updates the site.`);
+    findings.push(`package.json is at ${local} but npm serves ${published}: the bump is not released yet. Run /release ${local}, which resumes where the release stopped.`);
   }
   const worker = run("npm", ["view", WORKER_PACKAGE_NAME, "version"]);
   if (worker !== null && worker !== published) {
@@ -85,15 +73,15 @@ async function main() {
 
   const site = await siteVersion();
   if (site !== null && compare(published, site) > 0) {
-    const pullRequest = openSitePullRequest(published);
-    if (pullRequest === false) {
-      findings.push(
-        `${SITE_HOST} shows ${site} while npm serves ${published} and no pull request titled "Globu ${published}" is open in ${SITE_REPO}: the site update was skipped. Run the release skill's site step, or tell the user.`
-      );
-    } else if (typeof pullRequest === "number") {
-      findings.push(`${SITE_HOST} shows ${site}; ${published} waits in ${SITE_REPO}#${pullRequest}.`);
+    const pushed = siteMainVersion();
+    if (pushed === published) {
+      findings.push(`${SITE_HOST} shows ${site}; ${published} is on the main branch of ${SITE_REPO} and should be live once its deploy finishes.`);
+    } else if (pushed === null) {
+      findings.push(`${SITE_HOST} shows ${site} while npm serves ${published}; could not read release.json on the main branch of ${SITE_REPO}.`);
     } else {
-      findings.push(`${SITE_HOST} shows ${site} while npm serves ${published}; could not check ${SITE_REPO} for an open pull request.`);
+      findings.push(
+        `${SITE_HOST} shows ${site} while npm serves ${published} and the main branch of ${SITE_REPO} is at ${pushed}: the site step of the release did not run. Run /release ${published}, which resumes where the release stopped.`
+      );
     }
   }
 

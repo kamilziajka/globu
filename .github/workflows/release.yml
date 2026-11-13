@@ -46,19 +46,31 @@ jobs:
 
       - name: Publish the packages
         run: |
-          node -e '
-            for (const { name, version, tarball } of require("./release/packages.json")) {
-              console.log(`${name}\t${version}\t${tarball}`);
-            }
-          ' | while IFS=$'\t' read -r name version tarball; do
+          failed=""
+          while IFS=$'\t' read -r name version tarball; do
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already on npm, skipping"
             elif ! npm view "$name" name >/dev/null 2>&1; then
               echo "::warning::$name is not on npm yet. Its first release is done by hand, see docs/development.md, then npm trust binds it to this workflow."
+            elif output=$(npm publish "$tarball" 2>&1); then
+              echo "$output"
+            elif echo "$output" | grep -qE "EPUBLISHCONFLICT|cannot publish over the previously published"; then
+              echo "$output"
+              echo "$name@$version was published meanwhile, npm only lists it a few minutes later"
             else
-              npm publish "$tarball"
+              echo "$output"
+              echo "::error::npm refused $name@$version. Publish it by hand from this commit with: npm run build && npm run pin && npm publish $tarball, wait until npm view $name@$version version prints $version, then run this workflow again."
+              failed="$failed $name"
             fi
-          done
+          done < <(node -e '
+            for (const { name, version, tarball } of require("./release/packages.json")) {
+              console.log(`${name}\t${version}\t${tarball}`);
+            }
+          ')
+          if [ -n "$failed" ]; then
+            echo "Not published:$failed"
+            exit 1
+          fi
 
       - name: Wait until the published packages can be downloaded
         run: |
@@ -99,14 +111,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p "require('./package.json').version")
-          notes=$(node -e '
-            const lines = [];
-            for (const { name, version } of require("./release/packages.json")) {
-              lines.push(`- [${name}@${version}](https://www.npmjs.com/package/${name}/v/${version})`);
-            }
-            console.log(lines.join("\n"));
-          ')
-          gh release create "v$version" \
-            --title "Globu $version" \
-            --notes "$(printf 'Packages:\n%s\n\nThe plugins on the `stable` branch are pinned to this release. The documentation is at https://globu.kazet.blog.' "$notes")" \
-            --generate-notes
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "v$version^" 2>/dev/null || true)
+          range="${previous:+$previous..}v$version"
+          {
+            echo "Packages:"
+            node -e '
+              for (const { name, version } of require("./release/packages.json")) {
+                console.log(`- [${name}@${version}](https://www.npmjs.com/package/${name}/v/${version})`);
+              }
+            '
+            echo
+            echo "Changes${previous:+ since $previous}:"
+            git log --no-merges --format='- %s (%h)' "$range" | grep -vE '^- (Pin plugins to|Release) ' || true
+            echo
+            echo 'The plugins on the `stable` branch are pinned to this release. The documentation is at https://globu.kazet.blog.'
+          } > release-notes.md
+          gh release create "v$version" --title "Globu $version" --notes-file release-notes.md

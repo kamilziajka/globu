@@ -95,40 +95,47 @@ claude --plugin-dir ./plugins/globu --plugin-dir ./mods/globu-status
 
 The root `package.json` holds the version. The build copies it into `packages/globu-cli/package.json` and `packages/globu-worker/package.json`, and `globu base setup` stamps it into every base it touches as `knowledge_base_version`. The two packages, `@kazet/globu` and `@kazet/globu-worker`, share that version and are released together.
 
-A release publishes both packages, pins the plugin to the CLI, tags the commit and then updates the public site. In Claude Code the project skill `/release <version>` (`.claude/skills/release/SKILL.md`) does all of it; the steps are:
+A release is one command in Claude Code: the project skill `/release <patch|minor|major|x.y.z>` (`.claude/skills/release/SKILL.md`). It does every step below without asking, pushes straight to `main` of this repo and of the site, and stops only for what needs the owner (an `npm publish` or `npm trust` that needs the browser two-factor approval). Every step checks whether it is already done, so running `/release <version>` again after a failure resumes at the first step that is not.
 
-1. Bump the version with `npm version <version> --no-git-tag-version`, run `npm run build` and merge that to `main`. The command also updates the root `package-lock.json`, and the build updates both packages' `package.json`, so the bump commit touches four files. From a Claude Code worktree, where `main` is checked out in the main checkout, the bump is made on the worktree branch at the tip of `origin/main` and pushed with `git push origin HEAD:main`.
-2. Run the `Release` workflow (`.github/workflows/release.yml`) from the Actions tab, or with `gh workflow run release.yml --ref main` and then `gh run watch <run-id> --exit-status`. A run takes about six minutes, most of it waiting for the tarballs.
-3. Pull `main` afterwards. The workflow adds the pin commit, so a local `main` is one commit behind.
-4. Update the site. globu.kazet.blog is the `kamilziajka/globu-website` repo (registered with Globu as the shard `globu-website`) and has no dependency on this repo: it shows the version in its `release.json` and renders the docs from a snapshot of `docs` in its `content`, both at that repo's root. The release skill writes both and opens that pull request; by hand, on a branch from `origin/main`, copy `docs/*.md` except `index.md` and `log.md` into `content`, set `release.json`, list any new doc in `src/docs/nav.ts`, run `npm run verify`, `npm run build:prod` and `npm run verify:prerender`, add a log entry to the site's `docs/log.md` and open the pull request with `Globu <version>` in its title. Other sessions commit to the site's `main` during a release, so merge `origin/main` into that branch before pushing and again before merging; the day's section of the site's `docs/log.md` is the usual conflict. The site shows the new version once that merges and deploys. `.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm versions of both packages and `https://globu.kazet.blog/version.json` at the end of every session here and reports an unreleased bump, a package that lags the other on npm, or a site that lags without an open pull request titled `Globu <version>` in `kamilziajka/globu-website`.
+1. **Docs.** The diff since the last tag is compared with `docs` and `README.md`; a changed command, option, config key, skill or hook gets its doc before anything is bumped, because the site's docs are a snapshot of this commit.
+2. **Bump.** `npm version <version> --no-git-tag-version && npm run build` changes four files (root `package.json` and `package-lock.json` and both packages' `package.json`), committed as `Release <version>` and pushed to `main`.
+3. **The `Release` workflow** (`.github/workflows/release.yml`), started with `gh workflow run release.yml --ref main` and watched to the end. Described below.
+4. **The site.** globu.kazet.blog is the `kamilziajka/globu-website` repo (registered with Globu as the shard `globu-website`) and has no dependency on this repo: it carries a `release.json` and a snapshot of `docs` in its `content`, both at its root. `node scripts/release-site.ts <site checkout>` writes both, adds the release entry to the site's `docs/log.md` and reports a doc that is new or gone, which then needs an entry in the site's `src/docs/nav.ts`. The skill runs the site's `npm run verify`, `npm run build:prod` and `npm run verify:prerender` in a worktree of the site, commits, merges the site's moving `main` and pushes to it; Cloudflare Workers Builds deploys `main`, and the release waits until `https://globu.kazet.blog/version.json` reports the version. A site branch that presents a feature ahead of a release leaves `content` and `release.json` to this step.
+5. **The record.** An entry in the knowledge base shard that holds Globu's decisions, with the commits, the runs and anything done by hand.
+
+`.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm versions of both packages, `release.json` on the site's `main` and `https://globu.kazet.blog/version.json` at the end of every session here and reports a release left half done: a bump npm does not serve, a package that lags the other, or a site that lags with or without the version on its `main`.
 
 Every release needs a new version. npm never accepts a version twice, and the workflow refuses to run on a version that is already tagged. `npm view @kazet/globu versions` and `npm view @kazet/globu-worker versions` show what is taken.
 
-The workflow runs `npm run verify`, then:
+### The workflow
+
+It runs `npm run verify`, then:
 
 1. `npm run pin` packs both packages into `release`, writes `release/packages.json` with the name, version, tarball, registry URL and integrity of each, writes `plugins/globu/package.json` and `package-lock.json` with the integrity hash of the CLI tarball and sets `version` in `plugin.json`. The plugin depends on the CLI only; the worker is installed separately with `npm install -g @kazet/globu-worker`.
 2. The run stops if `v<version>` is already a tag on `origin`.
-3. `npm publish` uploads each tarball as a public package, which `publishConfig.access` in its `package.json` sets. The path needs its leading `./`, because npm reads a bare `release/<file>` as a GitHub `owner/repo` shorthand. It authenticates through npm trusted publishing, so the workflow holds no token. A package whose version is already on npm is skipped, so a run that failed after publishing can be run again. A package that is not on npm at all is skipped with a warning, because its first release is done by hand (below); the rest of the run goes on without it.
+3. `npm publish` uploads each tarball as a public package, which `publishConfig.access` in its `package.json` sets. The path needs its leading `./`, because npm reads a bare `release/<file>` as a GitHub `owner/repo` shorthand. It authenticates through npm trusted publishing, so the workflow holds no token. Per package: a version npm already lists is skipped; a publish that npm answers with "cannot publish over the previously published versions" counts as done, because npm lists an accepted version only minutes later; a package that is not on npm at all is skipped with a warning, because its first release is done by hand (below); any other refusal is reported with the exact by-hand command, the other packages still go out, and the run fails before the pin, so a second run after the by-hand publish finishes it.
 4. The workflow waits until every published tarball can be downloaded. npm accepts a publish before the files are served, and that can take a few minutes.
 5. The pin is committed to `main`, `stable` is moved to that commit and the commit is tagged `v<version>`. The installed plugin updates from `stable` because the `plugin.json` version changed.
-6. `gh release create` publishes the GitHub release `Globu <version>` on the tag, with links to both packages on npm and the generated notes from the merged pull requests.
+6. `gh release create` publishes the GitHub release `Globu <version>` on the tag. Its notes list both packages with links to npm and the commit subjects since the previous tag, without the release and pin commits; releases are pushed to `main` directly, so GitHub's notes generated from pull requests would be empty.
+
+### By hand
 
 A package has to exist on npm before a trusted publisher can be configured for it, so the first release of a package is done by hand from the released commit. `npm whoami` has to print the account first: the token in `~/.npmrc` expires, and an expired one fails every `npm publish` and `npm trust` call with `E401`, so run `npm login` when it does. Then:
 
 ```bash
-npm run verify
+npm run build
 npm run pin
 npm publish ./release/kazet-globu-worker-<version>.tgz
 npm view @kazet/globu-worker@<version> dist.integrity
 ```
 
-Compare the integrity with `release/packages.json`. For a package the plugin pins, which so far is only the CLI, the pin commit and the `stable` move follow (`git add plugins`, `git commit -m "Pin plugins to <version>"`, `git push origin HEAD:main HEAD:stable`), and only once `npm view` prints the version with the integrity that `plugins/globu/package-lock.json` pins: npm accepted 0.4.0 about five minutes before it served it, and a `stable` that pins a tarball npm does not serve yet breaks every fresh plugin install. Then bind the package to the workflow, which needs npm 11.15 or later, two-factor authentication on the account and the package already on npm:
+Compare the integrity with `release/packages.json`, then run `git checkout -- plugins` to drop the local pin, which the workflow writes itself, and run the workflow again: it skips what npm lists and finishes the pin, the tag and the GitHub release. Bind a new package to the workflow, which needs npm 11.15 or later, two-factor authentication on the account and the package already on npm:
 
 ```bash
 npm trust github @kazet/globu-worker --file release.yml --repo kamilziajka/globu --allow-publish
 ```
 
-`npm trust list @kazet/globu-worker` shows the binding. From then on the `Release` workflow publishes it. `@kazet/globu` was bound this way after 0.4.0, `@kazet/globu-worker` after 1.0.0.
+`npm trust list @kazet/globu-worker` shows the binding. `@kazet/globu` was bound this way after 0.4.0, `@kazet/globu-worker` after 1.0.0. The same by-hand publish is the way out when trusted publishing refuses a package that is already bound: in 1.1.0 it refused `@kazet/globu-worker` with `E404` although `npm trust list` showed the same binding as the CLI's, which it published. Until that is understood, expect the worker to need it.
 
 Packing is reproducible. If a release fails after publishing, `npm run build && npm run pin` on the released commit writes the same pin again, and a second run of the workflow skips what is already on npm.
 

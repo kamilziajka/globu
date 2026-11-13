@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-14
+* [Development](./development.md): releasing is one `/release` run that checks the docs, bumps, runs the workflow, pushes the site's `release.json` and docs snapshot to its `main` through `scripts/release-site.ts`, waits for the deploy and records the release, resumable by running it again. The workflow tolerates a version npm accepted but does not list yet, names the by-hand command when npm refuses a package and writes release notes from commits. The drift hook reads the site's `main` instead of looking for a pull request.
+
 ## 2026-11-13
 * README and the [globu-worker](./worker.md) index entry describe `start`, `check` and how the worker follows its pull requests.
 * [globu-worker](./worker.md): following its pull requests. `jira.doneStatus`, `limits.openPullRequests` and `limits.repairs`; merge-only repair runs for conflicts and failing checks with `once --repair`; pull request rows, a background refresh and repair on Enter in `start`.
