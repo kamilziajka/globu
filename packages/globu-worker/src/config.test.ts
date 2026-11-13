@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,9 +8,12 @@ import {
   loadWorkerConfig,
   ownHomes,
   parseDuration,
+  parseSecretsFile,
   readSecrets,
   scrubbedEnv,
+  secretValues,
   sessionHomes,
+  withSecretsFile,
   workerConfigPath
 } from "./config.js";
 
@@ -52,7 +56,7 @@ describe("loadWorkerConfig", () => {
       allowedTools: DEFAULT_ALLOWED_TOOLS
     });
     expect(config.git).toEqual({ branchPrefix: "agent/" });
-    expect(config.github).toEqual({ draft: true, labels: [] });
+    expect(config.github).toEqual({ draft: false, labels: [] });
   });
 
   it("reads durations, a field marker and the optional sections", () => {
@@ -75,7 +79,7 @@ git:
     name: Acme Agent
     email: agent@acme.example
 github:
-  draft: false
+  draft: true
   labels: [agent]
 `
     );
@@ -89,7 +93,7 @@ github:
     expect(config.claude.maxTurns).toBe(20);
     expect(config.claude.maxBudgetUsd).toBe(2.5);
     expect(config.git.author).toEqual({ name: "Acme Agent", email: "agent@acme.example" });
-    expect(config.github).toEqual({ draft: false, labels: ["agent"] });
+    expect(config.github).toEqual({ draft: true, labels: ["agent"] });
   });
 
   it("names every problem with its path", () => {
@@ -103,6 +107,39 @@ github:
     const dir = tempDir();
     expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(`no worker configuration at ${dir}/worker.yaml`);
     expect(() => loadWorkerConfig(write(dir, "worker.yaml", ""))).toThrow(/root: /);
+  });
+});
+
+describe("secrets.env", () => {
+  it("parses KEY=value lines with comments, export, quotes and CRLF, and names a bad line by number", () => {
+    const text =
+      "# worker secrets\r\n\nJIRA_EMAIL = bot@acme.example\nexport GH_TOKEN=\"ghp_1\"\nANTHROPIC_API_KEY='sk-2'\nEMPTY=\n";
+    expect(parseSecretsFile(text)).toEqual({
+      JIRA_EMAIL: "bot@acme.example",
+      GH_TOKEN: "ghp_1",
+      ANTHROPIC_API_KEY: "sk-2"
+    });
+    expect(() => parseSecretsFile("A=1\nghp_pasted_token\n")).toThrow("secrets.env line 2 is not KEY=value");
+  });
+
+  it("merges the file under the environment and warns about loose permissions", () => {
+    const home = tempDir();
+    expect(withSecretsFile({ A: "1" }, home)).toEqual({ env: { A: "1" }, file: null, warnings: [] });
+    const file = write(home, "secrets.env", "JIRA_API_TOKEN=from-file\nGH_TOKEN=gh-file\n");
+    fs.chmodSync(file, 0o600);
+    expect(withSecretsFile({ GH_TOKEN: "gh-env" }, home)).toEqual({
+      env: { JIRA_API_TOKEN: "from-file", GH_TOKEN: "gh-env" },
+      file,
+      warnings: []
+    });
+    fs.chmodSync(file, 0o644);
+    expect(withSecretsFile({}, home).warnings).toEqual([`${file} is readable by others, run chmod 600 on it`]);
+  });
+});
+
+describe("secretValues", () => {
+  it("collects the values of every secret variable that is set", () => {
+    expect(secretValues({ JIRA_API_TOKEN: "t", GH_TOKEN: "", ANTHROPIC_API_KEY: "k", HOME: "/h" })).toEqual(["t", "k"]);
   });
 });
 

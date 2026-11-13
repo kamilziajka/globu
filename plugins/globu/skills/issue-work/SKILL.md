@@ -1,6 +1,6 @@
 ---
 name: issue-work
-description: Take one Jira issue in this session with the person watching. Claims it with globu-worker, implements it in the prepared worktree with the issue-deliver skill, shows the handback and hands back through a draft pull request once the user agrees. Use when the user asks to work on, take, pick up or deliver a Jira issue here, in this session, or hands over an issue key to implement now.
+description: Take one Jira issue in this session with the person watching. Claims it with globu-worker, implements it in the prepared worktree with the issue-deliver skill, shows the handback and hands back through a pull request once the user agrees. Use when the user asks to work on, take, pick up or deliver a Jira issue here, in this session, or hands over an issue key to implement now.
 ---
 
 # Work one issue here
@@ -19,7 +19,7 @@ The session commands use the session's own Globu home, `~/.globu` unless `GLOBU_
 2. **Claim.** `globu-worker claim <KEY> --json`. When `record.state` is `prepared`, note `brief`, `tree`, `handback` and `companions` from the JSON and tell the user that the issue is now assigned to them and in the claimed status. When it is `released`, the output says why: a missing reference, no repository marker or a repository without commits. Report that and stop.
 3. **Implement.** Run the `issue-deliver` skill (`../issue-deliver/SKILL.md`) on the brief, inside the `tree` directory. Run every command in `tree`. A knowledge change goes to the companion worktree the brief names and nowhere else. Every rule of that skill holds here, in particular never push and never call Jira or GitHub yourself. The one difference is that a question the skill would have to settle alone can be put to the user.
 4. **Show.** When the handback is written, show it to the user together with `git -C <tree> log --oneline <base>..HEAD`, where `base` is in `record.worktrees`, and ask whether to hand back, to keep working or to give the issue back.
-5. **Finish.** On a yes, `globu-worker finish <run-id> --json`. It pushes each worktree that has commits, opens the draft pull requests, comments on the issue with the handback and removes the worktrees. Report the pull request links. A run with no commits is released with that reason.
+5. **Finish.** On a yes, `globu-worker finish <run-id> --json`. It pushes each worktree that has commits, opens the pull requests, comments on the issue with the handback and removes the worktrees. Report the pull request links. A run with no commits is released with that reason.
 6. **Give back.** When the user stops, `globu-worker release <run-id> --reason "<why>"`. The issue goes back to the released status with the blocked label, so a person has to remove the label before the worker or a poll picks it up again.
 
 ## Notes

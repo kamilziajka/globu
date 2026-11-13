@@ -1,12 +1,12 @@
 ---
 type: "Reference"
 title: "globu-worker"
-description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml, once and run, and a run step by step."
+description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run and diagnostics commands, logs and a run step by step."
 ---
 
 # globu-worker
 
-`globu-worker` turns a Jira transition into a draft pull request. It polls a Jira project for issues a person has marked ready for an agent, claims one, runs Claude Code headless in a worktree of the issue's repository with Globu's index and guard in place, pushes the branch, opens a draft pull request and reports back on the issue. Every merge, production step and product decision stays with people. The worker only refuses issues whose references do not resolve; it never judges whether an issue is simple enough.
+`globu-worker` turns a Jira transition into a pull request. It polls a Jira project for issues a person has marked ready for an agent, claims one, runs Claude Code headless in a worktree of the issue's repository with Globu's index and guard in place, pushes the branch, opens a draft pull request and reports back on the issue. Every merge, production step and product decision stays with people. The worker only refuses issues whose references do not resolve; it never judges whether an issue is simple enough.
 
 It is the third program in this repo, published to npm as `@kazet/globu-worker`, next to the `globu` CLI and the plugin. The registry, the resolver and the hooks know nothing about Jira. The worker knows nothing about implementing issues: that is the `issue-deliver` skill in the plugin, which a person can also run by hand.
 
@@ -18,10 +18,14 @@ The worker never uses the `~/.globu` and `~/.claude` of the person on the machin
 |---|---|
 | `manifest.yaml`, `state.yaml`, `clones` | An ordinary Globu home, filled with `globu import`, `register` and `sync` |
 | `worker.yaml` | The configuration below |
-| `work/<id>` | Editable clones of the shards the worker delivers to, by convention |
+| `secrets.env` | Optional secrets as `KEY=value` lines, see [secrets](#secrets) |
+| `work/<id>` | Editable clones of the shards the worker delivers to, by convention, and where `shards.repos` clones them |
+| `logs` | One log file per day, see [logs and diagnostics](#logs-and-diagnostics) |
 | `runs/<run-id>` | One directory per run: `run.json`, `brief.md`, `handback.md`, `claude.jsonl` and the pull request bodies. The worktree lives here while the run lasts |
 
-This is the bootstrap from [unattended runs](./unattended-runs.md) with one more step, the editable clones. The `globu` and `claude` commands below default to the interactive homes, so the two variables are exported for them even when the worker itself runs on its defaults:
+The shortest setup needs no `globu` commands: list each shard's repository under `shards.repos` in `worker.yaml` and the worker registers the missing ones as editable clones in `work/<id>`, in `write` mode, and writes their directories into its Claude settings, at the start of `once`, `run`, `start` and `check`. A shard that is already registered is left alone.
+
+The longer setup is the bootstrap from [unattended runs](./unattended-runs.md) with one more step, the editable clones, and it is the one to use when the shards come from a team manifest. The `globu` and `claude` commands below default to the interactive homes, so the two variables are exported for them even when the worker itself runs on its defaults:
 
 ```bash
 export GLOBU_HOME=~/.globu/worker CLAUDE_CONFIG_DIR=~/.globu/worker/claude
@@ -64,6 +68,13 @@ jira:
 shards:
   deliverable: [backend, frontend]
   companion: [product]
+  repos:
+    backend: https://github.com/acme/backend.git
+    frontend: https://github.com/acme/frontend.git
+    product: https://github.com/acme/product.git
+setup:
+  backend: [npm ci]
+  frontend: [npm ci, npm run build]
 poll:
   every: 60s
 limits:
@@ -91,7 +102,7 @@ git:
     name: Acme Agent
     email: agent@acme.example
 github:
-  draft: true
+  draft: false
   labels: [agent]
 ```
 
@@ -104,7 +115,9 @@ github:
 | `jira.blockedLabel` | Added when the worker gives an issue back, so the JQL above excludes it until a person removes it | `agent-blocked` |
 | `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | required |
 | `shards.deliverable` | Shards the worker may run in. The repository marker of an issue must name one; anything else is released, so the list is the team's whitelist of repositories the agent delivers to | required |
-| `shards.companion` | Shards a run may also write to, each on a worktree of its own with the same branch name, whether or not the issue names them. Commits there become a second draft pull request. A run never consists of companion changes alone: the deliverable is where it lives and where the per-shard limit counts | none |
+| `shards.companion` | Shards a run may also write to, each on a worktree of its own with the same branch name, whether or not the issue names them. Commits there become a second pull request. A run never consists of companion changes alone: the deliverable is where it lives and where the per-shard limit counts | none |
+| `shards.repos` | Repository URL per shard id. A deliverable or companion shard that is not registered yet is cloned from it into `work/<id>` at start; see [its own homes](#its-own-homes) | none |
+| `setup.<shard>` | Commands run with `sh -c`, in order, in each fresh worktree of that shard before Claude starts, such as `npm ci`. They run outside Claude's tool allowlist, with the worker's environment minus the secrets and with `limits.timeout`. One that fails or times out releases the issue with the command and the end of its output | none |
 | `poll.every` | The interval of `run`, as `30s`, `5m` or `1h` | `60s` |
 | `limits.concurrent`, `limits.perShard` | Runs per cycle and runs per shard per cycle | 1 and 1 |
 | `limits.timeout` | The worker kills the run and releases the issue when it lasts longer | `45m` |
@@ -119,20 +132,31 @@ github:
 Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
 | `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
 | `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
-| `github.draft`, `github.labels` | Passed to `gh pr create`. A label must exist in the repository | `true`, none |
+| `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
 
-Secrets come from the environment only: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHUB_TOKEN`) for the push and `gh`, `GLOBU_GIT_TOKEN` for the clones Globu owns. The Claude process gets none of them: the worker strips `JIRA_EMAIL`, `JIRA_API_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GLOBU_GIT_TOKEN` and `GLOBU_GIT_USER` from its environment and sets `GLOBU_HOME` and `CLAUDE_CONFIG_DIR` to the worker's own. How Claude authenticates is the worker's Claude config dir's business: `ANTHROPIC_API_KEY` in the environment or a login made in that config dir.
+## Secrets
+
+Secrets come from the environment or from `secrets.env` in `GLOBU_HOME`, and the environment wins when both name the same variable. The file holds `KEY=value` lines; blank lines, `#` comments, an `export ` prefix and quotes around the value are accepted, a line with an empty value counts as unset, and a line that is not `KEY=value` is reported by its number without its content. The worker warns at start when the file is readable by anyone but its owner (`chmod 600 secrets.env`). `GLOBU_GIT_TOKEN` and `GLOBU_GIT_USER` from the file reach Globu's own clones and fetches too.
+
+The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHUB_TOKEN`) for the push and `gh`, `GLOBU_GIT_TOKEN` for the clones Globu owns. The Claude process gets none of them: the worker strips `JIRA_EMAIL`, `JIRA_API_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `GLOBU_GIT_TOKEN` and `GLOBU_GIT_USER` from its environment and sets `GLOBU_HOME` and `CLAUDE_CONFIG_DIR` to the worker's own. How Claude authenticates is the worker's Claude config dir's business: a login made in that config dir, or `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the environment or in `secrets.env`. Those two are the only secrets passed on to Claude.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
+| `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue and polls again, `r` polls again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
+| `check` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill. Jira, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache |
+| `diagnostics [--out <file>]` | A `.tar.gz` with the log files, every `run.json`, `worker.yaml` and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
 | `once [--dry-run] [--issue <key>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how a released issue is retried and how the whole path is tested. `--json` adds the run records and the plan |
-| `run` | `once` on the configured interval until `SIGINT` or `SIGTERM`. A signal during a cycle lets the cycle finish |
+| `run` | Shard bootstrap and `check`, then `once` on the configured interval until `SIGINT` or `SIGTERM`. A failed check stops it before the first cycle. A signal during a cycle lets the cycle finish |
 | `poll [--json]` | The dry run of `once`, for a session: what could be claimed now and why, touching nothing |
 | `claim <key> [--json]` | Steps 3 to 7 of a run for a session: claim the issue, resolve its references, add the worktrees and write the brief, then stop with the run `prepared` and the worktrees in place. Prints the run directory; `--json` adds the record and the paths of the brief, the tree, the handback and the companions |
 | `finish <run-id> [--json]` | Steps 10 and 11 for a prepared run: push the worktrees that have commits, open the pull requests, comment on the issue and remove the worktrees. A run without commits is released with that reason |
 | `release <run-id> --reason <text> [--json]` | Give a prepared run's issue back with that reason and remove its worktrees |
+
+Every command takes `--log-level` before its name, as in `globu-worker --log-level debug start`.
+
+`start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd` and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log.
 
 `once` prints one line per issue it looked at (`claimed`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
 
@@ -149,11 +173,11 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 3. **Claim.** Assign to the worker's own account, transition to `claimedStatus`, read the issue back. If someone else got there first, drop it without a word.
 4. **Find the target.** The repository marker names a shard. Not a deliverable shard: release.
 5. **Resolve.** Shard-qualified refs such as `product/docs/decisions/012-pricing.md` and code host links to files in a shard's repo are checked with the same code as `globu resolve`, after a fetch. One missing: release, with the resolver's report and its candidates in the comment, before a token is spent. Bare paths in backticks are resolved too but only reported in the brief, since they may be files the change creates.
-6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign.
+6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the `setup` commands of each worktree's shard; a failing one releases the issue.
 7. **Brief.** `brief.md` holds the issue as Jira returned it under a heading that says it is untrusted input, the resolved references with their locations on this machine, the worktrees and the handback path.
 8. **Run.** From the worktree root: `claude -p "Implement the issue described in <brief> with the issue-deliver skill. Write the handback to <handback>." --permission-mode dontAsk --allowedTools <claude.allowedTools> --disallowedTools "Bash(git push*)" "Bash(gh *)" "Bash(curl *)" "Bash(wget *)" --add-dir <run dir> --max-turns N --max-budget-usd X --output-format stream-json --verbose`, plus `--model` and `--plugin-dir` when configured. The disallowed four keep the run from acting as the courier and are not configurable. The stream goes to `claude.jsonl`. `--add-dir` is what lets the run write the handback outside the repository.
 9. **Collect.** Cost, turns and the end state from the stream. Every failed tool call that carries the guard's `shard "<id>"` wording is recorded as a blocked write. Commits on the branch are counted.
-10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a draft pull request with `gh pr create` whose body is the handback plus the run footer, comment on the issue with the handback and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
+10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, comment on the issue with the handback and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
 11. **Clean up.** Worktrees are removed, unpushed branches deleted, the run directory kept.
 
 A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue, removes the label and either waits for the next poll or runs `once --issue <key>`.
@@ -164,8 +188,14 @@ Every footer, in the pull request body and in the Jira comment, names the run id
 
 Nothing new. The run's working directory is a worktree of the target shard, so writes there are free. Every other shard in the worker's `state.yaml` is a read-only clone, so a certain write is blocked and a possible one raises `ask`, which a run with nobody to answer turns into a denial. Companion shards are in `write` mode in the worker's own state, which is harmless because that state belongs to the worker alone, and their edits land on a branch through the worktree. The limits of reading shell commands in [architecture](./architecture.md#shell-commands-in-the-guard) apply: the guard lowers the odds of an unnoticed write to a sibling repository and the footer reports the ones it caught. It is not a sandbox.
 
+## Logs and diagnostics
+
+The worker writes `logs/worker-YYYY-MM-DD.log` in its home, one JSON object per line with `time`, `level` and `msg`, plus `run` and other fields where they apply. `--log-level` or `GLOBU_LOG_LEVEL` picks `error`, `warn`, `info` (the default) or `debug`. `info` records each cycle, claim, setup command, run start, release and handback; `warn` the day cap and failed checks; `error` a failed cycle or release. `debug` adds every command the worker runs (git, gh, claude, setup) with its arguments, working directory, exit code, duration and the last lines of stderr, every Jira call with its method, path, status and duration, and every check. Before a line is written, each secret value from the environment and `secrets.env` and every git `extraheader` is replaced with `[redacted]`.
+
+To look at a run on another machine, run `globu-worker --log-level debug start` there, reproduce, then `globu-worker diagnostics` and bring the archive back.
+
 ## Running it
 
-On a Mac, `globu-worker run` under launchd with the secrets in the job's environment. In a container, a Cloud Run job or a cron entry runs the bootstrap against an empty `GLOBU_HOME` and then `globu-worker once`; a second invocation while one is running finds the issues already claimed and does nothing. No endpoint is exposed, because the trigger is the poll. Two workers on one Jira project are not supported: the claim is a read-back after assign and transition, which is enough for one.
+By hand, `globu-worker start` in a terminal. As a service, `globu-worker start --mode auto` or `globu-worker run`; on a Mac under launchd, with the secrets in the job's environment or in `secrets.env`. In a container, a Cloud Run job or a cron entry runs the bootstrap against an empty `GLOBU_HOME` and then `globu-worker once`; a second invocation while one is running finds the issues already claimed and does nothing. No endpoint is exposed, because the trigger is the poll. Two workers on one Jira project are not supported: the claim is a read-back after assign and transition, which is enough for one.
 
 What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label, the blocked label in the JQL and a repository marker per issue. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).

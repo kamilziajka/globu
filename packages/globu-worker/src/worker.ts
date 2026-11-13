@@ -16,6 +16,7 @@ import { type ClaudeSummary, claudeArgs, implementPrompt, summarizeStream } from
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
 import { type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
+import { log, tail } from "./logger.js";
 import { extractRefs } from "./refs.js";
 import { isTerminal, loadRun, loadRuns, newRun, type RunRecord, runsDir, saveRun, spentOn } from "./runs.js";
 
@@ -29,9 +30,11 @@ export type WorkerDeps = {
   io: Io;
   now: () => Date;
   env: NodeJS.ProcessEnv;
+  onRun?: (record: RunRecord) => void;
+  onPlan?: (plan: PlanEntry[]) => void;
 };
 export type OnceOptions = { dryRun?: boolean; issue?: string };
-export type PlanEntry = { key: string; shard: string | null; action: string };
+export type PlanEntry = { key: string; summary: string; shard: string | null; action: string };
 export type OnceResult = { runs: RunRecord[]; plan: PlanEntry[] };
 
 type PresentShard = ResolvedShard & { path: string };
@@ -59,8 +62,29 @@ export type ClaimResult = {
 const SEARCH_LIMIT = 50;
 const ORIGIN = "origin/";
 
+function persist(deps: WorkerDeps, dir: string, record: RunRecord): void {
+  saveRun(dir, record);
+  deps.onRun?.(structuredClone(record));
+}
+
 function git(args: string[], cwd: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const started = Date.now();
+  try {
+    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    log().debug("command", { command: "git", args, cwd, code: 0, ms: Date.now() - started });
+    return stdout;
+  } catch (err) {
+    const failure = err as { status: number | null; stderr: string };
+    log().debug("command", {
+      command: "git",
+      args,
+      cwd,
+      code: failure.status,
+      ms: Date.now() - started,
+      stderr: tail(`${failure.stderr}`)
+    });
+    throw err;
+  }
 }
 
 function registry(): Registry {
@@ -158,12 +182,14 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
   record.state = "released";
   record.reason = reason;
   record.endedAt = deps.now().toISOString();
+  log().info("released", { run: record.id, key: record.key, reason });
   try {
     await jira.transitionTo(record.key, config.jira.releasedStatus);
     await jira.assign(record.key, null);
     await jira.addLabel(record.key, config.jira.blockedLabel);
     await jira.comment(record.key, `Released by the Globu worker: ${reason}\n\n${footer(record, deps.now())}`);
   } catch (err) {
+    log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
     io.err(`${record.key}: releasing failed: ${(err as Error).message}`);
   }
   return record;
@@ -262,6 +288,24 @@ async function openPullRequest(
   return output.split("\n").at(-1) as string;
 }
 
+async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
+  const { config } = deps;
+  for (const worktree of worktrees) {
+    for (const command of config.setup[worktree.shard.id] ?? []) {
+      log().info("setup", { run: record.id, shard: worktree.shard.id, command });
+      const result = await deps.run("sh", ["-c", command], {
+        cwd: worktree.tree,
+        env: { ...scrubbedEnv(deps.env), ...authorEnv(config), GLOBU_HOME: deps.home },
+        timeoutMs: config.limits.timeout
+      });
+      if (result.code === 0 && !result.timedOut) continue;
+      const outcome = result.timedOut ? "timed out" : `exited with ${result.code}`;
+      return `setup command "${command}" in ${worktree.shard.id} ${outcome}:\n${tail(`${result.stdout.trim()}\n${result.stderr.trim()}`)}`;
+    }
+  }
+  return null;
+}
+
 async function prepare(
   deps: WorkerDeps,
   candidate: Candidate,
@@ -271,7 +315,7 @@ async function prepare(
 ): Promise<Prepared | null> {
   const { config } = deps;
   const { issue, shardId } = candidate;
-  saveRun(dir, record);
+  persist(deps, dir, record);
   if (shardId === null || !config.shards.deliverable.includes(shardId)) {
     const accepted = config.shards.deliverable.join(", ");
     await release(deps, record, `no deliverable repository marker, the worker delivers to ${accepted}`);
@@ -279,7 +323,7 @@ async function prepare(
   }
   record.shard = shardId;
   record.state = "resolving";
-  saveRun(dir, record);
+  persist(deps, dir, record);
   const reg = registry();
   const shard = reg.all.find((entry) => entry.id === shardId) as PresentShard;
   const resolved = resolveIssue(issue, shard, reg);
@@ -312,6 +356,12 @@ async function prepare(
     return { id, tree: worktree.tree };
   });
   record.worktrees = storedWorktrees(worktrees);
+  persist(deps, dir, record);
+  const failedSetup = await runSetup(deps, record, worktrees);
+  if (failedSetup !== null) {
+    await release(deps, record, failedSetup);
+    return null;
+  }
 
   const briefFile = path.join(dir, "brief.md");
   const handbackFile = path.join(dir, "handback.md");
@@ -330,7 +380,7 @@ async function prepare(
     })
   );
   record.state = "prepared";
-  saveRun(dir, record);
+  persist(deps, dir, record);
   return { record, dir, worktrees, target, briefFile, handbackFile };
 }
 
@@ -340,7 +390,8 @@ async function execute(deps: WorkerDeps, prepared: Prepared): Promise<Outcome> {
   const streamFile = path.join(dir, "claude.jsonl");
   fs.writeFileSync(streamFile, "");
   record.state = "running";
-  saveRun(dir, record);
+  persist(deps, dir, record);
+  log().info("running", { run: record.id, key: record.key, tree: target.tree });
   const result = await deps.run(
     "claude",
     claudeArgs({
@@ -386,7 +437,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   }
 
   record.state = "pushing";
-  saveRun(dir, record);
+  persist(deps, dir, record);
   const token = deps.secrets.githubToken;
   if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
   const handback = fs.existsSync(handbackFile)
@@ -405,6 +456,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
   record.state = "handed-back";
   record.endedAt = deps.now().toISOString();
+  log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests });
   return record;
 }
 
@@ -424,7 +476,7 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
     return await release(deps, record, `worker error: ${(err as Error).message}`);
   } finally {
     discard(dir, worktrees);
-    saveRun(dir, record);
+    persist(deps, dir, record);
   }
 }
 
@@ -450,7 +502,7 @@ export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimRe
     await release(deps, record, `worker error: ${(err as Error).message}`);
   } finally {
     if (prepared === null) discard(dir, worktrees);
-    saveRun(dir, record);
+    persist(deps, dir, record);
   }
   io.out(prepared === null ? describe(record) : `${key}\tprepared ${dir}`);
   const companions = prepared === null ? [] : prepared.worktrees.slice(1);
@@ -487,7 +539,7 @@ export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord
     await release(deps, record, `worker error: ${(err as Error).message}`);
   } finally {
     discard(dir, worktrees);
-    saveRun(dir, record);
+    persist(deps, dir, record);
   }
   deps.io.out(describe(record));
   return record;
@@ -499,7 +551,7 @@ export async function releaseRun(deps: WorkerDeps, id: string, reason: string): 
   const worktrees = restoreWorktrees(record);
   await release(deps, record, reason);
   discard(dir, worktrees);
-  saveRun(dir, record);
+  persist(deps, dir, record);
   deps.io.out(describe(record));
   return record;
 }
@@ -519,7 +571,7 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
       record.reason = "the worker restarted and the issue was no longer claimed";
       record.endedAt = deps.now().toISOString();
     }
-    saveRun(dir, record);
+    persist(deps, dir, record);
   }
   const { shards } = resolveAll();
   for (const id of [...config.shards.deliverable, ...config.shards.companion]) {
@@ -558,17 +610,19 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
   }
   const spent = spentOn(loadRuns(home), deps.now());
   if (spent >= config.limits.dayUsd) {
+    log().warn("day cap reached", { capUsd: config.limits.dayUsd, spentUsd: spent });
     io.out(`day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`);
     return { runs: [], plan: [] };
   }
   const keys = options.issue === undefined ? await jira.search(config.jira.jql, SEARCH_LIMIT) : [options.issue];
+  log().info("cycle", { dryRun, eligible: keys });
   const picked: Candidate[] = [];
   const plan: PlanEntry[] = [];
   for (const key of keys) {
     if (picked.length >= config.limits.concurrent) break;
     const issue = await jira.issue(key);
     const candidate = { issue, shardId: markerShard(issue, config) };
-    const entry: PlanEntry = { key, shard: candidate.shardId, action: "" };
+    const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
     plan.push(entry);
     if (options.issue === undefined && issue.assignee !== null) {
       entry.action = "skipped, already assigned";
@@ -578,11 +632,13 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
       entry.action = dryRunAction(deps, candidate);
     } else if (await claim(deps, issue, me)) {
       entry.action = "claimed";
+      log().info("claimed", { key });
       picked.push(candidate);
     } else {
       entry.action = "skipped, claimed by someone else";
     }
   }
+  deps.onPlan?.(structuredClone(plan));
   if (plan.length === 0) io.out("nothing eligible");
   for (const entry of plan) io.out(`${entry.key}\t${entry.action}`);
   const runs = await Promise.all(
@@ -602,6 +658,7 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<void
     try {
       await once(deps);
     } catch (err) {
+      log().error("cycle failed", { error: (err as Error).message });
       deps.io.err(`globu-worker: ${(err as Error).message}`);
     }
     if (options.stopped()) return;

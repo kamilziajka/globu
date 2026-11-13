@@ -56,8 +56,10 @@ const WorkerConfigSchema = z.object({
   }),
   shards: z.object({
     deliverable: z.array(z.string().min(1)).min(1),
-    companion: z.array(z.string().min(1)).default([])
+    companion: z.array(z.string().min(1)).default([]),
+    repos: z.record(z.string(), z.string().min(1)).default({})
   }),
+  setup: z.record(z.string(), z.array(z.string().min(1))).default({}),
   poll: z.object({ every: Duration.default(60_000) }).prefault({}),
   limits: z
     .object({
@@ -83,7 +85,7 @@ const WorkerConfigSchema = z.object({
       author: z.object({ name: z.string().min(1), email: z.string().min(1) }).optional()
     })
     .prefault({}),
-  github: z.object({ draft: z.boolean().default(true), labels: z.array(z.string().min(1)).default([]) }).prefault({})
+  github: z.object({ draft: z.boolean().default(false), labels: z.array(z.string().min(1)).default([]) }).prefault({})
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
@@ -112,6 +114,40 @@ export const SECRET_VARIABLES = [
   "GLOBU_GIT_TOKEN",
   "GLOBU_GIT_USER"
 ];
+
+export const SECRETS_FILE = "secrets.env";
+
+export function parseSecretsFile(text: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (match === null) throw new Error(`${SECRETS_FILE} line ${index + 1} is not KEY=value`);
+    const value = match[2].replace(/^(["'])(.*)\1$/, "$2");
+    if (value !== "") values[match[1]] = value;
+  }
+  return values;
+}
+
+export type LoadedSecrets = { env: NodeJS.ProcessEnv; file: string | null; warnings: string[] };
+
+export function withSecretsFile(env: NodeJS.ProcessEnv, home: string): LoadedSecrets {
+  const file = path.join(home, SECRETS_FILE);
+  if (!fs.existsSync(file)) return { env, file: null, warnings: [] };
+  const values = parseSecretsFile(fs.readFileSync(file, "utf8"));
+  const warnings = (fs.statSync(file).mode & 0o077) === 0 ? [] : [`${file} is readable by others, run chmod 600 on it`];
+  return { env: { ...values, ...env }, file, warnings };
+}
+
+export const CLAUDE_SECRET_VARIABLES = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+
+export function secretValues(env: NodeJS.ProcessEnv): string[] {
+  return [...SECRET_VARIABLES, ...CLAUDE_SECRET_VARIABLES].flatMap((name) => {
+    const value = env[name];
+    return value ? [value] : [];
+  });
+}
 
 export function readSecrets(env: NodeJS.ProcessEnv): Secrets {
   const missing = ["JIRA_EMAIL", "JIRA_API_TOKEN"].filter((name) => !env[name]);

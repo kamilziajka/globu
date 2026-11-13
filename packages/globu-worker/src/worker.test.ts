@@ -6,6 +6,7 @@ import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testi
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
+import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
 import { checkShards, claimIssue, finishRun, loop, markerShard, once, releaseRun, type WorkerDeps } from "./worker.js";
 
@@ -62,6 +63,7 @@ git:
     name: Acme Agent
     email: agent@acme.example
 github:
+  draft: true
   labels: [agent]
 `
   );
@@ -144,8 +146,13 @@ type Script = {
   timedOut?: boolean;
   ghFails?: boolean;
   ghLoginFails?: boolean;
+  setup?: { code?: number; timedOut?: boolean; stdout?: string; stderr?: string };
 };
-type Calls = { gh: string[][]; claude: { args: string[]; cwd: string; env: NodeJS.ProcessEnv }[] };
+type Calls = {
+  gh: string[][];
+  claude: { args: string[]; cwd: string; env: NodeJS.ProcessEnv }[];
+  setup?: { command: string; cwd: string; env: NodeJS.ProcessEnv }[];
+};
 
 const RESULT = JSON.stringify({
   type: "result",
@@ -169,6 +176,10 @@ function commitIn(dir: string, file: string): void {
 
 function fakeRunner(script: Script, calls: Calls): Runner {
   return async (command, args, options = {}) => {
+    if (command === "sh") {
+      calls.setup?.push({ command: args[1], cwd: options.cwd as string, env: options.env as NodeJS.ProcessEnv });
+      return { code: 0, stdout: "", stderr: "", timedOut: false, ...script.setup };
+    }
     if (command === "gh") {
       calls.gh.push(args);
       if (args[0] === "api") {
@@ -236,20 +247,23 @@ describe("checkShards", () => {
   it("demands registered, editable, writable shards", () => {
     const world = setup();
     expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["ghost"], companion: [] } }, world.home)
+      checkShards({ ...world.config, shards: { deliverable: ["ghost"], companion: [], repos: {} } }, world.home)
     ).toThrow(`shard "ghost" is not registered in ${world.home}`);
     expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["notes"], companion: [] } }, world.home)
+      checkShards({ ...world.config, shards: { deliverable: ["notes"], companion: [], repos: {} } }, world.home)
     ).toThrow('shard "notes" needs an editable clone');
     fs.rmSync(world.clones.product, { recursive: true });
     expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["product"], companion: [] } }, world.home)
+      checkShards({ ...world.config, shards: { deliverable: ["product"], companion: [], repos: {} } }, world.home)
     ).toThrow('shard "product" needs an editable clone');
     updateShard("backend", { mode: "read" });
     expect(() => checkShards(world.config, world.home)).toThrow('shard "backend" is read-only on this machine');
     updateShard("backend", { mode: "ask" });
     expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["backend"], companion: ["backend"] } }, world.home)
+      checkShards(
+        { ...world.config, shards: { deliverable: ["backend"], companion: ["backend"], repos: {} } },
+        world.home
+      )
     ).toThrow('companion shard "backend" must be in write mode');
     updateShard("backend", { mode: "write" });
     expect(() => checkShards(world.config, world.home)).not.toThrow();
@@ -417,6 +431,36 @@ describe("once", () => {
     expect(() => git(world.clones.product, "rev-parse", "--verify", "agent/MR-7-add-the-thing")).toThrow();
   });
 
+  it("runs the setup commands of each shard in its fresh worktree before Claude", async () => {
+    const world = setup({ companion: ["product"] });
+    world.config.setup = { backend: ["npm ci", "npm run build"] };
+    const jira = fakeJira([issue("MR-7")]);
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker } = deps(world, jira, fakeRunner({ commit: true }, calls));
+    const { runs } = await once(worker);
+    expect(runs[0].state).toBe("handed-back");
+    expect(calls.setup?.map((call) => [call.command, path.basename(call.cwd)])).toEqual([
+      ["npm ci", "tree"],
+      ["npm run build", "tree"]
+    ]);
+    expect(calls.setup?.[0].env.JIRA_API_TOKEN).toBeUndefined();
+    expect(calls.setup?.[0].env.GIT_AUTHOR_NAME).toBe("Acme Agent");
+    expect(calls.setup?.[0].env.GLOBU_HOME).toBe(world.home);
+  });
+
+  it("releases the issue when a setup command fails or times out, before Claude runs", async () => {
+    const world = setup();
+    world.config.setup = { backend: ["npm ci"] };
+    const failed = await runWith(world, [issue("MR-1")], {
+      setup: { code: 1, stdout: "added 0 packages\n", stderr: "npm ERR! missing lockfile\n" }
+    });
+    expectReleased(failed.jira, failed.record as RunRecord, 'setup command "npm ci" in backend exited with 1:');
+    expect(failed.record?.reason).toContain("added 0 packages\nnpm ERR! missing lockfile");
+    expect(failed.calls.claude).toEqual([]);
+    const slow = await runWith(world, [issue("MR-2")], { setup: { timedOut: true, code: null as unknown as number } });
+    expectReleased(slow.jira, slow.record as RunRecord, 'setup command "npm ci" in backend timed out:');
+  });
+
   it("opens a plain pull request without labels or a commit author and notes a run without a last message", async () => {
     const world = setup();
     world.config.git = { branchPrefix: "agent/" };
@@ -487,7 +531,7 @@ describe("once", () => {
     fs.mkdirSync(empty, { recursive: true });
     git(empty, "init", "-q", "--bare", "-b", "main");
     register({ locator: `file://${empty}`, cwd: world.root, dest: path.join(world.home, "work/sandbox") });
-    world.config.shards = { deliverable: ["backend", "sandbox"], companion: [] };
+    world.config.shards = { deliverable: ["backend", "sandbox"], companion: [], repos: {} };
     const { jira, record } = await runWith(world, [issue("MR-9", { labels: ["repo:sandbox"] })], { commit: true });
     expectReleased(
       jira,
@@ -532,6 +576,25 @@ describe("once", () => {
     git(world.clones.backend, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
     const noHead = await runWith(world, [issue("MR-3")], { commit: true });
     expectReleased(noHead.jira, noHead.record as RunRecord, `worker error: ${world.clones.backend} has no origin/HEAD`);
+  });
+
+  it("logs every git command it runs, with the exit code and stderr of one that fails", async () => {
+    const world = setup();
+    const entries: { msg: string; fields?: Record<string, unknown> }[] = [];
+    const record = (msg: string, fields?: Record<string, unknown>) => entries.push({ msg, fields });
+    const logger: Logger = { error: record, warn: record, info: record, debug: record };
+    setLogger(logger);
+    try {
+      fs.rmSync(world.remotes.backend, { recursive: true, force: true });
+      const run = await runWith(world, [issue("MR-1")], { commit: true });
+      expect(run.record?.reason).toContain("worker error: Command failed: git fetch --quiet");
+      const failed = entries.find((entry) => entry.msg === "command" && entry.fields?.code !== 0);
+      expect(failed?.fields).toMatchObject({ command: "git", args: ["fetch", "--quiet"], cwd: world.clones.backend });
+      expect(failed?.fields?.stderr).toContain("does not appear to be a git repository");
+      expect(entries.map((entry) => entry.msg)).toEqual(expect.arrayContaining(["cycle", "claimed", "released"]));
+    } finally {
+      setLogger(silentLogger);
+    }
   });
 
   it("reports when the release itself fails", async () => {
@@ -609,7 +672,7 @@ describe("once", () => {
 describe("loop", () => {
   it("reports a failing cycle, sleeps and stops when told", async () => {
     const world = setup();
-    world.config.shards = { deliverable: ["ghost"], companion: [] };
+    world.config.shards = { deliverable: ["ghost"], companion: [], repos: {} };
     const { worker, io } = deps(world, fakeJira([]), fakeRunner({}, { gh: [], claude: [] }));
     const slept: number[] = [];
     let stopped = false;
@@ -624,7 +687,7 @@ describe("loop", () => {
     expect(slept).toEqual([60_000]);
 
     let cycles = 0;
-    world.config.shards = { deliverable: ["backend"], companion: [] };
+    world.config.shards = { deliverable: ["backend"], companion: [], repos: {} };
     await loop(worker, {
       sleep: async () => {
         cycles += 1;

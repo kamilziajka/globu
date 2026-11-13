@@ -12,14 +12,14 @@ This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, wi
 - `/globu:issue-check` checks that every doc and code reference in a Jira issue resolves to a file a coding agent will be able to open.
 - `/globu:issue-fix` runs the same check and corrects the broken references in the issue once you confirm the edit.
 - `/globu:issue-deliver` implements an issue from a brief in the worktree it runs in and writes a handback for the reviewer.
-- `/globu:issue-work` takes one issue in the current session: claims it, implements it with you watching and hands back through a draft pull request on your yes.
+- `/globu:issue-work` takes one issue in the current session: claims it, implements it with you watching and hands back through a pull request on your yes.
 - `/globu:issue-watch` watches a Jira project from the current session and delivers the eligible issues through subagents, up to a concurrency cap.
 
 Hooks index the registered shards at session start, guard edits to shards that are read-only or ask-first and validate a base right after an edit. Nothing needs a registered shard: inside one repo the bases work on their own.
 
 A second, optional plugin, **[globu-status](mods/globu-status/README.md)**, is a Claude Code mod that shows in every session how much has happened since the knowledge was last updated, with a button that runs the update.
 
-A separate program, **[globu-worker](docs/worker.md)**, polls a Jira project for issues a person marked ready for an agent, runs Claude Code headless in a worktree of the right shard with the index and the guard in place, opens a draft pull request and reports back on the issue.
+A separate program, **[globu-worker](docs/worker.md)**, polls a Jira project for issues a person marked ready for an agent, runs Claude Code headless in a worktree of the right shard with the index and the guard in place, opens a pull request and reports back on the issue.
 
 ## Install
 

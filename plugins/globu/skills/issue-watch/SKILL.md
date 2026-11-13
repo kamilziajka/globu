@@ -1,6 +1,6 @@
 ---
 name: issue-watch
-description: Watch a Jira project from this session and deliver the eligible issues as they appear. Polls with globu-worker on the configured interval, claims up to the concurrency cap, runs one subagent per issue with the issue-deliver skill and finishes each into a draft pull request. Use when the user asks to watch, monitor or keep delivering issues from a project in this session, or to start a worker here.
+description: Watch a Jira project from this session and deliver the eligible issues as they appear. Polls with globu-worker on the configured interval, claims up to the concurrency cap, runs one subagent per issue with the issue-deliver skill and finishes each into a pull request. Use when the user asks to watch, monitor or keep delivering issues from a project in this session, or to start a worker here.
 ---
 
 # Watch a project from this session
