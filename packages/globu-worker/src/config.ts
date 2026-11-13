@@ -51,6 +51,7 @@ const WorkerConfigSchema = z.object({
     jql: z.string().min(1),
     claimedStatus: z.string().min(1),
     releasedStatus: z.string().min(1),
+    doneStatus: z.string().min(1).optional(),
     blockedLabel: z.string().min(1).default("agent-blocked"),
     repository: RepositorySchema
   }),
@@ -66,7 +67,9 @@ const WorkerConfigSchema = z.object({
       concurrent: z.number().int().min(1).default(1),
       perShard: z.number().int().min(1).default(1),
       timeout: Duration.default(45 * 60_000),
-      dayUsd: z.number().positive().default(40)
+      dayUsd: z.number().positive().default(40),
+      openPullRequests: z.number().int().min(1).default(5),
+      repairs: z.number().int().min(0).default(2)
     })
     .prefault({}),
   claude: z

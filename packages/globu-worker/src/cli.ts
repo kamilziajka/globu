@@ -28,6 +28,7 @@ export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now">> & {
   screen?: Screen;
   readKey?: ReadKey;
   every?: Every;
+  wait?: (ms: number) => Promise<void>;
 };
 
 const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the right Globu shard.";
@@ -157,10 +158,11 @@ export async function workerMain(
     .description("poll once, claim what fits in the free slots, run each to the end and exit")
     .option("--dry-run", "print what would be claimed and why, touching nothing")
     .option("--issue <key>", "take this issue instead of polling")
+    .option("--repair <url>", "repair this pull request of the worker instead of polling")
     .option("--json", "print machine-readable JSON")
-    .action(async (options: { dryRun?: boolean; issue?: string; json?: boolean }) => {
+    .action(async (options: { dryRun?: boolean; issue?: string; repair?: string; json?: boolean }) => {
       const deps = ownDeps();
-      const result = await once(deps, { dryRun: options.dryRun, issue: options.issue });
+      const result = await once(deps, { dryRun: options.dryRun, issue: options.issue, repair: options.repair });
       if (options.json) io.out(JSON.stringify(result, null, 2));
     });
 
@@ -248,7 +250,14 @@ export async function workerMain(
         exitCode = 1;
         return;
       }
-      await start(deps, { mode, screen: overrides.screen, readKey: overrides.readKey, checks, untilStopped });
+      await start(deps, {
+        mode,
+        screen: overrides.screen,
+        readKey: overrides.readKey,
+        checks,
+        wait: overrides.wait,
+        untilStopped
+      });
     });
 
   const bare = argv.length === 0 && overrides.screen !== undefined && overrides.readKey !== undefined;

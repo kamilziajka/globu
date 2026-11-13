@@ -1,8 +1,8 @@
 import { type Check, checksLine } from "./check.js";
 import { loadRuns, spentOn } from "./runs.js";
-import { type Row, renderTable, rowLine, sessionList } from "./session.js";
+import { OPEN_PULL_STATES, type Row, renderTable, rowLine, sessionList } from "./session.js";
 import { CLEAR, clip, gray, HIDE_CURSOR, type Screen, SHOW_CURSOR, widthOf } from "./tui.js";
-import { once, type WorkerDeps } from "./worker.js";
+import { followUps, once, type WorkerDeps } from "./worker.js";
 
 export type Key = "up" | "down" | "enter" | "refresh" | "quit" | "other";
 export type ReadKey = () => Promise<Key>;
@@ -12,10 +12,12 @@ export type StartOptions = {
   screen?: Screen;
   readKey?: ReadKey;
   checks?: Check[];
+  wait?: (ms: number) => Promise<void>;
   untilStopped: (deps: WorkerDeps) => Promise<void>;
 };
 
-export const PICK_KEYS = "↑↓ select   ⏎ run   r refresh   q quit";
+export const PICK_KEYS = "↑↓ select   ⏎ run or repair   r refresh   q quit";
+const never = () => new Promise<void>(() => {});
 export const AUTO_KEYS = "Ctrl+C stops after the current run";
 
 export function parseMode(value: string): Mode {
@@ -40,7 +42,11 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<vo
     }
     const spent = spentOn(loadRuns(deps.home), now).toFixed(2);
     const extra = [status, notice].filter((text) => text !== "").map((text) => ` ${text}`);
-    const spend = `Spent today ${spent} of ${deps.config.limits.dayUsd.toFixed(2)} USD.${extra.join("")}`;
+    const pulls = list.pullRequests();
+    const open = pulls.filter((row) => OPEN_PULL_STATES.has(row.state)).length;
+    const fix = pulls.filter((row) => row.pickable === true).length;
+    const counts = `${open} of ${deps.config.limits.openPullRequests} pull requests open${fix === 0 ? "" : `, ${fix} need a fix`}`;
+    const spend = `Spent today ${spent} of ${deps.config.limits.dayUsd.toFixed(2)} USD, ${counts}.${extra.join("")}`;
     const footer = `${spend}\n${gray(mode === "pick" ? PICK_KEYS : AUTO_KEYS)}`;
     const header = `${title}${access(widthOf(screen))}`;
     const view = mode === "pick" ? { header, footer, selected } : { header, footer };
@@ -51,12 +57,28 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<vo
     config: { ...deps.config, limits: { ...deps.config.limits, concurrent: 1 } },
     io: { ...deps.io, out: () => {} },
     onPlan: (plan) => show(list.plan(plan)),
-    onRun: (record) => show(list.run(record))
+    onRun: (record) => show(list.run(record)),
+    onFollowUps: (rows) => show(list.followUps(rows))
   };
   if (mode === "auto") return await options.untilStopped(worker);
 
   const readKey = options.readKey as ReadKey;
+  const wait = options.wait ?? never;
   const pickScreen = screen as Screen;
+  let pending: Promise<Key> | null = null;
+  let tick: Promise<"tick"> | null = null;
+  const nextEvent = async (): Promise<Key | "tick"> => {
+    pending ??= readKey();
+    tick ??= wait(deps.config.poll.every).then(() => "tick" as const);
+    const event = await Promise.race([pending, tick]);
+    if (event === "tick") tick = null;
+    else pending = null;
+    return event;
+  };
+  const refresh = async () => {
+    await once(worker, { dryRun: true });
+    await followUps(worker, true);
+  };
   const attempt = async (work: () => Promise<unknown>, label: string) => {
     try {
       await work();
@@ -67,24 +89,31 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<vo
   pickScreen.write(HIDE_CURSOR);
   try {
     for (;;) {
-      status = "Polling Jira...";
+      status = "Polling Jira and GitHub...";
       show([]);
-      await attempt(() => once(worker, { dryRun: true }), "Polling failed");
+      await attempt(refresh, "Polling failed");
       status = "";
       for (;;) {
-        const keys = list.available().map((row) => row.key);
+        const rows = list.pickable();
+        const keys = rows.map((row) => row.key);
         const at = Math.max(keys.indexOf(selected as string), 0);
         selected = keys.length === 0 ? null : keys[at];
         show([]);
-        const key = await readKey();
+        const key = await nextEvent();
+        if (key === "tick") {
+          await attempt(refresh, "Polling failed");
+          continue;
+        }
         notice = "";
         if (key === "quit") return;
         if (key === "refresh") break;
         if (key === "enter" && selected !== null) {
-          const chosen = selected;
-          status = `Running ${chosen}...`;
+          const chosen = rows[at];
+          const url = chosen.url;
+          status = url === undefined ? `Running ${chosen.key}...` : `Repairing ${chosen.key}...`;
           show([]);
-          await attempt(() => once(worker, { issue: chosen }), chosen);
+          const options = url === undefined ? { issue: chosen.key } : { repair: url };
+          await attempt(() => once(worker, options), chosen.key);
           break;
         }
         if (keys.length === 0) continue;

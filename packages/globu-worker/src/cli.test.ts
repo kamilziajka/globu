@@ -155,6 +155,10 @@ describe("globu-worker", () => {
     const json = captureIo(root);
     expect(await workerMain(["once", "--json"], json, env(), { ...quiet(), jira: idleJira() })).toBe(0);
     expect(JSON.parse(json.stdout.split("\n").slice(1).join("\n"))).toEqual({ runs: [], plan: [] });
+    const repair = captureIo(root);
+    const args = ["once", "--repair", "https://github.com/acme/backend/pull/9"];
+    expect(await workerMain(args, repair, env(), { ...quiet(), jira: idleJira() })).toBe(1);
+    expect(repair.stderr).toContain("set GH_TOKEN to repair pull requests");
   });
 
   it("serves a session with poll, claim, finish and release", async () => {

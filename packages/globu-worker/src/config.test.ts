@@ -48,7 +48,14 @@ describe("loadWorkerConfig", () => {
     expect(config.jira.blockedLabel).toBe("agent-blocked");
     expect(config.shards.companion).toEqual([]);
     expect(config.poll.every).toBe(60_000);
-    expect(config.limits).toEqual({ concurrent: 1, perShard: 1, timeout: 2_700_000, dayUsd: 40 });
+    expect(config.limits).toEqual({
+      concurrent: 1,
+      perShard: 1,
+      timeout: 2_700_000,
+      dayUsd: 40,
+      openPullRequests: 5,
+      repairs: 2
+    });
     expect(config.claude).toEqual({
       skill: "issue-deliver",
       maxTurns: 80,

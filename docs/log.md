@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-13
+* [globu-worker](./worker.md): following its pull requests. `jira.doneStatus`, `limits.openPullRequests` and `limits.repairs`; merge-only repair runs for conflicts and failing checks with `once --repair`; pull request rows, a background refresh and repair on Enter in `start`.
 * [globu-worker](./worker.md): `start` keeps the checks on screen as a gray line under the title, with the Jira user, GitHub login, Claude model and shards they resolved to.
 * [globu-worker](./worker.md): `github.draft` defaults to `false`, so pull requests open ready for review; `draft: true` brings drafts back. README, [plugin skills](./skills.md) and the `issue-work` and `issue-watch` skills no longer promise a draft.
 * [globu-worker](./worker.md): `start` picks with the arrow keys and shows the keys below the list, the checks run in parallel with a spinner per line on a terminal, and `globu-worker` without a command runs `start` on a terminal.

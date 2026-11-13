@@ -144,7 +144,7 @@ describe("start", () => {
     expect(last.startsWith(plain(CLEAR))).toBe(true);
     expect(last).toContain("globu-worker in auto mode on https://acme.atlassian.net, one issue at a time");
     expect(last).toContain("MR-1  First  released  the run made no commits");
-    expect(last).toContain("Spent today 0.00 of 40.00 USD.");
+    expect(last).toContain("Spent today 0.00 of 40.00 USD, 0 of 5 pull requests open.");
     expect(last).toContain("Ctrl+C stops after the current run");
     expect(last.split("\n")[1]).toBe("✔ jira Bot   ✔ claude claude-…");
   });
@@ -162,12 +162,12 @@ describe("start", () => {
     const selections = frames.map((frame) => /● (MR-\d)/.exec(frame)?.[1] ?? null);
     expect(selections).toContain("MR-2");
     expect(frames.some((frame) => frame.includes("Running MR-2..."))).toBe(true);
-    expect(frames[0]).toContain("Polling Jira...");
+    expect(frames[0]).toContain("Polling Jira and GitHub...");
     const last = frames.at(-1) as string;
     expect(last).toContain("● MR-1  First   available  backend (0 references resolved)");
     expect(last).toContain("  MR-2  Second  released   the run made no commits");
     expect(last).toContain(PICK_KEYS);
-    expect(last).toContain("Spent today 0.00 of 40.00 USD.");
+    expect(last).toContain("Spent today 0.00 of 40.00 USD, 0 of 5 pull requests open.");
   });
 
   it("ignores the arrows and Enter when nothing is available", async () => {

@@ -43,6 +43,10 @@ process.exitCode = await workerMain(process.argv.slice(2), processIo, process.en
   signals: process,
   screen: interactive ? process.stdout : undefined,
   readKey: interactive ? readKey : undefined,
+  wait: (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms).unref();
+    }),
   every: (tick, ms) => {
     const timer = setInterval(tick, ms);
     return () => clearInterval(timer);

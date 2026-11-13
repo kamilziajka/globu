@@ -9,16 +9,29 @@ import {
   type ResolvedShard,
   resolveActive,
   resolveAll,
-  resolveRefs
+  resolveRefs,
+  sameRepo
 } from "../../globu-core/src/index.js";
 import { renderBrief } from "./brief.js";
-import { type ClaudeSummary, claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
+import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
 import { type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { log, tail } from "./logger.js";
+import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
-import { isTerminal, loadRun, loadRuns, newRun, type RunRecord, runsDir, saveRun, spentOn } from "./runs.js";
+import {
+  isTerminal,
+  loadRun,
+  loadRuns,
+  newRun,
+  newRunId,
+  type RunRecord,
+  runsDir,
+  type StoredRun,
+  saveRun,
+  spentOn
+} from "./runs.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -32,8 +45,18 @@ export type WorkerDeps = {
   env: NodeJS.ProcessEnv;
   onRun?: (record: RunRecord) => void;
   onPlan?: (plan: PlanEntry[]) => void;
+  onFollowUps?: (rows: FollowUpRow[]) => void;
 };
-export type OnceOptions = { dryRun?: boolean; issue?: string };
+export type OnceOptions = { dryRun?: boolean; issue?: string; repair?: string };
+export type FollowUpRow = {
+  run: string;
+  key: string;
+  url: string;
+  number: number;
+  summary: string;
+  state: FollowUpState;
+  repairable: boolean;
+};
 export type PlanEntry = { key: string; summary: string; shard: string | null; action: string };
 export type OnceResult = { runs: RunRecord[]; plan: PlanEntry[] };
 
@@ -60,6 +83,7 @@ export type ClaimResult = {
 };
 
 const SEARCH_LIMIT = 50;
+const OPEN_FOLLOW_UPS = new Set<FollowUpState>(["in review", "conflict", "checks failing", "needs human"]);
 const ORIGIN = "origin/";
 
 function persist(deps: WorkerDeps, dir: string, record: RunRecord): void {
@@ -385,17 +409,28 @@ async function prepare(
 }
 
 async function execute(deps: WorkerDeps, prepared: Prepared): Promise<Outcome> {
-  const { config } = deps;
   const { record, dir, target, briefFile, handbackFile } = prepared;
+  const prompt = implementPrompt(deps.config.claude.skill, briefFile, handbackFile);
+  return await runClaude(deps, record, dir, target.tree, prompt);
+}
+
+async function runClaude(
+  deps: WorkerDeps,
+  record: RunRecord,
+  dir: string,
+  cwd: string,
+  prompt: string
+): Promise<Outcome> {
+  const { config } = deps;
   const streamFile = path.join(dir, "claude.jsonl");
   fs.writeFileSync(streamFile, "");
   record.state = "running";
   persist(deps, dir, record);
-  log().info("running", { run: record.id, key: record.key, tree: target.tree });
+  log().info("running", { run: record.id, key: record.key, tree: cwd });
   const result = await deps.run(
     "claude",
     claudeArgs({
-      prompt: implementPrompt(config.claude.skill, briefFile, handbackFile),
+      prompt,
       runDir: dir,
       maxTurns: config.claude.maxTurns,
       maxBudgetUsd: config.claude.maxBudgetUsd,
@@ -404,7 +439,7 @@ async function execute(deps: WorkerDeps, prepared: Prepared): Promise<Outcome> {
       pluginDir: config.claude.pluginDir
     }),
     {
-      cwd: target.tree,
+      cwd,
       env: {
         ...scrubbedEnv(deps.env),
         ...authorEnv(config),
@@ -564,7 +599,11 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     fs.rmSync(path.join(dir, "tree"), { recursive: true, force: true });
     fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
     const issue = await jira.issue(record.key);
-    if (issue.assignee === me.accountId && sameStatus(issue, config.jira.claimedStatus)) {
+    if (record.repairOf !== undefined) {
+      record.state = "released";
+      record.reason = "the worker restarted during this repair";
+      record.endedAt = deps.now().toISOString();
+    } else if (issue.assignee === me.accountId && sameStatus(issue, config.jira.claimedStatus)) {
       await release(deps, record, "the worker restarted while this issue was claimed");
     } else {
       record.state = "released";
@@ -585,6 +624,188 @@ async function githubLogin(deps: WorkerDeps): Promise<string | null> {
   if (token === null) return null;
   const result = await deps.run("gh", ["api", "user", "--jq", ".login"], { env: { ...deps.env, GH_TOKEN: token } });
   return result.code === 0 ? result.stdout.trim() : null;
+}
+
+function openRuns(home: string): StoredRun[] {
+  return loadRuns(home).filter(({ record }) => {
+    const state = record.followUp?.state ?? "open";
+    return (
+      record.state === "handed-back" && record.repairOf === undefined && (state === "open" || state === "needs-human")
+    );
+  });
+}
+
+async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[]): Promise<void> {
+  const { record, dir } = stored;
+  const merged = pulls.some((pull) => pull.state === "MERGED");
+  const urls = pulls.map((pull) => pull.url).join(" ");
+  record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
+  const done = deps.config.jira.doneStatus;
+  if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
+  await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
+  log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
+  persist(deps, dir, record);
+}
+
+export async function followUps(deps: WorkerDeps, apply: boolean): Promise<FollowUpRow[]> {
+  const token = deps.secrets.githubToken;
+  if (token === null) return [];
+  const rows: FollowUpRow[] = [];
+  for (const stored of openRuns(deps.home)) {
+    const { record } = stored;
+    const repairs = record.followUp?.repairs ?? 0;
+    const needsHuman = record.followUp?.state === "needs-human";
+    const pulls: PullRequest[] = [];
+    for (const url of record.pullRequests) pulls.push(await readPullRequest(deps, url, token));
+    for (const pull of pulls) {
+      const state = followUpState(pull, needsHuman);
+      const repairable = (state === "conflict" || state === "checks failing") && repairs < deps.config.limits.repairs;
+      const summary = pull.title.replace(`${record.key}: `, "");
+      rows.push({ run: record.id, key: record.key, url: pull.url, number: pull.number, summary, state, repairable });
+    }
+    if (apply && pulls.every((pull) => pull.state !== "OPEN")) await settle(deps, stored, pulls);
+  }
+  deps.onFollowUps?.(structuredClone(rows));
+  return rows;
+}
+
+function authorArgs(config: WorkerConfig): string[] {
+  const { author } = config.git;
+  return author === undefined ? [] : ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`];
+}
+
+function conflictedFiles(tree: string): string[] {
+  return git(["diff", "--name-only", "--diff-filter=U"], tree)
+    .split("\n")
+    .filter((line) => line !== "");
+}
+
+function repairBrief(pull: PullRequest, original: string, conflicted: string[], handbackFile: string): string {
+  const files = conflicted.length === 0 ? "none" : conflicted.map((file) => `- ${file}`).join("\n");
+  const checks = pull.failing.length === 0 ? "none" : pull.failing.map((line) => `- ${line}`).join("\n");
+  return [
+    `# Repair ${pull.url}`,
+    "",
+    `The branch \`${pull.head}\` is checked out here with \`origin/${pull.base}\` merged into it, the merge left uncommitted when it conflicted.`,
+    "Keep what the pull request set out to do and fit it to what changed on the base branch. Do not rebase, do not push.",
+    "",
+    "## Conflicted files",
+    "",
+    files,
+    "",
+    "## Failing checks",
+    "",
+    checks,
+    "",
+    "## The original run",
+    "",
+    `The brief and the handback of the run that opened this pull request are in \`${original}\` (\`brief.md\`, \`handback.md\`).`,
+    "",
+    `Write what you did to \`${handbackFile}\`.`,
+    ""
+  ].join("\n");
+}
+
+async function attemptRepair(
+  deps: WorkerDeps,
+  record: RunRecord,
+  dir: string,
+  shard: PresentShard,
+  pull: PullRequest,
+  original: string,
+  worktrees: Worktree[],
+  token: string
+): Promise<string | null> {
+  fetchShard(shard);
+  const tree = path.join(dir, "tree");
+  git(["worktree", "add", "--quiet", "-B", pull.head, tree, `${ORIGIN}${pull.head}`], shard.path);
+  worktrees.push({ shard, tree, branch: pull.head, base: `${ORIGIN}${pull.head}`, pushed: true });
+  record.worktrees = storedWorktrees(worktrees);
+  persist(deps, dir, record);
+  try {
+    git([...authorArgs(deps.config), "merge", "--no-edit", `${ORIGIN}${pull.base}`], tree);
+  } catch {}
+  const conflicted = conflictedFiles(tree);
+  if (conflicted.length > 0 || pull.checks === "failing") {
+    const failedSetup = await runSetup(deps, record, worktrees);
+    if (failedSetup !== null) return failedSetup;
+    const briefFile = path.join(dir, "brief.md");
+    const handbackFile = path.join(dir, "handback.md");
+    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
+    const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile));
+    if (outcome.timedOut) return `timed out after ${minutes(deps.config.limits.timeout)}`;
+    if (conflictedFiles(tree).length > 0) return "conflicts are left unresolved";
+    if (fs.existsSync(git(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"], tree))) {
+      return "the merge was not committed";
+    }
+  }
+  if (commitsOn(worktrees[0]) === 0) return "the repair made no commits";
+  record.state = "pushing";
+  persist(deps, dir, record);
+  git([...gitAuthArgs(shard.source.repo, { token }), "push", "--quiet", "origin", pull.head], tree);
+  return null;
+}
+
+async function noteRepair(deps: WorkerDeps, url: string, token: string, body: string, label?: string): Promise<void> {
+  const env = { ...deps.env, GH_TOKEN: token };
+  await runOrThrow(deps.run, "gh", ["pr", "comment", url, "--body", body], { env });
+  if (label !== undefined) await deps.run("gh", ["pr", "edit", url, "--add-label", label], { env });
+}
+
+export async function repairPullRequest(
+  deps: WorkerDeps,
+  url: string,
+  identity: RunRecord["identity"]
+): Promise<RunRecord> {
+  const token = deps.secrets.githubToken;
+  if (token === null) throw new Error("set GH_TOKEN to repair pull requests");
+  const original = openRuns(deps.home).find(({ record }) => record.pullRequests.includes(url));
+  if (original === undefined) throw new Error(`no open run of the worker has ${url}`);
+  const shard = registry().all.find((entry) => sameRepo(entry.source.repo, repoOf(url))) as PresentShard | undefined;
+  if (shard === undefined) throw new Error(`no registered shard has the repository of ${url}`);
+  const failures = original.record.followUp?.repairs ?? 0;
+  const attempt = loadRuns(deps.home).filter((stored) => stored.record.repairOf === original.record.id).length + 1;
+  const record = newRun(original.record.key, deps.now(), identity);
+  record.id = newRunId(`${original.record.key}-repair-${attempt}`, deps.now());
+  record.repairOf = original.record.id;
+  record.shard = shard.id;
+  record.pullRequests = [url];
+  const dir = path.join(runsDir(deps.home), record.id);
+  persist(deps, dir, record);
+  log().info("repair", { run: record.id, key: record.key, pullRequest: url, attempt });
+  const worktrees: Worktree[] = [];
+  let problem: string | null;
+  try {
+    const pull = await readPullRequest(deps, url, token);
+    record.branch = pull.head;
+    problem = await attemptRepair(deps, record, dir, shard, pull, original.dir, worktrees, token);
+  } catch (err) {
+    problem = `worker error: ${(err as Error).message}`;
+  } finally {
+    discard(dir, worktrees);
+  }
+  record.endedAt = deps.now().toISOString();
+  const run = footer(record, deps.now());
+  if (problem === null) {
+    record.state = "handed-back";
+    log().info("repaired", { run: record.id, key: record.key, pullRequest: url });
+    await noteRepair(deps, url, token, `Repaired by the Globu worker.\n\n${run}`);
+    await deps.jira.comment(record.key, `Repaired ${url}.\n\n${run}`);
+  } else {
+    record.state = "released";
+    record.reason = problem;
+    const repairs = failures + 1;
+    const exhausted = repairs >= deps.config.limits.repairs;
+    log().warn("repair failed", { run: record.id, key: record.key, pullRequest: url, reason: problem, exhausted });
+    const next = exhausted ? "It needs a person now." : "The worker will try again.";
+    const body = `The Globu worker could not repair this pull request: ${problem}. ${next}\n\n${run}`;
+    original.record.followUp = { repairs, state: exhausted ? "needs-human" : "open" };
+    persist(deps, original.dir, original.record);
+    await noteRepair(deps, url, token, body, exhausted ? "needs-human" : undefined);
+    await deps.jira.comment(record.key, body);
+  }
+  persist(deps, dir, record);
+  return record;
 }
 
 function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
@@ -614,12 +835,33 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
     io.out(`day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`);
     return { runs: [], plan: [] };
   }
+  if (options.repair !== undefined) {
+    const record = await repairPullRequest(deps, options.repair, identity);
+    io.out(describe(record));
+    return { runs: [record], plan: [] };
+  }
+  const repaired: RunRecord[] = [];
+  if (!dryRun && options.issue === undefined) {
+    const rows = await followUps(deps, true);
+    for (const row of rows.filter((entry) => entry.repairable).slice(0, config.limits.concurrent)) {
+      const record = await repairPullRequest(deps, row.url, identity);
+      io.out(describe(record));
+      repaired.push(record);
+    }
+    const open = rows.filter((row) => OPEN_FOLLOW_UPS.has(row.state)).length;
+    if (open >= config.limits.openPullRequests) {
+      log().info("holding", { open, cap: config.limits.openPullRequests });
+      io.out(`holding new issues: ${open} pull requests open, the cap is ${config.limits.openPullRequests}`);
+      return { runs: repaired, plan: [] };
+    }
+  }
+  const slots = config.limits.concurrent - repaired.length;
   const keys = options.issue === undefined ? await jira.search(config.jira.jql, SEARCH_LIMIT) : [options.issue];
   log().info("cycle", { dryRun, eligible: keys });
   const picked: Candidate[] = [];
   const plan: PlanEntry[] = [];
   for (const key of keys) {
-    if (picked.length >= config.limits.concurrent) break;
+    if (picked.length >= slots) break;
     const issue = await jira.issue(key);
     const candidate = { issue, shardId: markerShard(issue, config) };
     const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
@@ -648,7 +890,7 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
     })
   );
   for (const record of runs) io.out(describe(record));
-  return { runs, plan };
+  return { runs: [...repaired, ...runs], plan };
 }
 
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };

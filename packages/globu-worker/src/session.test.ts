@@ -29,7 +29,7 @@ describe("sessionList", () => {
       ["MR-3", "skipped", "already assigned"],
       ["MR-4", "preparing", ""]
     ]);
-    expect(list.available().map((row) => row.key)).toEqual(["MR-1"]);
+    expect(list.pickable().map((row) => row.key)).toEqual(["MR-1"]);
     expect(
       list.plan([
         {
@@ -67,6 +67,45 @@ describe("sessionList", () => {
     ]);
     expect(list.run(run("MR-8", { state: "claimed" }))[0].state).toBe("preparing");
     expect(list.run(run("MR-8", { state: "pushing" }))[0].state).toBe("pushing");
+  });
+});
+
+describe("pull request rows", () => {
+  it("lists pull requests first, makes the repairable ones pickable and reports what changed", () => {
+    const list = sessionList();
+    list.plan([
+      { key: "MR-1", summary: "First", shard: "b", action: "would claim and run in b (0 references resolved)" }
+    ]);
+    list.run(run("MR-7", { state: "handed-back", pullRequests: ["https://x/7"] }));
+    const entries = [
+      {
+        run: "r7",
+        key: "MR-7",
+        url: "https://x/7",
+        number: 7,
+        summary: "Seven",
+        state: "conflict" as const,
+        repairable: true
+      },
+      {
+        run: "r8",
+        key: "MR-8",
+        url: "https://x/8",
+        number: 8,
+        summary: "Eight",
+        state: "needs human" as const,
+        repairable: false
+      }
+    ];
+    expect(list.followUps(entries).map((row) => row.key)).toEqual(["MR-7 #7", "MR-8 #8"]);
+    expect(list.followUps(entries)).toEqual([]);
+    expect(list.rows().map((row) => row.key)).toEqual(["MR-7 #7", "MR-8 #8", "MR-1", "MR-7"]);
+    expect(list.pickable().map((row) => row.key)).toEqual(["MR-7 #7", "MR-1"]);
+    expect(list.pullRequests()[0]).toMatchObject({ state: "conflict", url: "https://x/7", pickable: true });
+    const table = plain(renderTable(list, { header: "h", footer: "f", selected: "MR-1" })).split("\n");
+    expect(table[2].startsWith("○ MR-7 #7")).toBe(true);
+    expect(table[3].startsWith("  MR-8 #8")).toBe(true);
+    expect(table[4].startsWith("● MR-1")).toBe(true);
   });
 });
 

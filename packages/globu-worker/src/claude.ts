@@ -38,6 +38,10 @@ export function implementPrompt(skill: string, briefFile: string, handbackFile: 
   return `Implement the issue described in ${briefFile} with the ${skill} skill. Write the handback to ${handbackFile}.`;
 }
 
+export function repairPrompt(briefFile: string, handbackFile: string): string {
+  return `Repair the pull request described in ${briefFile}: resolve what it lists, run the tests and commit. Write a short note on what you did to ${handbackFile}.`;
+}
+
 export type ClaudeSummary = {
   subtype: string | null;
   isError: boolean;

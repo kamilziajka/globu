@@ -4,6 +4,7 @@ import path from "node:path";
 export type RunState = "claimed" | "resolving" | "prepared" | "running" | "pushing" | "handed-back" | "released";
 export type RunDriver = "worker" | "session";
 export type StoredWorktree = { shard: string; tree: string; branch: string; base: string };
+export type FollowUp = { state: "open" | "merged" | "closed" | "needs-human"; repairs: number };
 export type RunRecord = {
   id: string;
   key: string;
@@ -20,6 +21,8 @@ export type RunRecord = {
   blocked: string[];
   reason: string | null;
   identity: { jira: string; github: string | null };
+  repairOf?: string;
+  followUp?: FollowUp;
 };
 export type StoredRun = { dir: string; record: RunRecord };
 
