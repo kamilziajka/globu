@@ -19,7 +19,7 @@ Hooks index the registered shards at session start, guard edits to shards that a
 
 A second, optional plugin, **[globu-status](mods/globu-status/README.md)**, is a Claude Code mod that shows in every session how much has happened since the knowledge was last updated, with a button that runs the update.
 
-A separate program, **[globu-worker](docs/worker.md)**, polls a Jira project for issues a person marked ready for an agent, runs Claude Code headless in a worktree of the right shard with the index and the guard in place, opens a pull request and reports back on the issue.
+A separate program, **[globu-worker](docs/worker.md)**, polls a Jira project for issues a person marked ready for an agent, runs Claude Code headless in a worktree of the right shard with the index and the guard in place, opens a pull request and reports back on the issue. It keeps following its pull requests: it repairs conflicts and failing checks by merging the base branch in, moves the issue to done once merged and holds new work while too many are open. `globu-worker start` checks Jira, GitHub and Claude side by side and lets you pick the next issue, or the next pull request to repair, from a live list in the terminal.
 
 ## Install
 
@@ -50,8 +50,11 @@ The worker is its own package, installed where the worker runs:
 
 ```sh
 npm install -g @kazet/globu-worker
-globu-worker --help
+globu-worker check
+globu-worker start
 ```
+
+`check` and `start` read `worker.yaml` and `secrets.env` from the worker's home; [the worker docs](docs/worker.md) list what goes in them.
 
 ## Try it locally
 
