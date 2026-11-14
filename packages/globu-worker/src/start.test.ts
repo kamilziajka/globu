@@ -34,7 +34,7 @@ function jira(issues: JiraIssue[], overrides: Partial<JiraClient> = {}): JiraCli
     search: async () =>
       [...store.values()]
         .filter((entry) => entry.assignee === null && !entry.labels.includes("agent-blocked"))
-        .map((entry) => entry.key),
+        .map((entry) => ({ key: entry.key, labels: entry.labels })),
     issue: async (key) => structuredClone(get(key)),
     assign: async (key, accountId) => {
       get(key).assignee = accountId;
@@ -185,7 +185,7 @@ describe("start", () => {
       search: async () => {
         polls += 1;
         if (polls === 1) throw new Error("Jira is down");
-        return ["MR-1"];
+        return [{ key: "MR-1", labels: [] }];
       },
       assign: async () => {
         throw new Error("no permission to assign");

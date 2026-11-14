@@ -44,14 +44,35 @@ const RepositorySchema = z.union([
   z.object({ field: z.string().min(1) })
 ]);
 
+export const DEFAULT_PROJECT = "default";
+
+const StatusSetting = z.union([
+  z.string().min(1),
+  z
+    .record(z.string().min(1), z.string().min(1))
+    .refine((map) => Object.keys(map).length > 0, "name at least one project or a default")
+]);
+
+export type StatusSetting = z.infer<typeof StatusSetting>;
+
+export function projectOf(key: string): string {
+  return key.split("-")[0];
+}
+
+export function statusFor(setting: StatusSetting | undefined, key: string): string | undefined {
+  if (setting === undefined || typeof setting === "string") return setting;
+  return setting[projectOf(key)] ?? setting[DEFAULT_PROJECT];
+}
+
 const WorkerConfigSchema = z.object({
   version: z.number().default(1),
   jira: z.object({
     site: z.url(),
     jql: z.string().min(1),
-    claimedStatus: z.string().min(1),
-    releasedStatus: z.string().min(1),
-    doneStatus: z.string().min(1).optional(),
+    claimedStatus: StatusSetting,
+    releasedStatus: StatusSetting,
+    doneStatus: StatusSetting.optional(),
+    priorityLabel: z.string().min(1).optional(),
     blockedLabel: z.string().min(1).default("agent-blocked"),
     blockingLinks: z.array(z.string().min(1)).default(["Blocks"]),
     repository: RepositorySchema

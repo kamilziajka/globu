@@ -112,7 +112,7 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
     links,
     transitions,
     myself: async () => ({ accountId: "bot", displayName: "Bot" }),
-    search: async () => [...store.keys()],
+    search: async () => [...store.values()].map((entry) => ({ key: entry.key, labels: entry.labels })),
     issue: async (key) => structuredClone(get(key)),
     assign: async (key, accountId) => {
       get(key).assignee = options.stolen?.includes(key) ? "someone" : accountId;
@@ -570,6 +570,48 @@ describe("once", () => {
     expect(record?.state).toBe("handed-back");
     expect(jira.transitions).toEqual(["MR-7 -> 10023"]);
     expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", statusId: "10023", assignee: "bot" });
+  });
+
+  it("picks the status of the issue's project and falls back to the default entry", async () => {
+    const world = setup();
+    world.config.jira = {
+      ...world.config.jira,
+      claimedStatus: { SB: "10023", default: "Doing" },
+      releasedStatus: { SB: "Ready for delivery", MR: "Ready for delivery" }
+    };
+    const { jira, record } = await runWith(world, [issue("SB-2")], { commit: true, handback: true });
+    expect(record?.state).toBe("handed-back");
+    expect(jira.transitions).toEqual(["SB-2 -> 10023"]);
+
+    const fallback = await runWith(world, [issue("MR-7")], { handback: true }, { githubToken: null });
+    expect(fallback.jira.transitions[0]).toBe("MR-7 -> Doing");
+  });
+
+  it("refuses to claim an issue whose project has no claimed or released status", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, claimedStatus: { SB: "Delivery" } };
+    const unclaimed = fakeJira([issue("MR-7")]);
+    await expect(once(deps(world, unclaimed, fakeRunner({}, { gh: [], claude: [] })).worker)).rejects.toThrow(
+      "jira.claimedStatus names no status for MR and has no default"
+    );
+    world.config.jira = { ...world.config.jira, claimedStatus: "Delivery", releasedStatus: { SB: "Open" } };
+    const unreleasable = fakeJira([issue("MR-7")]);
+    await expect(once(deps(world, unreleasable, fakeRunner({}, { gh: [], claude: [] })).worker)).rejects.toThrow(
+      "jira.releasedStatus names no status for MR and has no default"
+    );
+    expect(unreleasable.store.get("MR-7")?.assignee).toBeNull();
+  });
+
+  it("takes issues with the priority label first and keeps the JQL order otherwise", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, priorityLabel: "agent-next" };
+    const issues = [issue("MR-7"), issue("MR-8"), issue("MR-9", { labels: ["repo:backend", "agent-next"] })];
+    const { result } = await runWith(world, issues, { commit: true, handback: true });
+    expect(result.plan.map((entry) => `${entry.key} ${entry.action}`)).toEqual([
+      "MR-9 claimed",
+      "MR-7 skipped, backend has a run already",
+      "MR-8 skipped, backend has a run already"
+    ]);
   });
 
   it("releases an issue whose repository has no commits yet", async () => {

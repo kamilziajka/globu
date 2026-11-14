@@ -45,7 +45,14 @@ describe("jiraClient", () => {
 
   it("searches and reads issues into the worker's shape", async () => {
     const { fetchFn, calls } = fakeFetch({
-      "POST /search/jql": { body: { issues: [{ key: "MR-7" }, { key: "MR-8" }] } },
+      "POST /search/jql": {
+        body: {
+          issues: [
+            { key: "MR-7", fields: { labels: ["agent-next"] } },
+            { key: "MR-8", fields: { labels: [] } }
+          ]
+        }
+      },
       "GET /issue/MR-7?fields=*all": { body: RAW_ISSUE },
       "GET /issue/MR-9?fields=*all": {
         body: {
@@ -61,8 +68,11 @@ describe("jiraClient", () => {
       }
     });
     const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
-    expect(await client.search("project = MR", 50)).toEqual(["MR-7", "MR-8"]);
-    expect(calls[0].body).toEqual({ jql: "project = MR", maxResults: 50, fields: ["summary"] });
+    expect(await client.search("project = MR", 50)).toEqual([
+      { key: "MR-7", labels: ["agent-next"] },
+      { key: "MR-8", labels: [] }
+    ]);
+    expect(calls[0].body).toEqual({ jql: "project = MR", maxResults: 50, fields: ["summary", "labels"] });
     expect(await client.issue("MR-7")).toEqual({
       key: "MR-7",
       summary: "Add the thing",

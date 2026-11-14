@@ -315,7 +315,7 @@ describe("following pull requests", () => {
       done.configFile,
       config("").replace(
         "  releasedStatus: Ready for delivery",
-        "  releasedStatus: Ready for delivery\n  doneStatus: Done"
+        "  releasedStatus: Ready for delivery\n  doneStatus:\n    MR: Done\n    default: Closed"
       )
     );
     const merged = deps(done, { pulls: { [done.url]: pull(done.url, { state: "MERGED" }) } });
