@@ -203,6 +203,22 @@ describe("following pull requests", () => {
     expect(io.stdout).toContain("holding new issues: 1 pull requests open, the cap is 1");
   });
 
+  it("leaves repairs alone while another process holds an exclusive resource", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  exclusive: [gpu]\n" });
+    const dir = process.env.GLOBU_LOCK_DIR as string;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "gpu.lock"), JSON.stringify({ pid: process.pid, host: "render-box" }));
+    const held = `gpu (held by another process, pid ${process.pid} on render-box)`;
+    const cycle = deps(setup, { pulls: { [setup.url]: pull(setup.url) }, claude: "resolve" });
+    expect((await once(cycle.worker)).runs).toEqual([]);
+    expect(cycle.io.stdout).toContain(`repairs waiting on ${held}`);
+    const asked = deps(setup, { pulls: { [setup.url]: pull(setup.url) }, claude: "resolve" });
+    expect(await once(asked.worker, { repair: setup.url })).toEqual({ runs: [], plan: [] });
+    expect(asked.io.stdout).toContain(`repair waiting on ${held}`);
+    expect([...cycle.calls.claude, ...asked.calls.claude]).toEqual([]);
+    expect(original(setup).followUp).toBeUndefined();
+  });
+
   it("merges a branch that is only behind and pushes it without Claude", async () => {
     const setup = world({ base: "export const x = 1;\nexport const y = 1;\n", branchFile: "src/z.ts", branch: "z\n" });
     const { worker, calls } = deps(setup, { pulls: { [setup.url]: pull(setup.url) } });

@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "globu-worker"
-description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run and diagnostics commands, logs and a run step by step."
+description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run and diagnostics commands, the smoke test, exclusive resources and their lock files, logs and a run step by step."
 ---
 
 # globu-worker
@@ -86,6 +86,7 @@ limits:
   dayUsd: 40
   openPullRequests: 5
   repairs: 2
+  exclusive: [gpu]
 claude:
   skill: issue-deliver
   model: claude-sonnet-5-5
@@ -130,6 +131,7 @@ github:
 | `limits.dayUsd` | When the runs started today have cost this much, the worker keeps polling but claims nothing | 40 |
 | `limits.openPullRequests` | With this many of the worker's pull requests open, an automatic cycle claims no new issue; see [following its pull requests](#following-its-pull-requests) | 5 |
 | `limits.repairs` | Failed repairs of a pull request before it is handed to a person | 2 |
+| `limits.exclusive` | Machine-wide resources a run needs to itself, by name: letters, digits, dots, dashes and underscores. The worker takes a lock file for each before it claims or repairs and holds them until the cycle's runs end; see [exclusive resources](#exclusive-resources) | none |
 | `claude.skill` | The skill the run is told to use, the one key under `claude` that is not a flag | `issue-deliver` |
 | `claude.model` | Passed as `--model` when set | Claude Code's default |
 | `claude.pluginDir` | Passed as `--plugin-dir` when set: the plugin from a checkout of this repo, for a test of an unreleased plugin or a machine without a marketplace | the plugins installed in `CLAUDE_CONFIG_DIR` |
@@ -153,7 +155,7 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 | Command | Purpose |
 |---|---|
 | `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue, or repairs the selected pull request, and polls again, `r` polls Jira and GitHub again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. Pick mode also polls in the background every `poll.every` and redraws; it never claims or repairs without Enter, but it does move merged issues to `doneStatus`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
-| `check` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill. Jira, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache |
+| `check [--smoke]` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill. Jira, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache. `--smoke` then runs the [smoke test](#the-smoke-test) when every check passed, one more line per deliverable shard, and says it skipped it otherwise |
 | `diagnostics [--out <file>]` | A `.tar.gz` with the log files, every `run.json`, `worker.yaml` and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
 | `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how a released issue is retried and how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
 | `run` | Shard bootstrap and `check`, then `once` on the configured interval until `SIGINT` or `SIGTERM`. A failed check stops it before the first cycle. A signal during a cycle lets the cycle finish |
@@ -166,7 +168,38 @@ Every command takes `--log-level` before its name, as in `globu-worker --log-lev
 
 `start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `waiting` (with the blockers it waits on), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd` and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log. The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
 
-`once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
+`once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `waiting on gpu (held by klayboy render, pid 4242 on desk since 2026-11-14T10:00:00.000Z)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
+
+## The smoke test
+
+`check` proves each piece answers, not that they work together: a machine can pass it and fail its first run a second after the claim, on a setup command, a commit hook, the push or `gh pr create`. `check --smoke` walks that path without an issue, for each deliverable shard in turn:
+
+1. Take the [exclusive resources](#exclusive-resources), as `globu-worker smoke test`. One held by another process fails every shard's line with `waiting on <resource> (...)` and nothing else runs.
+2. Fetch the clone and add a worktree under `smoke/<shard>-<time>` in the worker's home, on a throwaway branch `<git.branchPrefix>smoke-<time>` from the default branch.
+3. Run the shard's `setup` commands there, as a run does.
+4. Make an empty commit, `globu-worker smoke test`, with the environment Claude's commits get: `git.author`, the secrets stripped, the worker's `GLOBU_HOME` and `CLAUDE_CONFIG_DIR`. The repository's commit hooks run as they would in a run.
+5. Push the branch with `GH_TOKEN` and open a pull request with `gh pr create`, always as a draft and with `github.labels`, so a missing label fails here.
+6. Close the pull request with a comment and delete the remote branch, then remove the worktree, the local branch and the directory.
+
+A failure names the step and the end of its output, and the cleanup still runs: a pull request that was opened is closed and a branch that was pushed is deleted. The smoke test never reads or writes Jira and spends nothing on Claude, but it costs one setup per deliverable shard and leaves a closed draft pull request in each repository's history. Run it once on a new machine, and again after changing `setup`, the hooks or the token.
+
+## Exclusive resources
+
+Some runs cannot share the machine with other work. On a desktop that renders on its GPU, a run's setup or commit hook can start a render while a render job already has the whole GPU. `limits.exclusive: [gpu]` makes the worker take the machine-wide lock `gpu` before it claims or repairs, hold it through setup, Claude and the push until the cycle's runs end, and claim nothing while another process holds it: the issue stays unclaimed with `waiting on gpu (...)` and the next cycle tries again. A dry run, `poll` and pick mode report the same without taking the lock. Polling, follow-ups and the day cap do not need it. `claim`, `finish` and `release` from a session never take it, since no process lives through a session's run to hold it.
+
+The locks live in `~/.globu/locks`, one file per resource named `<resource>.lock`, outside every worker's own home so that every tool on the machine finds the same file. `GLOBU_LOCK_DIR` moves the directory for every tool that honours it. A lock file is one JSON object:
+
+```json
+{"pid": 4242, "host": "desk", "holder": "klayboy render", "since": "2026-11-14T10:00:00.000Z"}
+```
+
+`pid` and `host` are required: the process that holds the lock and `os.hostname()` of its machine. `holder` and `since` are what the worker prints when it waits. Another tool takes the same lock in three steps:
+
+1. Create the file exclusively, failing when it exists (`O_CREAT | O_EXCL`, Node's `{ flag: "wx" }`, `set -o noclobber` in a POSIX shell), and write the object into it.
+2. When the file exists, read it. It is stale when its `host` is this machine and no process `pid` is running; a stale file may be deleted and the create tried again. Anything else is held, including a file that is empty or not valid JSON, which may be a lock being written.
+3. Delete the file when done, and only a file that still names your `pid`.
+
+The worker follows the same rules, so a holder that crashed, the worker included, never blocks the next one for longer than it takes to notice the pid is gone.
 
 ## From a session
 
@@ -178,7 +211,7 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 
 1. **Reconcile.** Runs left in a non-final state by a crash or a restart are closed: their worktrees are removed and, when the issue is still assigned to the worker in the claimed status, it is released with a comment saying so.
 2. **Poll.** The JQL, oldest first as the team wrote it. Up to `limits.concurrent` issues are taken, skipping an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
-3. **Claim.** Assign to the worker's own account, transition to `claimedStatus`, read the issue back. If someone else got there first, drop it without a word.
+3. **Claim.** Take the [exclusive resources](#exclusive-resources) before the first claim of the cycle; while another process holds one, claim nothing and say `waiting on <resource> (...)`. Then assign to the worker's own account, transition to `claimedStatus`, read the issue back. If someone else got there first, drop it without a word.
 4. **Find the target.** The repository marker names a shard. Not a deliverable shard: release.
 5. **Resolve.** Shard-qualified refs such as `product/docs/decisions/012-pricing.md` and code host links to files in a shard's repo are checked with the same code as `globu resolve`, after a fetch. One missing: release, with the resolver's report and its candidates in the comment, before a token is spent. Bare paths in backticks are resolved too but only reported in the brief, since they may be files the change creates.
 6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the `setup` commands of each worktree's shard; a failing one releases the issue.
@@ -186,7 +219,7 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 8. **Run.** From the worktree root: `claude -p "Implement the issue described in <brief> with the issue-deliver skill. Write the handback to <handback>." --permission-mode dontAsk --allowedTools <claude.allowedTools> --disallowedTools "Bash(git push*)" "Bash(gh *)" "Bash(curl *)" "Bash(wget *)" --add-dir <run dir> --max-turns N --max-budget-usd X --output-format stream-json --verbose`, plus `--model` and `--plugin-dir` when configured. The disallowed four keep the run from acting as the courier and are not configurable. The stream goes to `claude.jsonl`. `--add-dir` is what lets the run write the handback outside the repository.
 9. **Collect.** Cost, turns and the end state from the stream. Every failed tool call that carries the guard's `shard "<id>"` wording is recorded as a blocked write. Commits on the branch are counted.
 10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, comment on the issue with the handback and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
-11. **Clean up.** Worktrees are removed, unpushed branches deleted, the run directory kept.
+11. **Clean up.** Worktrees are removed, unpushed branches deleted, the run directory kept. Once every run of the cycle has ended, the exclusive locks are deleted.
 
 A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue, removes the label and either waits for the next poll or runs `once --issue <key>`.
 

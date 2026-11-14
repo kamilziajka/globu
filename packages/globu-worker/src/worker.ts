@@ -17,6 +17,7 @@ import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summariz
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
 import { blockersOf, type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
+import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
@@ -60,9 +61,9 @@ export type FollowUpRow = {
 export type PlanEntry = { key: string; summary: string; shard: string | null; action: string };
 export type OnceResult = { runs: RunRecord[]; plan: PlanEntry[] };
 
-type PresentShard = ResolvedShard & { path: string };
+export type PresentShard = ResolvedShard & { path: string };
 type Registry = { all: ResolvedShard[]; active: ResolvedShard[]; context: string | null };
-type Worktree = { shard: PresentShard; tree: string; branch: string; base: string; pushed: boolean };
+export type Worktree = { shard: PresentShard; tree: string; branch: string; base: string; pushed: boolean };
 type Candidate = { issue: JiraIssue; shardId: string | null };
 type Prepared = {
   record: RunRecord;
@@ -91,7 +92,7 @@ function persist(deps: WorkerDeps, dir: string, record: RunRecord): void {
   deps.onRun?.(structuredClone(record));
 }
 
-function git(args: string[], cwd: string): string {
+export function git(args: string[], cwd: string): string {
   const started = Date.now();
   try {
     const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -111,7 +112,7 @@ function git(args: string[], cwd: string): string {
   }
 }
 
-function registry(): Registry {
+export function registry(): Registry {
   const { shards: active, context } = resolveActive();
   return { all: resolveAll().shards, active, context };
 }
@@ -227,13 +228,13 @@ async function claim(deps: WorkerDeps, issue: JiraIssue, me: JiraUser): Promise<
   return after.assignee === me.accountId && sameStatus(after, config.jira.claimedStatus);
 }
 
-function fetchShard(shard: PresentShard): boolean {
+export function fetchShard(shard: PresentShard): boolean {
   const auth = gitAuthArgs(shard.source.repo);
   git([...auth, "fetch", "--quiet"], shard.path);
   return git([...auth, "ls-remote", "--heads", "origin"], shard.path) !== "";
 }
 
-function addWorktree(shard: PresentShard, tree: string, branch: string): Worktree {
+export function addWorktree(shard: PresentShard, tree: string, branch: string): Worktree {
   const base = defaultRevision(shard.path);
   if (!base.startsWith(ORIGIN)) throw new Error(`${shard.path} has no origin/HEAD, clone it again`);
   git(["worktree", "add", "--quiet", tree, "-b", branch, base], shard.path);
@@ -257,7 +258,7 @@ function commitsOn(worktree: Worktree): number {
   return Number(git(["rev-list", "--count", `${worktree.base}..HEAD`], worktree.tree));
 }
 
-function cleanup(worktrees: Worktree[]): void {
+export function cleanup(worktrees: Worktree[]): void {
   for (const worktree of worktrees) {
     try {
       git(["worktree", "remove", "--force", worktree.tree], worktree.shard.path);
@@ -270,7 +271,7 @@ function cleanup(worktrees: Worktree[]): void {
   }
 }
 
-function authorEnv(config: WorkerConfig): NodeJS.ProcessEnv {
+export function authorEnv(config: WorkerConfig): NodeJS.ProcessEnv {
   const { author } = config.git;
   if (author === undefined) return {};
   return {
@@ -281,12 +282,13 @@ function authorEnv(config: WorkerConfig): NodeJS.ProcessEnv {
   };
 }
 
-async function openPullRequest(
+export async function openPullRequest(
   deps: WorkerDeps,
   worktree: Worktree,
   title: string,
   bodyFile: string,
-  token: string
+  token: string,
+  draft = deps.config.github.draft
 ): Promise<string> {
   const { github } = deps.config;
   git(
@@ -305,14 +307,14 @@ async function openPullRequest(
     title,
     "--body-file",
     bodyFile,
-    ...(github.draft ? ["--draft"] : []),
+    ...(draft ? ["--draft"] : []),
     ...github.labels.flatMap((label) => ["--label", label])
   ];
   const output = await runOrThrow(deps.run, "gh", args, { cwd: worktree.tree, env: { ...deps.env, GH_TOKEN: token } });
   return output.split("\n").at(-1) as string;
 }
 
-async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
+export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
   const { config } = deps;
   for (const worktree of worktrees) {
     for (const command of config.setup[worktree.shard.id] ?? []) {
@@ -832,7 +834,20 @@ function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
   return `would claim and run in ${shardId} (${gating.length} references resolved)`;
 }
 
+export function workerHold(deps: WorkerDeps, holder: string): Hold {
+  return exclusiveHold(deps.config.limits.exclusive, lockDir(), holder, deps.now);
+}
+
 export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise<OnceResult> {
+  const hold = workerHold(deps, "globu-worker");
+  try {
+    return await cycle(deps, options, hold);
+  } finally {
+    hold.release();
+  }
+}
+
+async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promise<OnceResult> {
   const { config, jira, io, home } = deps;
   checkShards(config, home);
   const me = await jira.myself();
@@ -849,6 +864,11 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
     return { runs: [], plan: [] };
   }
   if (options.repair !== undefined) {
+    const held = hold.take();
+    if (held !== null) {
+      io.out(`repair waiting on ${held}`);
+      return { runs: [], plan: [] };
+    }
     const record = await repairPullRequest(deps, options.repair, identity);
     io.out(describe(record));
     return { runs: [record], plan: [] };
@@ -857,6 +877,11 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
   if (!dryRun && options.issue === undefined) {
     const rows = await followUps(deps, true);
     for (const row of rows.filter((entry) => entry.repairable).slice(0, config.limits.concurrent)) {
+      const held = hold.take();
+      if (held !== null) {
+        io.out(`repairs waiting on ${held}`);
+        break;
+      }
       const record = await repairPullRequest(deps, row.url, identity);
       io.out(describe(record));
       repaired.push(record);
@@ -888,14 +913,20 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
       log().info("waiting", { key, on: waiting.map((blocker) => blocker.key) });
     } else if (picked.filter((other) => other.shardId === candidate.shardId).length >= config.limits.perShard) {
       entry.action = `skipped, ${candidate.shardId} has a run already`;
-    } else if (dryRun) {
-      entry.action = dryRunAction(deps, candidate);
-    } else if (await claim(deps, issue, me)) {
-      entry.action = "claimed";
-      log().info("claimed", { key });
-      picked.push(candidate);
     } else {
-      entry.action = "skipped, claimed by someone else";
+      const held = dryRun ? hold.busy() : hold.take();
+      if (held !== null) {
+        entry.action = `waiting on ${held}`;
+        log().info("waiting", { key, on: held });
+      } else if (dryRun) {
+        entry.action = dryRunAction(deps, candidate);
+      } else if (await claim(deps, issue, me)) {
+        entry.action = "claimed";
+        log().info("claimed", { key });
+        picked.push(candidate);
+      } else {
+        entry.action = "skipped, claimed by someone else";
+      }
     }
   }
   deps.onPlan?.(structuredClone(plan));

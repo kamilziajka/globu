@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { RESOURCE_RE } from "./lock.js";
 
 const DURATION_RE = /^(\d+)(s|m|h)$/;
 const UNIT_MS: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000 };
@@ -70,7 +71,10 @@ const WorkerConfigSchema = z.object({
       timeout: Duration.default(45 * 60_000),
       dayUsd: z.number().positive().default(40),
       openPullRequests: z.number().int().min(1).default(5),
-      repairs: z.number().int().min(0).default(2)
+      repairs: z.number().int().min(0).default(2),
+      exclusive: z
+        .array(z.string().regex(RESOURCE_RE, "a resource name is letters, digits, dots, dashes and underscores"))
+        .default([])
     })
     .prefault({}),
   claude: z

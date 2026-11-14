@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-14
+* [globu-worker](./worker.md): `check --smoke` walks setup, a commit, a push and a draft pull request on a throwaway branch of each deliverable shard, then closes it and deletes the branch, so the first real run is not the first test of a machine. `limits.exclusive` names machine-wide resources such as `gpu` whose lock files in `~/.globu/locks` the worker holds from the first claim to the end of the cycle's runs; the lock file format is documented for other tools. README shows `check --smoke`.
 * [Development](./development.md): releasing is one `/release` run that checks the docs, bumps, runs the workflow, pushes the site's `release.json` and docs snapshot to its `main` through `scripts/release-site.ts`, waits for the deploy and records the release, resumable by running it again. The workflow tolerates a version npm accepted but does not list yet, names the by-hand command when npm refuses a package and writes release notes from commits. The drift hook reads the site's `main` instead of looking for a pull request.
 
 ## 2026-11-13

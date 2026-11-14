@@ -19,6 +19,7 @@ import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
 import { jiraClient } from "./jira.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
+import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
 import { claimIssue, finishRun, loop, once, releaseRun, type WorkerDeps } from "./worker.js";
@@ -79,18 +80,28 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
 
 const still: Every = () => () => {};
 
-async function verify(io: Io, overrides: Overrides, deps: WorkerDeps, first: Check[]): Promise<Check[]> {
+type Probe = (onCheck: (check: Check) => void) => Promise<Check[]>;
+
+async function report(io: Io, overrides: Overrides, names: string[], probe: Probe): Promise<Check[]> {
   const { screen } = overrides;
   if (screen === undefined) {
-    const checks = [...first, ...(await checkAccess(deps))];
+    const checks = await probe(() => {});
     for (const check of checks) io.out(formatCheck(check));
     return checks;
   }
-  for (const check of first) screen.write(`${checkLine(check.name, check, 0, widthOf(screen))}\n`);
-  const progress = checkProgress(screen, CHECK_NAMES, overrides.every ?? still);
-  const checks = await checkAccess(deps, progress.update);
+  const progress = checkProgress(screen, names, overrides.every ?? still);
+  const checks = await probe(progress.update);
   progress.done();
-  return [...first, ...checks];
+  return checks;
+}
+
+async function verify(io: Io, overrides: Overrides, deps: WorkerDeps, first: Check[]): Promise<Check[]> {
+  const { screen } = overrides;
+  for (const check of first) {
+    if (screen === undefined) io.out(formatCheck(check));
+    else screen.write(`${checkLine(check.name, check, 0, widthOf(screen))}\n`);
+  }
+  return [...first, ...(await report(io, overrides, CHECK_NAMES, (onCheck) => checkAccess(deps, onCheck)))];
 }
 
 const passed = (checks: Check[]) => checks.every((check) => check.ok);
@@ -141,7 +152,8 @@ export async function workerMain(
   program
     .command("check")
     .description("check the configuration, the shards, Jira, GitHub and Claude, exit 1 when one fails")
-    .action(async () => {
+    .option("--smoke", "then set up, commit, push and open and close a draft pull request in each deliverable shard")
+    .action(async (options: { smoke?: boolean }) => {
       let deps: WorkerDeps | null = null;
       const loaded = await attempt("configuration", () => {
         deps = ownDeps();
@@ -150,7 +162,17 @@ export async function workerMain(
       if (deps === null) {
         io.out(formatCheck(loaded));
         exitCode = 1;
-      } else if (!passed(await verify(io, overrides, deps, [loaded]))) exitCode = 1;
+        return;
+      }
+      const ready = deps as WorkerDeps;
+      if (!passed(await verify(io, overrides, ready, [loaded]))) {
+        exitCode = 1;
+        if (options.smoke) io.out("smoke test skipped, fix the failing checks first");
+        return;
+      }
+      if (!options.smoke) return;
+      const smoke = await report(io, overrides, smokeNames(ready), (onCheck) => smokeTest(ready, onCheck));
+      if (!passed(smoke)) exitCode = 1;
     });
 
   program
