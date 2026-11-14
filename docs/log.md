@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-14
+* [globu-worker](./worker.md): cleanup deletes links and junctions in a worktree before removing it and `check` warns about a tree a settled run left, a merged pull request's branch is deleted on the remote and in the clone, and `limits.keepRuns` bounds the run directories, with `diagnostics` packing the last 20 runs.
 * [globu-worker](./worker.md): the Windows fixes, statuses per project with `jira.priorityLabel`, `retry`, `why` and `delegate`, and `check --smoke` with `limits.exclusive` merged together. `why` walks the queue in priority order and names a held exclusive resource as a limit.
 * [globu-worker](./worker.md): `check --smoke` walks setup, a commit, a push and a draft pull request on a throwaway branch of each deliverable shard, then closes it and deletes the branch, so the first real run is not the first test of a machine. `limits.exclusive` names machine-wide resources such as `gpu` whose lock files in `~/.globu/locks` the worker holds from the first claim to the end of the cycle's runs; the lock file format is documented for other tools. README shows `check --smoke`.
 * [globu-worker](./worker.md): `retry` removes the blocked label and takes the issue, `why` says why the next cycle would or would not claim an issue, `delegate` adds the eligibility label and the repository marker, and the new `jira.eligibleLabel` key names that label. The paragraph on the `claude` keys moved below the configuration table, which it split.

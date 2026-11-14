@@ -8,7 +8,20 @@ import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
-import { checkShards, claimIssue, finishRun, loop, markerShard, once, releaseRun, type WorkerDeps } from "./worker.js";
+import {
+  addWorktree,
+  checkShards,
+  claimIssue,
+  cleanup,
+  finishRun,
+  loop,
+  markerShard,
+  once,
+  type PresentShard,
+  registry,
+  releaseRun,
+  type WorkerDeps
+} from "./worker.js";
 
 const NOW = new Date("2026-11-05T10:20:30.000Z");
 
@@ -829,6 +842,9 @@ describe("once", () => {
     for (const record of [claimed, dropped, done]) saveRun(path.join(runs, record.id), record);
     const tree = path.join(runs, claimed.id, "tree");
     git(world.clones.backend, "worktree", "add", "-q", tree, "-b", "agent/MR-5-left");
+    const outside = tempDir();
+    write(outside, "keep.txt", "keep\n");
+    fs.symlinkSync(outside, path.join(tree, "outside"), "junction");
     fs.mkdirSync(path.join(runs, claimed.id, "companions/product"), { recursive: true });
 
     const { jira, io } = await runWith(
@@ -855,8 +871,49 @@ describe("once", () => {
     });
     expect(reloaded["MR-4"].state).toBe("handed-back");
     expect(fs.existsSync(tree)).toBe(false);
+    expect(fs.existsSync(path.join(outside, "keep.txt"))).toBe(true);
     expect(git(world.clones.backend, "worktree", "list").split("\n")).toHaveLength(1);
     expect(io.stdout).toContain("MR-6\tskipped, already assigned");
+  });
+
+  it("prunes settled runs beyond limits.keepRuns at the start of a cycle", async () => {
+    const world = setup();
+    world.config.limits.keepRuns = 1;
+    const identity = { jira: "x", github: null };
+    const recent = { ...newRun("MR-1", new Date("2026-11-01T09:00:00.000Z"), identity), state: "released" as const };
+    const settled = {
+      ...newRun("MR-2", new Date("2026-10-01T09:00:00.000Z"), identity),
+      state: "handed-back" as const,
+      followUp: { state: "closed" as const, repairs: 0 }
+    };
+    for (const record of [recent, settled]) saveRun(path.join(runsDir(world.home), record.id), record);
+    write(path.join(runsDir(world.home), settled.id), "tree/node_modules/x/index.js", "export {};\n");
+    await runWith(world, [], {});
+    expect(loadRuns(world.home).map(({ record }) => record.id)).toEqual([recent.id]);
+    expect(fs.existsSync(path.join(runsDir(world.home), settled.id))).toBe(false);
+  });
+});
+
+describe("cleanup", () => {
+  it("removes the junctions in a worktree without following them, then the worktree and a tree git does not know", () => {
+    const world = setup();
+    const shard = registry().all.find((entry) => entry.id === "backend") as PresentShard;
+    const outside = tempDir();
+    write(outside, "keep.txt", "keep\n");
+    const tree = path.join(runsDir(world.home), "MR-9-x/tree");
+    const worktree = addWorktree(shard, tree, "agent/MR-9-x");
+    write(tree, "packages/a/index.js", "export {};\n");
+    fs.mkdirSync(path.join(tree, "node_modules/@acme"), { recursive: true });
+    fs.symlinkSync(path.join(tree, "packages/a"), path.join(tree, "node_modules/@acme/a"), "junction");
+    fs.symlinkSync(outside, path.join(tree, "node_modules/@acme/outside"), "junction");
+    const stray = path.join(runsDir(world.home), "MR-9-y/tree");
+    write(stray, "left.txt", "left\n");
+    cleanup([worktree, { ...worktree, tree: stray, pushed: true }]);
+    expect(fs.existsSync(tree)).toBe(false);
+    expect(fs.existsSync(stray)).toBe(false);
+    expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(git(world.clones.backend, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(() => git(world.clones.backend, "rev-parse", "--verify", "agent/MR-9-x")).toThrow();
   });
 });
 

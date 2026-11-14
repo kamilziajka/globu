@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
-import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
+import { DIAGNOSTIC_RUNS, diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { type Runner, spawnRunner } from "./exec.js";
 import { newRun, saveRun } from "./runs.js";
 
@@ -66,5 +66,18 @@ describe("diagnostics", () => {
     await expect(writeDiagnostics({ home, env: {}, run: broken, secrets: [] }, out)).rejects.toThrow(
       "tar failed: disk full"
     );
+  });
+
+  it("packs only the latest runs", async () => {
+    const home = tempDir();
+    const ids = Array.from({ length: DIAGNOSTIC_RUNS + 2 }, (_, index) => {
+      const record = newRun(`MR-${index}`, new Date(Date.UTC(2026, 10, 1 + index)), { jira: "Bot", github: null });
+      saveRun(path.join(home, "runs", record.id), record);
+      return record.id;
+    });
+    const out = path.join(tempDir(), "out.tar.gz");
+    const included = await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out);
+    const runs = included.filter((name) => name.startsWith("runs/"));
+    expect(runs).toEqual(ids.slice(2).map((id) => `runs/${id}.json`));
   });
 });

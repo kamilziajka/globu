@@ -4,11 +4,12 @@ import path from "node:path";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import type { Runner } from "./exec.js";
 import { redact } from "./logger.js";
-import { loadRuns } from "./runs.js";
+import { latestRuns, loadRuns } from "./runs.js";
 
 export type DiagnosticsDeps = { home: string; env: NodeJS.ProcessEnv; run: Runner; secrets: string[] };
 
 const TOOLS = ["claude", "git", "gh"];
+export const DIAGNOSTIC_RUNS = 20;
 
 export function diagnosticsName(now: Date): string {
   return `globu-worker-diagnostics-${now.toISOString().replace(/[-:]/g, "").slice(0, 15)}Z.tar.gz`;
@@ -43,7 +44,8 @@ export async function writeDiagnostics(deps: DiagnosticsDeps, out: string): Prom
       for (const name of fs.readdirSync(logs).sort())
         put(`logs/${name}`, fs.readFileSync(path.join(logs, name), "utf8"));
     }
-    for (const { dir, record } of loadRuns(deps.home)) {
+    const runs = latestRuns(loadRuns(deps.home), DIAGNOSTIC_RUNS).reverse();
+    for (const { dir, record } of runs) {
       put(`runs/${path.basename(dir)}.json`, `${JSON.stringify(record, null, 2)}\n`);
     }
     const config = path.join(deps.home, "worker.yaml");

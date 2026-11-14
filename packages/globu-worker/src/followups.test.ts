@@ -7,6 +7,7 @@ import { captureIo, git, initRepo, tempDir, write } from "../../testing/index.js
 import { loadWorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient } from "./jira.js";
+import { setLogger, silentLogger } from "./logger.js";
 import { loadRun, loadRuns, newRun, type RunRecord, saveRun } from "./runs.js";
 import { start } from "./start.js";
 import { type FollowUpRow, followUps, once, type WorkerDeps } from "./worker.js";
@@ -321,14 +322,60 @@ describe("following pull requests", () => {
 
   it("moves a merged issue to done, notes a closed one and only reads in a dry follow-up", async () => {
     const setup = world({ extra: "" });
+    const clone = path.join(setup.home, "work/backend");
+    git(clone, "fetch", "-q");
+    git(clone, "branch", "-q", BRANCH, `origin/${BRANCH}`);
     const { worker, jira: fake } = deps(setup, { pulls: { [setup.url]: pull(setup.url, { state: "MERGED" }) } });
     expect((await followUps(worker, false))[0].state).toBe("merged");
     expect(fake.comments).toEqual([]);
+    expect(git(setup.remote, "branch", "--list", BRANCH)).not.toBe("");
     await followUps(worker, true);
     expect(fake.transitions).toEqual([]);
     expect(fake.comments).toEqual([`Merged: ${setup.url}`]);
     expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+    expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
+    expect(git(clone, "branch", "--all", "--list", `*${BRANCH}`)).toBe("");
     expect(await followUps(worker, true)).toEqual([]);
+  });
+
+  it("deletes only the branch it created and logs a branch it cannot delete", async () => {
+    const setup = world();
+    git(setup.remote, "branch", "human/topic");
+    const theirs = `file://${setup.remote}/pull/8`;
+    const stranger = "https://github.com/acme/other/pull/3";
+    const record = original(setup);
+    record.pullRequests.push(theirs, stranger);
+    saveRun(path.join(setup.home, "runs", record.id), record);
+    const events: { msg: string; fields: Record<string, unknown> }[] = [];
+    const capture = (msg: string, fields: Record<string, unknown> = {}) => events.push({ msg, fields });
+    setLogger({ ...silentLogger, info: capture, warn: capture });
+    const merged = { state: "MERGED" };
+    const { worker } = deps(setup, {
+      pulls: {
+        [setup.url]: pull(setup.url, merged),
+        [theirs]: pull(theirs, { ...merged, headRefName: "human/topic" }),
+        [stranger]: pull(stranger, merged)
+      }
+    });
+    try {
+      await followUps(worker, true);
+    } finally {
+      setLogger(silentLogger);
+    }
+    expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
+    expect(git(setup.remote, "branch", "--list", "human/topic")).toContain("human/topic");
+    expect(events.filter((event) => event.msg.includes("branch"))).toEqual([
+      { msg: "branch deleted", fields: { run: record.id, branch: BRANCH, pullRequest: setup.url } },
+      {
+        msg: "deleting the branch failed",
+        fields: {
+          run: record.id,
+          branch: BRANCH,
+          pullRequest: stranger,
+          error: `no registered shard has the repository of ${stranger}`
+        }
+      }
+    ]);
   });
 
   it("moves a merged issue to the done status when one is set", async () => {
@@ -340,6 +387,7 @@ describe("following pull requests", () => {
         "  releasedStatus: Ready for delivery\n  doneStatus:\n    MR: Done\n    default: Closed"
       )
     );
+    git(done.remote, "branch", "-D", BRANCH);
     const merged = deps(done, { pulls: { [done.url]: pull(done.url, { state: "MERGED" }) } });
     await followUps(merged.worker, true);
     expect(merged.jira.transitions).toEqual(["MR-7 -> Done"]);

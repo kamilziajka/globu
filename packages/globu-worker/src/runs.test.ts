@@ -1,8 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { tempDir } from "../../testing/index.js";
-import { isTerminal, loadRun, loadRuns, newRun, newRunId, runsDir, saveRun, spentOn } from "./runs.js";
+import { tempDir, write } from "../../testing/index.js";
+import {
+  followingUp,
+  isTerminal,
+  latestRuns,
+  loadRun,
+  loadRuns,
+  newRun,
+  newRunId,
+  pruneRuns,
+  type RunRecord,
+  removeTree,
+  runsDir,
+  saveRun,
+  spentOn
+} from "./runs.js";
 
 const NOW = new Date("2026-11-05T10:20:30.123Z");
 const IDENTITY = { jira: "Bot (a1)", github: null };
@@ -48,5 +62,56 @@ describe("run records", () => {
       { dir: "c", record: { ...newRun("MR-9", new Date("2026-11-04T23:59:00Z"), IDENTITY), costUsd: 10 } }
     ];
     expect(spentOn(runs, NOW)).toBe(3.5);
+  });
+
+  it("removes links and junctions under a tree without following them", () => {
+    const outside = tempDir();
+    write(outside, "keep.txt", "keep\n");
+    const tree = path.join(tempDir(), "tree");
+    write(tree, "packages/a/index.js", "export {};\n");
+    fs.mkdirSync(path.join(tree, "node_modules/@acme"), { recursive: true });
+    fs.symlinkSync(path.join(tree, "packages/a"), path.join(tree, "node_modules/@acme/a"), "junction");
+    fs.symlinkSync(outside, path.join(tree, "node_modules/@acme/outside"), "junction");
+    fs.symlinkSync(path.join(outside, "keep.txt"), path.join(tree, "keep.txt"));
+    removeTree(tree);
+    expect(fs.existsSync(tree)).toBe(false);
+    expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("keep\n");
+    removeTree(tree);
+  });
+
+  it("follows up a handed-back run until its pull requests are settled", () => {
+    const record = { ...newRun("MR-7", NOW, IDENTITY), state: "handed-back" as const };
+    expect(followingUp(record)).toBe(true);
+    expect(followingUp({ ...record, followUp: { state: "needs-human", repairs: 2 } })).toBe(true);
+    expect(followingUp({ ...record, followUp: { state: "merged", repairs: 0 } })).toBe(false);
+    expect(followingUp({ ...record, repairOf: "MR-7-x" })).toBe(false);
+    expect(followingUp({ ...record, state: "released" })).toBe(false);
+  });
+
+  it("keeps the newest runs, open follow-ups with their repairs, unfinished runs and today's runs", () => {
+    const home = tempDir();
+    const at = (key: string, day: number, patch: Partial<RunRecord> = {}): RunRecord => {
+      const record = { ...newRun(key, new Date(Date.UTC(2026, 9, day, 9)), IDENTITY), ...patch };
+      saveRun(path.join(runsDir(home), record.id), record);
+      write(path.join(runsDir(home), record.id), "claude.jsonl", "{}\n");
+      return record;
+    };
+    const merged = { state: "handed-back" as const, followUp: { state: "merged" as const, repairs: 0 } };
+    const old = at("MR-1", 1, merged);
+    const open = at("MR-2", 2, { state: "handed-back" });
+    const repair = at("MR-2", 3, { state: "released", repairOf: open.id });
+    const running = at("MR-3", 4, { state: "running" });
+    const released = at("MR-4", 6, { state: "released" });
+    const today = at("MR-5", 5, { state: "released", startedAt: NOW.toISOString() });
+    const newest = at("MR-6", 7, merged);
+    expect(latestRuns(loadRuns(home), 2).map(({ record }) => record.id)).toEqual([today.id, newest.id]);
+    expect(pruneRuns(home, 2, NOW).sort()).toEqual([old.id, released.id].sort());
+    expect(
+      loadRuns(home)
+        .map(({ record }) => record.id)
+        .sort()
+    ).toEqual([open.id, repair.id, running.id, today.id, newest.id].sort());
+    expect(fs.existsSync(path.join(runsDir(home), old.id))).toBe(false);
+    expect(pruneRuns(home, 2, NOW)).toEqual([]);
   });
 });

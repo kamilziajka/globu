@@ -101,3 +101,49 @@ export function spentOn(runs: StoredRun[], day: Date): number {
     .filter(({ record }) => record.startedAt.startsWith(prefix))
     .reduce((total, { record }) => total + record.costUsd, 0);
 }
+
+export function followingUp(record: RunRecord): boolean {
+  const state = record.followUp?.state ?? "open";
+  return (
+    record.state === "handed-back" && record.repairOf === undefined && (state === "open" || state === "needs-human")
+  );
+}
+
+export function latestRuns(runs: StoredRun[], count: number): StoredRun[] {
+  return [...runs].sort((a, b) => b.record.startedAt.localeCompare(a.record.startedAt)).slice(0, count);
+}
+
+export function removeLinks(dir: string): void {
+  if (!fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir)) {
+    const entry = path.join(dir, name);
+    const stat = fs.lstatSync(entry);
+    if (stat.isSymbolicLink()) fs.unlinkSync(entry);
+    else if (stat.isDirectory()) removeLinks(entry);
+  }
+}
+
+export function removeTree(dir: string): void {
+  removeLinks(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+export function prunableRuns(runs: StoredRun[], keep: number, now: Date): StoredRun[] {
+  const open = new Set(runs.filter(({ record }) => followingUp(record)).map(({ record }) => record.id));
+  const today = now.toISOString().slice(0, 10);
+  const kept = new Set(latestRuns(runs, keep).map(({ record }) => record.id));
+  return runs.filter(
+    ({ record }) =>
+      !kept.has(record.id) &&
+      isTerminal(record.state) &&
+      !open.has(record.id) &&
+      !open.has(record.repairOf ?? "") &&
+      !record.startedAt.startsWith(today)
+  );
+}
+
+export function pruneRuns(home: string, keep: number, now: Date): string[] {
+  const pruned = prunableRuns(loadRuns(home), keep, now);
+  for (const { dir } of pruned) removeTree(dir);
+  return pruned.map(({ record }) => record.id);
+}

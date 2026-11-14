@@ -94,6 +94,7 @@ const WorkerConfigSchema = z.object({
       dayUsd: z.number().positive().default(40),
       openPullRequests: z.number().int().min(1).default(5),
       repairs: z.number().int().min(0).default(2),
+      keepRuns: z.number().int().min(1).default(100),
       exclusive: z
         .array(z.string().regex(RESOURCE_RE, "a resource name is letters, digits, dots, dashes and underscores"))
         .default([])

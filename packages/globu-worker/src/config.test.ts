@@ -59,6 +59,7 @@ describe("loadWorkerConfig", () => {
       dayUsd: 40,
       openPullRequests: 5,
       repairs: 2,
+      keepRuns: 100,
       exclusive: []
     });
     expect(config.claude).toEqual({

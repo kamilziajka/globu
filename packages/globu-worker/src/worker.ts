@@ -22,12 +22,16 @@ import { log, tail } from "./logger.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
+  followingUp,
   isTerminal,
   loadRun,
   loadRuns,
   newRun,
   newRunId,
+  pruneRuns,
   type RunRecord,
+  removeLinks,
+  removeTree,
   runsDir,
   type StoredRun,
   saveRun,
@@ -279,16 +283,22 @@ function commitsOn(worktree: Worktree): number {
   return Number(git(["rev-list", "--count", `${worktree.base}..HEAD`], worktree.tree));
 }
 
+function attemptGit(args: string[], cwd: string): boolean {
+  try {
+    git(args, cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function cleanup(worktrees: Worktree[]): void {
   for (const worktree of worktrees) {
-    try {
-      git(["worktree", "remove", "--force", worktree.tree], worktree.shard.path);
-    } catch {}
-    if (!worktree.pushed) {
-      try {
-        git(["branch", "-D", worktree.branch], worktree.shard.path);
-      } catch {}
-    }
+    removeLinks(worktree.tree);
+    const removed = attemptGit(["worktree", "remove", "--force", worktree.tree], worktree.shard.path);
+    fs.rmSync(worktree.tree, { recursive: true, force: true });
+    if (!removed) attemptGit(["worktree", "prune"], worktree.shard.path);
+    if (!worktree.pushed) attemptGit(["branch", "-D", worktree.branch], worktree.shard.path);
   }
 }
 
@@ -656,8 +666,8 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
   const stale = loadRuns(deps.home).filter(({ record }) => !isTerminal(record.state));
   if (stale.length === 0) return;
   for (const { dir, record } of stale) {
-    fs.rmSync(path.join(dir, "tree"), { recursive: true, force: true });
-    fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
+    removeTree(path.join(dir, "tree"));
+    removeTree(path.join(dir, "companions"));
     const issue = await jira.issue(record.key);
     if (record.repairOf !== undefined) {
       record.state = "released";
@@ -687,15 +697,35 @@ async function githubLogin(deps: WorkerDeps): Promise<string | null> {
 }
 
 function openRuns(home: string): StoredRun[] {
-  return loadRuns(home).filter(({ record }) => {
-    const state = record.followUp?.state ?? "open";
-    return (
-      record.state === "handed-back" && record.repairOf === undefined && (state === "open" || state === "needs-human")
-    );
-  });
+  return loadRuns(home).filter(({ record }) => followingUp(record));
 }
 
-async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[]): Promise<void> {
+function deleteBranch(record: RunRecord, pull: PullRequest, token: string): void {
+  if (pull.state !== "MERGED" || pull.head !== record.branch) return;
+  const branch = pull.head;
+  try {
+    const shard = registry().all.find((entry) => sameRepo(entry.source.repo, repoOf(pull.url))) as
+      | PresentShard
+      | undefined;
+    if (shard === undefined) throw new Error(`no registered shard has the repository of ${pull.url}`);
+    const auth = gitAuthArgs(shard.source.repo, { token });
+    git([...auth, "fetch", "--quiet", "--prune"], shard.path);
+    if (git(["branch", "--remotes", "--list", `origin/${branch}`], shard.path) !== "") {
+      git([...auth, "push", "--quiet", "origin", "--delete", branch], shard.path);
+    }
+    if (git(["branch", "--list", branch], shard.path) !== "") git(["branch", "-D", branch], shard.path);
+    log().info("branch deleted", { run: record.id, branch, pullRequest: pull.url });
+  } catch (err) {
+    log().warn("deleting the branch failed", {
+      run: record.id,
+      branch,
+      pullRequest: pull.url,
+      error: tail((err as Error).message)
+    });
+  }
+}
+
+async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[], token: string): Promise<void> {
   const { record, dir } = stored;
   const merged = pulls.some((pull) => pull.state === "MERGED");
   const urls = pulls.map((pull) => pull.url).join(" ");
@@ -704,6 +734,7 @@ async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[])
   if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
   await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
   log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
+  for (const pull of pulls) deleteBranch(record, pull, token);
   persist(deps, dir, record);
 }
 
@@ -723,7 +754,7 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
       const summary = pull.title.replace(`${record.key}: `, "");
       rows.push({ run: record.id, key: record.key, url: pull.url, number: pull.number, summary, state, repairable });
     }
-    if (apply && pulls.every((pull) => pull.state !== "OPEN")) await settle(deps, stored, pulls);
+    if (apply && pulls.every((pull) => pull.state !== "OPEN")) await settle(deps, stored, pulls, token);
   }
   deps.onFollowUps?.(structuredClone(rows));
   return rows;
@@ -902,6 +933,8 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   const dryRun = options.dryRun === true;
   if (!dryRun) {
     await reconcile(deps, me);
+    const pruned = pruneRuns(home, config.limits.keepRuns, deps.now());
+    if (pruned.length > 0) log().info("pruned", { runs: pruned, keep: config.limits.keepRuns });
     identity.github = await githubLogin(deps);
   }
   const spent = spentOn(loadRuns(home), deps.now());

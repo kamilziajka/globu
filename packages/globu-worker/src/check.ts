@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
 import { scrubbedEnv, type WorkerConfig } from "./config.js";
 import { notStarted } from "./exec.js";
 import { log } from "./logger.js";
+import { isTerminal, loadRuns } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
 import { checkShards, type WorkerDeps } from "./worker.js";
 
@@ -99,10 +102,20 @@ async function claudeProbe(deps: WorkerDeps): Promise<Found> {
   };
 }
 
+function leftoverTrees(home: string): string[] {
+  const trees = loadRuns(home)
+    .filter(({ dir, record }) => isTerminal(record.state) && fs.existsSync(path.join(dir, "tree")))
+    .map(({ dir }) => path.join(dir, "tree"));
+  if (trees.length === 0) return [];
+  const note = `settled runs left their worktree behind, delete ${trees.join(" and ")}`;
+  log().warn("leftover trees", { trees });
+  return [note];
+}
+
 function shardsProbe(deps: WorkerDeps): Found {
   checkShards(deps.config, deps.home);
   const ids = [...deps.config.shards.deliverable, ...deps.config.shards.companion].join(", ");
-  return { detail: ids, short: ids };
+  return { detail: [ids, ...leftoverTrees(deps.home)].join(", "), short: ids };
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;

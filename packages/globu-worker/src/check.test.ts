@@ -7,6 +7,7 @@ import { checkAccess, checksLine, formatCheck } from "./check.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner, RunResult } from "./exec.js";
 import type { JiraClient } from "./jira.js";
+import { newRun, runsDir, saveRun } from "./runs.js";
 import type { WorkerDeps } from "./worker.js";
 
 const CONFIG = `
@@ -262,5 +263,20 @@ describe("checkAccess", () => {
     expect(detail(await checkAccess(shellless.worker), "setup")).toBe(
       "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"
     );
+  });
+
+  it("warns about the worktree a settled run left behind", async () => {
+    const setup = world();
+    const identity = { jira: "Bot", github: null };
+    const left = { ...newRun("MR-1", new Date("2026-11-13T10:00:00Z"), identity), state: "released" as const };
+    const prepared = { ...newRun("MR-2", new Date("2026-11-13T11:00:00Z"), identity), state: "prepared" as const };
+    for (const record of [left, prepared]) {
+      saveRun(path.join(runsDir(setup.home), record.id), record);
+      fs.mkdirSync(path.join(runsDir(setup.home), record.id, "tree"));
+    }
+    const checks = await checkAccess(deps(setup).worker);
+    const tree = path.join(runsDir(setup.home), left.id, "tree");
+    expect(checks[0]).toMatchObject({ name: "shards", ok: true, short: "backend" });
+    expect(detail(checks, "shards")).toBe(`backend, settled runs left their worktree behind, delete ${tree}`);
   });
 });
