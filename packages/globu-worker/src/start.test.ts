@@ -7,6 +7,7 @@ import { loadWorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { type Key, PICK_KEYS, parseMode, type ReadKey, start } from "./start.js";
+import { recordUsage } from "./subscription.js";
 import { CLEAR, HIDE_CURSOR, SHOW_CURSOR } from "./tui.js";
 import { once, type WorkerDeps } from "./worker.js";
 
@@ -149,6 +150,13 @@ describe("start", () => {
     expect(last).toContain("Spent today 0.00 of 40.00 USD, 0 of 5 pull requests open.");
     expect(last).toContain("Ctrl+C stops after the current run");
     expect(last.split("\n")[1]).toBe("✔ jira Bot   ✔ claude claude-…");
+
+    const window = { window: "five_hour", utilization: 0.15, resetsAt: "2026-11-13T14:00:00.000Z" };
+    recordUsage(worker.home, [window, { ...window, window: "seven_day", utilization: 0.6 }], NOW);
+    await start(worker, { mode: "auto", screen: view, untilStopped: async (inner) => void (await once(inner)) });
+    expect(plain(view.frames.at(-1) as string)).toContain(
+      "Spent today 0.00 of 40.00 USD, subscription five-hour 15 %, seven-day 60 % of 70 %, 0 of 5 pull requests open."
+    );
   });
 
   it("in pick mode moves the selection with the arrows, runs the selected issue on Enter and polls again", async () => {

@@ -19,6 +19,7 @@ import { notStarted, type Runner, runOrThrow } from "./exec.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
+import { issueUrl, type NotifyEvent, notify } from "./notify.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
@@ -38,6 +39,7 @@ import {
   spentOn
 } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
+import { currentUsage, holdReason, overLimit, recordUsage } from "./subscription.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -229,6 +231,10 @@ function footer(record: RunRecord, now: Date): string {
   return lines.join("\n");
 }
 
+async function tell(deps: WorkerDeps, record: RunRecord, event: NotifyEvent, url: string, message: string) {
+  if (record.driver === "worker") await notify(deps, { event, key: record.key, url, message });
+}
+
 async function release(deps: WorkerDeps, record: RunRecord, reason: string): Promise<RunRecord> {
   const { jira, config, io } = deps;
   record.state = "released";
@@ -249,6 +255,9 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
   } catch (err) {
     log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
     io.err(`${record.key}: releasing failed: ${(err as Error).message}`);
+  }
+  if (!record.environment) {
+    await tell(deps, record, "released", issueUrl(config, record.key), `${record.key} released: ${oneLine(reason)}`);
   }
   return record;
 }
@@ -530,6 +539,7 @@ async function runClaude(
   record.denied = summary.denied;
   record.durationMs = summary.durationMs;
   record.apiMs = summary.apiMs;
+  if (summary.usage.length > 0) recordUsage(deps.home, summary.usage, deps.now());
   return {
     timedOut: result.timedOut,
     code: result.code,
@@ -576,6 +586,8 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   record.state = "handed-back";
   record.endedAt = deps.now().toISOString();
   log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests });
+  const message = `${record.key} handed back: ${record.pullRequests.join(" ")}`;
+  await tell(deps, record, "handed-back", record.pullRequests[0], message);
   return record;
 }
 
@@ -910,6 +922,7 @@ export async function repairPullRequest(
     persist(deps, original.dir, original.record);
     await noteRepair(deps, url, token, body, exhausted ? "needs-human" : undefined);
     await deps.jira.comment(record.key, body);
+    if (exhausted) await tell(deps, record, "needs-human", url, `${record.key} needs a person: ${url}`);
   }
   persist(deps, dir, record);
   return record;
@@ -955,6 +968,13 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   if (spent >= config.limits.dayUsd) {
     log().warn("day cap reached", { capUsd: config.limits.dayUsd, spentUsd: spent });
     io.out(`day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`);
+    return { runs: [], plan: [] };
+  }
+  const limit = config.limits.subscription;
+  const usage = overLimit(currentUsage(home, deps.env, deps.now()), limit);
+  if (usage !== null) {
+    log().warn("subscription limit reached", { ...usage, limit });
+    io.out(`subscription limit reached: ${holdReason(usage, limit)}, claiming nothing`);
     return { runs: [], plan: [] };
   }
   if (options.repair !== undefined) {
@@ -1048,6 +1068,8 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<void
       if (broken !== undefined) {
         log().error("stopping", { run: broken.id, reason: broken.reason });
         deps.io.err(`globu-worker: stopping, the machine needs fixing first: ${broken.reason}`);
+        const message = `globu-worker stopped, the machine needs fixing first: ${oneLine(broken.reason as string)}`;
+        await notify(deps, { event: "stopped", key: broken.key, url: issueUrl(deps.config, broken.key), message });
         return;
       }
     } catch (err) {

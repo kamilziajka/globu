@@ -90,7 +90,8 @@ describe("summarizeStream", () => {
       failedTools: ["Permission to use Bash denied", ""],
       denied: ["Bash: cat a.txt | wc -l", 'Write: {"file_path":"/etc/x"}', "Task: {}"],
       durationMs: 798_000,
-      apiMs: 228_000
+      apiMs: 228_000,
+      usage: []
     });
   });
 
@@ -105,8 +106,45 @@ describe("summarizeStream", () => {
       failedTools: [],
       denied: [],
       durationMs: 0,
-      apiMs: 0
+      apiMs: 0,
+      usage: []
     });
     expect(summarizeStream("").turns).toBe(0);
+  });
+
+  it("keeps the subscription windows of the latest rate limit event that has any", () => {
+    const event = (info?: Record<string, unknown>) =>
+      JSON.stringify({ type: "rate_limit_event", rate_limit_info: info, uuid: "u", session_id: "s" });
+    const recorded = {
+      status: "allowed",
+      resetsAt: 1794619800,
+      rateLimitType: "five_hour",
+      overageStatus: "rejected",
+      overageDisabledReason: "org_level_disabled",
+      isUsingOverage: false,
+      unifiedWindows: {
+        five_hour: { utilization: 0.08, resetsAt: 1794619800, status: "allowed" },
+        seven_day: { utilization: 0.6, resetsAt: 1794708000, status: "allowed" },
+        seven_day_opus: { resetsAt: 1794708000 },
+        overage: { utilization: 0.1 }
+      }
+    };
+    const stream = [
+      event({ status: "allowed", rateLimitType: "five_hour", utilization: 0.5, resetsAt: 1 }),
+      event(recorded)
+    ];
+    expect(summarizeStream([...stream, event(), event({ status: "allowed" })].join("\n")).usage).toEqual([
+      { window: "five_hour", utilization: 0.08, resetsAt: "2026-11-14T01:30:00.000Z" },
+      { window: "seven_day", utilization: 0.6, resetsAt: "2026-11-15T02:00:00.000Z" }
+    ]);
+    const rejected = event({ status: "rejected", rateLimitType: "five_hour", resetsAt: 1794619800 });
+    expect(summarizeStream(rejected).usage).toEqual([
+      { window: "five_hour", utilization: 1, resetsAt: "2026-11-14T01:30:00.000Z" }
+    ]);
+    const windowRejected = event({
+      status: "allowed",
+      unifiedWindows: { seven_day: { status: "rejected", resetsAt: 1794708000 } }
+    });
+    expect(summarizeStream(windowRejected).usage[0].utilization).toBe(1);
   });
 });

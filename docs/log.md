@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-14
+* [globu-worker](./worker.md): the worker reads the `rate_limit_event` lines of the `claude -p` stream, keeps the latest figure per subscription window in `subscription.json` and claims and repairs nothing while a window is at `limits.subscription` (70 % by default) until it resets; `why` and the `start` footer show it. `notify.command` runs on `handed-back`, `released`, `needs-human` and `stopped`, with [ntfy and Home Assistant examples](./worker.md#notifications).
 * [globu-worker](./worker.md): cleanup deletes links and junctions in a worktree before removing it and `check` warns about a tree a settled run left, a merged pull request's branch is deleted on the remote and in the clone, and `limits.keepRuns` bounds the run directories, with `diagnostics` packing the last 20 runs.
 * [globu-worker](./worker.md): the brief's issue text is Markdown converted from the Atlassian Document Format of Jira's v3 API instead of v2 wiki markup, so paths written as code in Jira reach the brief in backticks and are found as references.
 * [globu-worker](./worker.md) after the KLAYBOY-108 records: `run.json` and the footer carry the denied tool calls (`permission_denials`) and the time in the model API; the default allowlist adds `git show`, `ls`, `cat`, `head`, `tail` and `wc`, and `git stash` joins the fixed disallowed list; the brief gives the status, labels and linked issues, the Bash rules, and sums the worker's own release comments up as earlier attempts; `check` says when the model is the config dir's default.

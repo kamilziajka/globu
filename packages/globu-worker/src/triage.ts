@@ -1,4 +1,5 @@
 import { loadRuns, type StoredRun, spentOn } from "./runs.js";
+import { currentUsage, holdReason, overLimit } from "./subscription.js";
 import {
   checkShards,
   dryRunAction,
@@ -14,7 +15,10 @@ import {
   workerHold
 } from "./worker.js";
 
-export type Hold = { limit: "dayUsd" | "exclusive" | "openPullRequests" | "concurrent" | "perShard"; detail: string };
+export type Hold = {
+  limit: "dayUsd" | "subscription" | "exclusive" | "openPullRequests" | "concurrent" | "perShard";
+  detail: string;
+};
 export type WhyReport = {
   key: string;
   summary: string;
@@ -63,6 +67,8 @@ async function holds(deps: WorkerDeps, key: string, shard: string | null, matche
       detail: `the day cap of ${limits.dayUsd} USD is reached, ${spent.toFixed(2)} spent`
     });
   }
+  const usage = overLimit(currentUsage(deps.home, deps.env, deps.now()), limits.subscription);
+  if (usage !== null) found.push({ limit: "subscription", detail: holdReason(usage, limits.subscription) });
   const busy = workerHold(deps, "globu-worker why").busy();
   if (busy !== null) found.push({ limit: "exclusive", detail: `waiting on ${busy}` });
   const rows = await followUps(deps, false);

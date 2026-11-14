@@ -1,4 +1,5 @@
 import { DENIED_TOOLS } from "./config.js";
+import type { UsageWindow } from "./subscription.js";
 
 export type ClaudeInvocation = {
   prompt: string;
@@ -53,8 +54,11 @@ export type ClaudeSummary = {
   denied: string[];
   durationMs: number;
   apiMs: number;
+  usage: UsageWindow[];
 };
 
+type RateWindow = { status?: string; utilization?: number; resetsAt?: number };
+type RateLimitInfo = RateWindow & { rateLimitType?: string; unifiedWindows?: Record<string, RateWindow> };
 type Denial = { tool_name: string; tool_input?: Record<string, unknown> };
 type ToolResult = { type: string; content?: unknown; is_error?: boolean };
 type StreamEvent = {
@@ -67,6 +71,7 @@ type StreamEvent = {
   duration_ms?: number;
   duration_api_ms?: number;
   permission_denials?: Denial[];
+  rate_limit_info?: RateLimitInfo;
   message?: { content?: ToolResult[] };
 };
 
@@ -85,6 +90,16 @@ function deniedCall(denial: Denial): string {
   const input = denial.tool_input ?? {};
   const what = typeof input.command === "string" ? input.command : JSON.stringify(input);
   return `${denial.tool_name}: ${what}`;
+}
+
+function usageOf(info: RateLimitInfo): UsageWindow[] {
+  const named = info.unifiedWindows ?? (info.rateLimitType === undefined ? {} : { [info.rateLimitType]: info });
+  return Object.entries(named).flatMap(([window, figure]) => {
+    const rejected = (figure.status ?? info.status) === "rejected";
+    if (figure.resetsAt === undefined || (figure.utilization === undefined && !rejected)) return [];
+    const utilization = rejected ? 1 : (figure.utilization as number);
+    return [{ window, utilization, resetsAt: new Date(figure.resetsAt * 1000).toISOString() }];
+  });
 }
 
 function parseLine(line: string): StreamEvent | null {
@@ -106,7 +121,8 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     failedTools: [],
     denied: [],
     durationMs: 0,
-    apiMs: 0
+    apiMs: 0,
+    usage: []
   };
   for (const line of jsonl.split("\n")) {
     const event = parseLine(line);
@@ -120,6 +136,11 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
       summary.denied = (event.permission_denials ?? []).map(deniedCall);
       summary.durationMs = event.duration_ms ?? 0;
       summary.apiMs = event.duration_api_ms ?? 0;
+      continue;
+    }
+    if (event.type === "rate_limit_event") {
+      const usage = usageOf(event.rate_limit_info ?? { status: "allowed" });
+      if (usage.length > 0) summary.usage = usage;
       continue;
     }
     for (const part of event.message?.content ?? []) {

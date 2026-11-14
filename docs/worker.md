@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "globu-worker"
-description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run, retry, why, delegate and diagnostics commands, the smoke test, exclusive resources and their lock files, logs and a run step by step."
+description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run, retry, why, delegate and diagnostics commands, the smoke test, exclusive resources and their lock files, the subscription limit, notifications, logs and a run step by step."
 ---
 
 # globu-worker
@@ -22,6 +22,7 @@ The worker never uses the `~/.globu` and `~/.claude` of the person on the machin
 | `worker.yaml` | The configuration below |
 | `secrets.env` | Optional secrets as `KEY=value` lines, see [secrets](#secrets) |
 | `work/<id>` | Editable clones of the shards the worker delivers to, by convention, and where `shards.repos` clones them |
+| `subscription.json` | The latest subscription figures from the runs' streams, see [the subscription limit](#the-subscription-limit) |
 | `logs` | One log file per day, see [logs and diagnostics](#logs-and-diagnostics) |
 | `runs/<run-id>` | One directory per run: `run.json`, `brief.md`, `handback.md`, `claude.jsonl` and the pull request bodies. The worktree lives here while the run lasts. Only the newest `limits.keepRuns` runs and the ones still in use are kept, see [a run](#a-run) |
 
@@ -91,6 +92,7 @@ limits:
   openPullRequests: 5
   repairs: 2
   keepRuns: 100
+  subscription: 70
   exclusive: [gpu]
 claude:
   skill: issue-deliver
@@ -114,6 +116,11 @@ git:
 github:
   draft: false
   labels: [agent]
+notify:
+  command: >-
+    curl -s -H "Title: $GLOBU_ISSUE $GLOBU_EVENT" -H "Click: $GLOBU_URL"
+    -d "$GLOBU_MESSAGE" https://ntfy.sh/acme-agent
+  timeout: 30s
 ```
 
 | Key | Meaning | Default |
@@ -139,6 +146,7 @@ github:
 | `limits.openPullRequests` | With this many of the worker's pull requests open, an automatic cycle claims no new issue; see [following its pull requests](#following-its-pull-requests) | 5 |
 | `limits.repairs` | Failed repairs of a pull request before it is handed to a person | 2 |
 | `limits.keepRuns` | How many run directories to keep, newest first by start time. At the start of every cycle the worker deletes the older ones that are settled. A run that is not in a final state, a handed-back run whose pull requests are still followed, its repairs and every run started today are always kept, the last so that the day cap still counts them. A merged run that is pruned no longer resolves the issues it [blocks](#issues-that-wait), so set `jira.doneStatus` when chains are longer than the history | 100 |
+| `limits.subscription` | A percentage: when a window of the Claude subscription is used this much, the worker keeps polling but claims and repairs nothing until that window resets. See [the subscription limit](#the-subscription-limit) | 70 |
 | `limits.exclusive` | Machine-wide resources a run needs to itself, by name: letters, digits, dots, dashes and underscores. The worker takes a lock file for each before it claims or repairs and holds them until the cycle's runs end; see [exclusive resources](#exclusive-resources) | none |
 | `claude.skill` | The skill the run is told to use, the one key under `claude` that is not a flag | `issue-deliver` |
 | `claude.model` | Passed as `--model` when set | Claude Code's default |
@@ -148,6 +156,8 @@ github:
 | `claude.allowedTools` | Passed as `--allowedTools`. Everything else is denied, since nobody can answer a prompt. Claude Code checks every part of a Bash command joined with `;`, `&&`, `\|\|` or `\|` on its own, so one part outside the list denies the whole command; the brief lists the Bash prefixes and asks for one command per call | `Read`, `Edit`, `Write`, `Glob`, `Grep`, and through Bash `npm run`, `npx vitest`, `git status`, `git diff`, `git log`, `git show`, `git add`, `git commit` and the read-only `ls`, `cat`, `head`, `tail` and `wc` |
 | `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
 | `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
+| `notify.command` | A command run on a hand back, a release, a pull request that needs a person and a stop for a machine problem, see [notifications](#notifications) | none |
+| `notify.timeout` | The notification command is killed when it lasts longer | `30s` |
 | `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
 
 Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
@@ -191,7 +201,7 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 | `diagnostics [--out <file>]` | A `.tar.gz` with the log files, the `run.json` of the 20 runs started last, `worker.yaml` and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
 | `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
 | `retry <key> [--json]` | Removes `jira.blockedLabel` from the issue, then does what `once --issue <key>` does. The way to try a released issue again once its problem is fixed |
-| `why <key> [--session] [--json]` | Says why the next cycle would or would not claim the issue, touching nothing: whether it matches `jira.jql` (searched as `key = <key> AND (<jql>)` without the `ORDER BY`) and carries `blockedLabel`, its repository marker, its assignee, the blockers it [waits](#issues-that-wait) on, which limit holds it (`limits.dayUsd`, a held [exclusive resource](#exclusive-resources), `limits.openPullRequests`, or `limits.concurrent` and `limits.perShard` with the repairs and the issues ahead of it in the JQL order) and whether its references resolve. `--session` reads the session's home instead of the worker's. `--json` prints the same as one object |
+| `why <key> [--session] [--json]` | Says why the next cycle would or would not claim the issue, touching nothing: whether it matches `jira.jql` (searched as `key = <key> AND (<jql>)` without the `ORDER BY`) and carries `blockedLabel`, its repository marker, its assignee, the blockers it [waits](#issues-that-wait) on, which limit holds it (`limits.dayUsd`, `limits.subscription`, a held [exclusive resource](#exclusive-resources), `limits.openPullRequests`, or `limits.concurrent` and `limits.perShard` with the repairs and the issues ahead of it in the JQL order) and whether its references resolve. `--session` reads the session's home instead of the worker's. `--json` prints the same as one object |
 | `delegate <key> --repo <shard> [--session] [--json]` | Marks the issue for the worker without the Jira UI: adds `jira.eligibleLabel` and the repository marker for a deliverable shard, a `labelPrefix` label that replaces any other marker label, or the custom field, set as text or as an option by its type. Then says whether the issue now matches `jira.jql`, since a status in the JQL still takes a transition. `--session` reads the session's `worker.yaml` |
 | `run` | Shard bootstrap and `check`, then `once` on the configured interval until `SIGINT` or `SIGTERM`. A failed check stops it before the first cycle. A signal during a cycle lets the cycle finish |
 | `poll [--json]` | The dry run of `once`, for a session: what could be claimed now and why, touching nothing |
@@ -201,7 +211,7 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 
 Every command takes `--log-level` before its name, as in `globu-worker --log-level debug start`.
 
-`start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `waiting` (with the blockers it waits on), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd` and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log. The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
+`start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `waiting` (with the blockers it waits on), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd`, the subscription's windows against `limits.subscription` when the runs reported them (`subscription five-hour 15 %, seven-day 60 % of 70 %`, or `subscription five-hour at 72 %, holding until 2026-11-14 18:00 UTC` while the limit holds) and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log. The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
 
 `once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `waiting on gpu (held by klayboy render, pid 4242 on desk since 2026-11-14T10:00:00.000Z)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
 
@@ -236,6 +246,48 @@ The locks live in `~/.globu/locks`, one file per resource named `<resource>.lock
 
 The worker follows the same rules, so a holder that crashed, the worker included, never blocks the next one for longer than it takes to notice the pid is gone.
 
+## The subscription limit
+
+When Claude authenticates with the owner's own subscription, a login in the worker's Claude config dir or `CLAUDE_CODE_OAUTH_TOKEN`, the runs draw on the same usage windows as the owner's interactive sessions. A night of runs can use up the five-hour window and lock the owner out of their own sessions until it resets, and the seven-day window can go the same way over a week.
+
+The `claude -p` stream then carries `rate_limit_event` lines. The worker reads every window they report, each with its utilization and the time it resets (`unifiedWindows` in the event, or the single window named by `rateLimitType`), keeps the latest figure per window in `subscription.json` in its home and counts a window the event marks `rejected` as full. Before each cycle it compares the windows that have not reset yet with `limits.subscription`: when one is at the limit or past it, the cycle claims and repairs nothing and says `subscription limit reached: the subscription's five-hour window is at 72 %, the limit is 70 %, it resets at 2026-11-14 18:00 UTC, claiming nothing`. Polling goes on, and the first cycle after the reset claims again. Several windows past the limit hold until the last of them resets. `why` names the limit among the holds and the `start` footer shows the figures next to today's spend.
+
+The figure is only as fresh as the last run, since nothing else reports it: the owner's interactive use between runs is not seen until the next run's stream. The default of 70 % leaves that use room. While `ANTHROPIC_API_KEY` is set the runs bill the API, and the worker ignores the figures it kept.
+
+## Notifications
+
+Nothing in Jira or GitHub tells the owner of the machine that a run ended. `notify.command` is run on four events:
+
+| Event | When | `GLOBU_URL` |
+|---|---|---|
+| `handed-back` | A run opened its pull requests | The first pull request |
+| `released` | A run gave its issue back, for any reason but a machine problem | The issue in Jira |
+| `needs-human` | The last allowed repair of a pull request failed | The pull request |
+| `stopped` | The `run` loop or `start --mode auto` stopped for a [machine problem](#a-run) | The issue whose run found it |
+
+The command runs with the same shell as `setup` (`sh -c`, Git's `sh` on Windows), in the worker's home, and gets the event, the issue key and the URL as `$1`, `$2` and `$3` and as `GLOBU_EVENT`, `GLOBU_ISSUE` and `GLOBU_URL`, with a line for a person in `GLOBU_MESSAGE`, such as `MR-7 handed back: https://github.com/acme/backend/pull/3` or `MR-8 released: the run made no commits`. Its environment is the worker's without the Jira, GitHub and Claude secrets; a token the command needs can go into `secrets.env` under a name of its own, which passes through. A command that fails, cannot start or outlasts `notify.timeout` is logged as `notify failed` with the reason and never stops the worker. Runs driven from a session never notify, since a person is already in them.
+
+[ntfy](https://ntfy.sh) sends a push notification to a phone subscribed to a topic; the `Click` header opens the URL:
+
+```yaml
+notify:
+  command: >-
+    curl -s -H "Title: $GLOBU_ISSUE $GLOBU_EVENT" -H "Click: $GLOBU_URL"
+    -d "$GLOBU_MESSAGE" https://ntfy.sh/acme-agent
+```
+
+A [Home Assistant webhook](https://www.home-assistant.io/docs/automation/trigger/#webhook-trigger) triggers an automation, which can notify a phone, flash a light or log the event. The automation reads the fields as `trigger.json.event`, `trigger.json.issue` and `trigger.json.url`:
+
+```yaml
+notify:
+  command: >-
+    curl -s -X POST -H "Content-Type: application/json"
+    -d "{\"event\": \"$1\", \"issue\": \"$2\", \"url\": \"$3\"}"
+    http://homeassistant.local:8123/api/webhook/globu-worker
+```
+
+A longer command is better kept in a script next to `worker.yaml`, such as `command: ./notify.sh`, since the command runs in the worker's home.
+
 ## From a session
 
 `once` and `run` start Claude headless. `poll`, `claim`, `finish` and `release` leave the implementing to a Claude Code session, which is the same run with a person in it: the binary does the deterministic steps and the session, or a subagent it starts, does the work of the `issue-deliver` skill in the prepared worktree. The `issue-work` and `issue-watch` skills in the plugin drive these four commands; [plugin skills](./skills.md) describes them.
@@ -258,7 +310,7 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 
 A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue and runs `retry <key>`, which removes the label and takes the issue at once, or removes the label by hand and waits for the next poll. `why <key>` says what still keeps an issue out.
 
-A problem of the machine is not the issue's fault: the setup shell is missing, or a setup command or `claude` cannot start at all. Such a release says "could not start `<program>`: not found on PATH" rather than an exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop, since every next issue would fail the same way; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `limits.repairs`.
+A problem of the machine is not the issue's fault: the setup shell is missing, or a setup command or `claude` cannot start at all. Such a release says "could not start `<program>`: not found on PATH" rather than an exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop, since every next issue would fail the same way, and [notify](#notifications) `stopped`; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `limits.repairs`.
 
 Every footer, in the pull request body and in the Jira comment, names the run id, the Jira account and GitHub login the worker acted as, turns, cost, wall time with the part of it spent in the model API, the blocked writes and the denied tool calls, each listed on a line of its own. A run driven from a session names the session instead of the turns, the cost and the blocked writes, which only the headless stream can count. Until Atlassian ships agent identities a run acts as whoever holds the tokens, and the footer records which identity that was.
 

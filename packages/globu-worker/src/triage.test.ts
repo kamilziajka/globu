@@ -7,6 +7,7 @@ import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
+import { recordUsage } from "./subscription.js";
 import { delegate, matchesJql, retry, why } from "./triage.js";
 import type { WorkerDeps } from "./worker.js";
 
@@ -227,8 +228,10 @@ describe("why", () => {
     expect(io.stdout).toContain("marker\tnone\n");
   });
 
-  it("names the day cap, the open pull request cap and repairs that take the slots", async () => {
+  it("names the day cap, the subscription limit, the open pull request cap and repairs that take the slots", async () => {
     const { root, config } = setup();
+    const resetsAt = new Date(NOW.getTime() + 3_600_000).toISOString();
+    recordUsage(process.env.GLOBU_HOME as string, [{ window: "five_hour", utilization: 0.81, resetsAt }], NOW);
     const spent = { ...newRun("MR-0", NOW, { jira: "x", github: null }), state: "released" as const, costUsd: 41 };
     saveRun(path.join(runsDir(process.env.GLOBU_HOME as string), spent.id), spent);
     const review = "https://github.com/acme/backend/pull/1";
@@ -242,6 +245,10 @@ describe("why", () => {
     const report = await why(worker, "MR-1");
     expect(report.holds).toEqual([
       { limit: "dayUsd", detail: "the day cap of 40 USD is reached, 41.00 spent" },
+      {
+        limit: "subscription",
+        detail: `the subscription's five-hour window is at 81 %, the limit is 70 %, it resets at ${resetsAt.slice(0, 16).replace("T", " ")} UTC`
+      },
       { limit: "openPullRequests", detail: "2 pull requests are open, the cap is 2" },
       { limit: "concurrent", detail: "limits.concurrent is 1 and 1 repairs come first" }
     ]);

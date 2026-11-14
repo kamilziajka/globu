@@ -101,6 +101,7 @@ const WorkerConfigSchema = z.object({
       openPullRequests: z.number().int().min(1).default(5),
       repairs: z.number().int().min(0).default(2),
       keepRuns: z.number().int().min(1).default(100),
+      subscription: z.number().min(1).max(100).default(70),
       exclusive: z
         .array(z.string().regex(RESOURCE_RE, "a resource name is letters, digits, dots, dashes and underscores"))
         .default([])
@@ -122,7 +123,8 @@ const WorkerConfigSchema = z.object({
       author: z.object({ name: z.string().min(1), email: z.string().min(1) }).optional()
     })
     .prefault({}),
-  github: z.object({ draft: z.boolean().default(false), labels: z.array(z.string().min(1)).default([]) }).prefault({})
+  github: z.object({ draft: z.boolean().default(false), labels: z.array(z.string().min(1)).default([]) }).prefault({}),
+  notify: z.object({ command: z.string().min(1).optional(), timeout: Duration.default(30_000) }).prefault({})
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

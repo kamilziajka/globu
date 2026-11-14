@@ -8,6 +8,7 @@ import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
+import { loadSubscription, recordUsage } from "./subscription.js";
 import {
   addWorktree,
   checkShards,
@@ -351,6 +352,67 @@ describe("once", () => {
     expect(capped.io.stdout).toContain("day cap of 40 USD reached (41.00 spent today), claiming nothing");
   });
 
+  const notices = (calls: Calls) =>
+    (calls.setup ?? [])
+      .filter((call) => call.command === "notify-me")
+      .map((call) => [call.env.GLOBU_EVENT, call.env.GLOBU_ISSUE, call.env.GLOBU_URL, call.env.GLOBU_MESSAGE]);
+  const usage = (utilization: number) =>
+    JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "allowed",
+        unifiedWindows: { five_hour: { utilization, resetsAt: Date.parse("2026-11-05T12:00:00Z") / 1000 } }
+      }
+    });
+  const notifying = async (world: World, issues: JiraIssue[], script: Script, env: NodeJS.ProcessEnv = {}) => {
+    world.config.notify.command = "notify-me";
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker, io } = deps(world, fakeJira(issues), fakeRunner(script, calls), script.commit ? "gh-token" : null);
+    worker.env = { ...worker.env, ...env };
+    const result = await once(worker);
+    return { calls, io, result };
+  };
+
+  it("notifies on a hand back, keeps the subscription figure and claims nothing past its limit", async () => {
+    const world = setup();
+    const handed = await notifying(world, [issue("MR-7")], {
+      commit: true,
+      handback: true,
+      stream: `${usage(0.75)}\n${RESULT}`
+    });
+    expect(handed.result.runs[0].state).toBe("handed-back");
+    expect(notices(handed.calls)).toEqual([
+      ["handed-back", "MR-7", "https://github.com/acme/pr/2", "MR-7 handed back: https://github.com/acme/pr/2"]
+    ]);
+    expect(loadSubscription(world.home)?.windows).toEqual([
+      { window: "five_hour", utilization: 0.75, resetsAt: "2026-11-05T12:00:00.000Z" }
+    ]);
+
+    const held = await notifying(world, [issue("MR-8")], {});
+    expect(held.result).toEqual({ runs: [], plan: [] });
+    expect(held.io.stdout).toContain(
+      "subscription limit reached: the subscription's five-hour window is at 75 %, the limit is 70 %, it resets at 2026-11-05 12:00 UTC, claiming nothing"
+    );
+  });
+
+  it("notifies on a release and ignores the subscription figure while the runs bill an API key", async () => {
+    const world = setup();
+    recordUsage(world.home, [{ window: "five_hour", utilization: 0.9, resetsAt: "2026-11-05T12:00:00.000Z" }], NOW);
+    const released = await notifying(
+      world,
+      [issue("MR-8")],
+      { stream: `${usage(0.2)}\n${RESULT}` },
+      {
+        ANTHROPIC_API_KEY: "sk"
+      }
+    );
+    expect(released.result.runs[0].state).toBe("released");
+    expect(notices(released.calls)).toEqual([
+      ["released", "MR-8", "https://acme.atlassian.net/browse/MR-8", "MR-8 released: the run made no commits"]
+    ]);
+    expect(loadSubscription(world.home)?.windows[0].utilization).toBe(0.2);
+  });
+
   it("claims, runs, pushes, opens draft pull requests and hands back", async () => {
     const world = setup({ companion: ["product"] });
     const comments = [{ author: "Kamil", created: "2026-11-05", body: "Also read `docs/index.md`." }];
@@ -543,6 +605,18 @@ describe("once", () => {
     world.config.setup = {};
     const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
     machine(claudeless.jira, claudeless.record as RunRecord, "could not start claude: not found on PATH");
+
+    world.config.notify.command = "notify-me";
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const stopping = deps(world, fakeJira([issue("MR-4")]), fakeRunner({ code: 1, startError: "ENOENT" }, calls));
+    await loop(stopping.worker, { sleep: async () => {}, stopped: () => false });
+    expect(calls.setup?.map((call) => [call.env.GLOBU_EVENT, call.env.GLOBU_URL, call.env.GLOBU_MESSAGE])).toEqual([
+      [
+        "stopped",
+        "https://acme.atlassian.net/browse/MR-4",
+        "globu-worker stopped, the machine needs fixing first: could not start claude: not found on PATH"
+      ]
+    ]);
   });
 
   it("records denied tool calls and the time in the model API in run.json and the footer", async () => {

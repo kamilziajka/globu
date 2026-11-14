@@ -17,11 +17,16 @@ const BRANCH = "agent/MR-7-change-x";
 
 type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout" | "missing";
 type Script = { pulls: Record<string, object | null>; claude?: Claude };
-type Calls = { gh: string[][]; claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[] };
+type Calls = {
+  gh: string[][];
+  claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[];
+  notices: string[][];
+};
 
 function runner(script: Script, calls: Calls): Runner {
   return async (command, args, options = {}) => {
     if (command === "sh") {
+      if (args[1] === "notify-me") calls.notices.push(args.slice(3));
       const failed = args[1] === "false";
       return { code: failed ? 1 : 0, stdout: "", stderr: failed ? "setup broke\n" : "", timedOut: false };
     }
@@ -144,7 +149,7 @@ function pull(url: string, patch: object = {}): object {
 }
 
 function deps(setup: ReturnType<typeof world>, script: Script, token: string | null = "gh-token") {
-  const calls: Calls = { gh: [], claude: [] };
+  const calls: Calls = { gh: [], claude: [], notices: [] };
   const fake = jira();
   const rows: FollowUpRow[][] = [];
   const io = captureIo(setup.root);
@@ -249,7 +254,10 @@ describe("following pull requests", () => {
   });
 
   it("gives a pull request to a person after the last failed repair and leaves it alone", async () => {
-    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n  openPullRequests: 1\n" });
+    const setup = world({
+      base: "export const x = 9;\n",
+      extra: "limits:\n  repairs: 2\n  openPullRequests: 1\nnotify:\n  command: notify-me\n"
+    });
     const { worker, calls, jira: fake, rows } = deps(setup, { pulls: { [setup.url]: pull(setup.url) } });
     const first = (await once(worker)).runs[0];
     expect(first.state).toBe("released");
@@ -259,6 +267,7 @@ describe("following pull requests", () => {
     expect((await once(worker)).runs[0].reason).toBe("conflicts are left unresolved");
     expect(original(setup).followUp).toEqual({ repairs: 2, state: "needs-human" });
     expect(fake.comments[1]).toContain("It needs a person now.");
+    expect(calls.notices).toEqual([["needs-human", "MR-7", setup.url]]);
     expect(calls.gh.find((args) => args[1] === "edit")).toEqual([
       "pr",
       "edit",

@@ -1,6 +1,7 @@
 import { type Check, checksLine } from "./check.js";
 import { loadRuns, spentOn } from "./runs.js";
 import { OPEN_PULL_STATES, type Row, renderTable, rowLine, sessionList } from "./session.js";
+import { currentUsage, usageLine } from "./subscription.js";
 import { CLEAR, clip, gray, HIDE_CURSOR, type Screen, SHOW_CURSOR, widthOf } from "./tui.js";
 import { followUps, once, type WorkerDeps } from "./worker.js";
 
@@ -46,7 +47,9 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<vo
     const open = pulls.filter((row) => OPEN_PULL_STATES.has(row.state)).length;
     const fix = pulls.filter((row) => row.pickable === true).length;
     const counts = `${open} of ${deps.config.limits.openPullRequests} pull requests open${fix === 0 ? "" : `, ${fix} need a fix`}`;
-    const spend = `Spent today ${spent} of ${deps.config.limits.dayUsd.toFixed(2)} USD, ${counts}.${extra.join("")}`;
+    const usage = usageLine(currentUsage(deps.home, deps.env, now), deps.config.limits.subscription);
+    const subscription = usage === "" ? "" : `, ${usage}`;
+    const spend = `Spent today ${spent} of ${deps.config.limits.dayUsd.toFixed(2)} USD${subscription}, ${counts}.${extra.join("")}`;
     const footer = `${spend}\n${gray(mode === "pick" ? PICK_KEYS : AUTO_KEYS)}`;
     const header = `${title}${access(widthOf(screen))}`;
     const view = mode === "pick" ? { header, footer, selected } : { header, footer };

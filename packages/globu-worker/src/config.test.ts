@@ -60,6 +60,7 @@ describe("loadWorkerConfig", () => {
       openPullRequests: 5,
       repairs: 2,
       keepRuns: 100,
+      subscription: 70,
       exclusive: []
     });
     expect(config.claude).toEqual({
@@ -70,6 +71,7 @@ describe("loadWorkerConfig", () => {
     });
     expect(config.git).toEqual({ branchPrefix: "agent/" });
     expect(config.github).toEqual({ draft: false, labels: [] });
+    expect(config.notify).toEqual({ timeout: 30_000 });
   });
 
   it("reads durations, a field marker and the optional sections", () => {
