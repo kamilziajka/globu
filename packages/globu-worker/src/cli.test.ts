@@ -425,7 +425,7 @@ describe("globu-worker", () => {
       readKey: async () => "quit" as const
     };
     expect(await workerMain([], captureIo(root), withGithub(), interactive)).toBe(0);
-    expect(plain(frames.join(""))).toContain("✔ claude: m answers");
+    expect(plain(frames.join(""))).toContain("✔ claude: m (the default, set claude.model to choose) answers");
     expect(plain(frames.at(-2) as string)).toContain("globu-worker in pick mode");
 
     const signals = new EventEmitter();

@@ -34,11 +34,17 @@ export const DEFAULT_ALLOWED_TOOLS = [
   "Bash(git status*)",
   "Bash(git diff*)",
   "Bash(git log*)",
+  "Bash(git show*)",
   "Bash(git add *)",
-  "Bash(git commit *)"
+  "Bash(git commit *)",
+  "Bash(ls*)",
+  "Bash(cat *)",
+  "Bash(head *)",
+  "Bash(tail *)",
+  "Bash(wc *)"
 ];
 
-export const DENIED_TOOLS = ["Bash(git push*)", "Bash(gh *)", "Bash(curl *)", "Bash(wget *)"];
+export const DENIED_TOOLS = ["Bash(git push*)", "Bash(git stash*)", "Bash(gh *)", "Bash(curl *)", "Bash(wget *)"];
 
 const RepositorySchema = z.union([
   z.object({ labelPrefix: z.string().min(1) }),
