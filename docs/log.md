@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-15
+* [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
+
 ## 2026-11-14
 * [globu-worker](./worker.md): the worker reads the `rate_limit_event` lines of the `claude -p` stream, keeps the latest figure per subscription window in `subscription.json` and claims and repairs nothing while a window is at `limits.subscription` (70 % by default) until it resets; `why` and the `start` footer show it. `notify.command` runs on `handed-back`, `released`, `needs-human` and `stopped`, with [ntfy and Home Assistant examples](./worker.md#notifications).
 * [globu-worker](./worker.md): cleanup deletes links and junctions in a worktree before removing it and `check` warns about a tree a settled run left, a merged pull request's branch is deleted on the remote and in the clone, and `limits.keepRuns` bounds the run directories, with `diagnostics` packing the last 20 runs.
