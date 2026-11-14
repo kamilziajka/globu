@@ -73,7 +73,7 @@ describe("exclusiveHold", () => {
     const dir = tempDir();
     plant(dir, "disk", { pid: process.pid, host: "render-box" });
     const hold = exclusiveHold(["gpu", "disk"], dir, "globu-worker", now);
-    expect(hold.take()).toBe("disk (held by another process, pid " + process.pid + " on render-box)");
+    expect(hold.take()).toBe(`disk (held by another process, pid ${process.pid} on render-box)`);
     expect(fs.existsSync(lockFile(dir, "gpu"))).toBe(false);
     expect(fs.existsSync(lockFile(dir, "disk"))).toBe(true);
   });
