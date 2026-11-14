@@ -14,7 +14,7 @@ import { type FollowUpRow, followUps, once, type WorkerDeps } from "./worker.js"
 const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
 
-type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout";
+type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout" | "missing";
 type Script = { pulls: Record<string, object | null>; claude?: Claude };
 type Calls = { gh: string[][]; claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[] };
 
@@ -36,6 +36,7 @@ function runner(script: Script, calls: Calls): Runner {
     const cwd = options.cwd as string;
     calls.claude.push({ cwd, env: options.env as NodeJS.ProcessEnv, prompt: args[1] });
     const mode = script.claude ?? "nothing";
+    if (mode === "missing") return { code: null, stdout: "", stderr: "", timedOut: false, startError: "ENOENT" };
     if (mode === "resolve" || mode === "add-only") {
       write(cwd, "src/x.ts", "export const x = 3;\n");
       git(cwd, "add", "-A");
@@ -266,10 +267,13 @@ describe("following pull requests", () => {
     await attempt({ pulls: { [setup.url]: pull(setup.url) }, claude: "add-only" });
     await attempt({ pulls: { [setup.url]: pull(setup.url) }, claude: "timeout" });
     await attempt({ pulls: { [setup.url]: null } });
+    await attempt({ pulls: { [setup.url]: pull(setup.url) }, claude: "missing" });
     expect(reasons[0]).toBe('setup command "false" in backend exited with 1:\nsetup broke');
     expect(reasons[1]).toBe("the merge was not committed");
     expect(reasons[2]).toBe("timed out after 1.0 min");
     expect(reasons[3]).toMatch(/^worker error: gh pr view .* failed: not found$/);
+    expect(reasons[4]).toBe("could not start claude: not found on PATH");
+    expect(original(setup).followUp).toEqual({ repairs: 4, state: "open" });
   });
 
   it("fails a repair that commits nothing", async () => {

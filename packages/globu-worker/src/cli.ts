@@ -2,6 +2,7 @@ import type { EventEmitter } from "node:events";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import type { Io } from "../../globu-cli/src/cli/index.js";
+import { useGitHubToken } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import { bootstrapShards } from "./bootstrap.js";
 import { attempt, CHECK_NAMES, type Check, checkAccess, formatCheck } from "./check.js";
@@ -44,11 +45,14 @@ The log is written to <GLOBU_HOME>/logs at the level of --log-level or GLOBU_LOG
 type Global = { logLevel?: string };
 
 const GIT_VARIABLES = ["GLOBU_GIT_TOKEN", "GLOBU_GIT_USER"];
+const NON_INTERACTIVE = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
 
 function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes: Homes, global: Global): WorkerDeps {
   process.env.GLOBU_HOME = homes.home;
   process.env.CLAUDE_CONFIG_DIR = homes.claudeConfigDir;
-  const { env, warnings } = withSecretsFile(given, homes.home);
+  const loaded = withSecretsFile(given, homes.home);
+  const env: NodeJS.ProcessEnv = { ...loaded.env, ...NON_INTERACTIVE };
+  Object.assign(process.env, NON_INTERACTIVE);
   for (const name of GIT_VARIABLES) {
     const value = env[name];
     if (value !== undefined) process.env[name] = value;
@@ -57,12 +61,13 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
   const level = parseLevel(global.logLevel ?? env.GLOBU_LOG_LEVEL ?? "info");
   const logger = fileLogger({ dir: path.join(homes.home, "logs"), level, secrets: secretValues(env), now });
   setLogger(logger);
-  for (const warning of warnings) {
+  for (const warning of loaded.warnings) {
     logger.warn(warning);
     io.err(`globu-worker: ${warning}`);
   }
   const config = loadWorkerConfig(workerConfigPath(homes.home));
   const secrets = readSecrets(env);
+  useGitHubToken(secrets.githubToken);
   return {
     config,
     secrets,

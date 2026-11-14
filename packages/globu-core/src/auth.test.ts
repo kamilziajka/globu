@@ -1,9 +1,25 @@
-import { describe, expect, it } from "vitest";
-import { gitAuthArgs } from "./auth.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { gitAuthArgs, useGitHubToken } from "./auth.js";
 
 const BASIC = `Authorization: Basic ${Buffer.from("x-access-token:secret").toString("base64")}`;
 
 describe("gitAuthArgs", () => {
+  afterEach(() => useGitHubToken(null));
+
+  it("falls back to a GitHub token for github.com only, below GLOBU_GIT_TOKEN and explicit credentials", () => {
+    useGitHubToken("gh");
+    const github = `http.https://github.com/.extraheader=Authorization: Basic ${Buffer.from("x-access-token:gh").toString("base64")}`;
+    expect(gitAuthArgs("https://GitHub.com/acme/notes.git")).toEqual([
+      "-c",
+      github.replace("github.com", "GitHub.com")
+    ]);
+    expect(gitAuthArgs("git@github.com:acme/notes.git")[1]).toBe(github);
+    expect(gitAuthArgs("https://gitlab.com/acme/notes.git")).toEqual([]);
+    expect(gitAuthArgs("https://github.com/acme/notes.git", { token: "secret" })[1]).toContain(BASIC);
+    process.env.GLOBU_GIT_TOKEN = "secret";
+    expect(gitAuthArgs("https://github.com/acme/notes.git")[1]).toContain(BASIC);
+  });
+
   it("does nothing without a token", () => {
     expect(gitAuthArgs("git@github.com:acme/notes.git")).toEqual([]);
   });

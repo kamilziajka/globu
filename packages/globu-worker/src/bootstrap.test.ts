@@ -64,4 +64,15 @@ describe("bootstrapShards", () => {
     expect(bootstrapShards(config(shards), home)).toEqual([]);
     expect(resolveAll().shards.map((shard) => shard.path)).toEqual([path.join(root, "elsewhere")]);
   });
+
+  it("says what a private repository needs when the clone fails", () => {
+    const missing = `file://${path.join(tempDir(), "gone")}`;
+    const shards = `  deliverable: [backend]
+  repos:
+    backend: ${missing}
+`;
+    expect(() => bootstrapShards(config(shards), process.env.GLOBU_HOME as string)).toThrow(
+      new RegExp(`^could not clone ${missing} for shard backend: .*\\nA private repository needs GLOBU_GIT_TOKEN`, "s")
+    );
+  });
 });

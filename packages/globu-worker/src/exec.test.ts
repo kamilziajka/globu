@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../../testing/index.js";
-import { runOrThrow, spawnRunner } from "./exec.js";
+import { notStarted, runOrThrow, spawnRunner } from "./exec.js";
 
 describe("spawnRunner", () => {
   it("captures stdout and stderr and mirrors stdout to a file", async () => {
@@ -24,6 +24,15 @@ describe("spawnRunner", () => {
     const result = await spawnRunner("globu-no-such-command", []);
     expect(result.code).toBeNull();
     expect(result.stderr).toContain("ENOENT");
+    expect(result.startError).toBe("ENOENT");
+  });
+});
+
+describe("notStarted", () => {
+  it("says why a command never started and nothing for one that ran", () => {
+    expect(notStarted("sh", { startError: "ENOENT" })).toBe("could not start sh: not found on PATH");
+    expect(notStarted("sh", { startError: "EACCES" })).toBe("could not start sh: EACCES");
+    expect(notStarted("sh", {})).toBeNull();
   });
 });
 
@@ -34,5 +43,8 @@ describe("runOrThrow", () => {
       "node -e console.error('bad'); process.exit(3) failed: bad"
     );
     await expect(runOrThrow(spawnRunner, "node", ["-e", "process.exit(4)"])).rejects.toThrow("failed: exit code 4");
+    await expect(runOrThrow(spawnRunner, "globu-no-such-command", ["x"])).rejects.toThrow(
+      "globu-no-such-command x failed: could not start globu-no-such-command: not found on PATH"
+    );
   });
 });

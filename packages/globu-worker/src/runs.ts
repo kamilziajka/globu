@@ -23,6 +23,7 @@ export type RunRecord = {
   identity: { jira: string; github: string | null };
   repairOf?: string;
   followUp?: FollowUp;
+  environment?: boolean;
 };
 export type StoredRun = { dir: string; record: RunRecord };
 

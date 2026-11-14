@@ -142,6 +142,7 @@ describe("secrets.env", () => {
     });
     fs.chmodSync(file, 0o644);
     expect(withSecretsFile({}, home).warnings).toEqual([`${file} is readable by others, run chmod 600 on it`]);
+    expect(withSecretsFile({}, home, "win32").warnings).toEqual([]);
   });
 });
 

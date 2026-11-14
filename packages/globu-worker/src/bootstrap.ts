@@ -11,7 +11,13 @@ export function bootstrapShards(config: WorkerConfig, home: string): string[] {
   const lines = missing.map((id) => {
     const repo = config.shards.repos[id];
     const dest = path.join(home, "work", id);
-    register({ locator: repo, cwd: home, id, dest, mode: "write" });
+    try {
+      register({ locator: repo, cwd: home, id, dest, mode: "write" });
+    } catch (err) {
+      throw new Error(
+        `could not clone ${repo} for shard ${id}: ${(err as Error).message}\nA private repository needs GLOBU_GIT_TOKEN, or on github.com a GH_TOKEN that can read it.`
+      );
+    }
     log().info("registered", { shard: id, repo, path: dest });
     return `registered ${id} from ${repo} in ${dest}`;
   });

@@ -15,7 +15,7 @@ import {
 import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
-import { type Runner, runOrThrow } from "./exec.js";
+import { notStarted, type Runner, runOrThrow } from "./exec.js";
 import { blockersOf, type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { log, tail } from "./logger.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
@@ -32,6 +32,7 @@ import {
   saveRun,
   spentOn
 } from "./runs.js";
+import { NO_SHELL, setupShell } from "./shell.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -43,6 +44,7 @@ export type WorkerDeps = {
   io: Io;
   now: () => Date;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
   onRun?: (record: RunRecord) => void;
   onPlan?: (plan: PlanEntry[]) => void;
   onFollowUps?: (rows: FollowUpRow[]) => void;
@@ -72,7 +74,7 @@ type Prepared = {
   briefFile: string;
   handbackFile: string;
 };
-type Outcome = { timedOut: boolean; code: number | null; stderr: string; summary: ClaudeSummary };
+type Outcome = { timedOut: boolean; code: number | null; stderr: string; startError?: string; summary: ClaudeSummary };
 export type ClaimResult = {
   record: RunRecord;
   dir: string;
@@ -206,12 +208,18 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
   record.state = "released";
   record.reason = reason;
   record.endedAt = deps.now().toISOString();
-  log().info("released", { run: record.id, key: record.key, reason });
+  log().info("released", { run: record.id, key: record.key, reason, environment: record.environment === true });
+  const machine = record.environment
+    ? `\n\nThis is a problem with the worker's machine, not with the issue, so it is not labelled ${config.jira.blockedLabel} and the worker stops until the machine is fixed.`
+    : "";
   try {
     await jira.transitionTo(record.key, config.jira.releasedStatus);
     await jira.assign(record.key, null);
-    await jira.addLabel(record.key, config.jira.blockedLabel);
-    await jira.comment(record.key, `Released by the Globu worker: ${reason}\n\n${footer(record, deps.now())}`);
+    if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
+    await jira.comment(
+      record.key,
+      `Released by the Globu worker: ${reason}${machine}\n\n${footer(record, deps.now())}`
+    );
   } catch (err) {
     log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
     io.err(`${record.key}: releasing failed: ${(err as Error).message}`);
@@ -312,20 +320,32 @@ async function openPullRequest(
   return output.split("\n").at(-1) as string;
 }
 
+function environmentProblem(record: RunRecord, reason: string): string {
+  record.environment = true;
+  return reason;
+}
+
 async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
   const { config } = deps;
-  for (const worktree of worktrees) {
-    for (const command of config.setup[worktree.shard.id] ?? []) {
-      log().info("setup", { run: record.id, shard: worktree.shard.id, command });
-      const result = await deps.run("sh", ["-c", command], {
-        cwd: worktree.tree,
-        env: { ...scrubbedEnv(deps.env), ...authorEnv(config), GLOBU_HOME: deps.home },
-        timeoutMs: config.limits.timeout
-      });
-      if (result.code === 0 && !result.timedOut) continue;
-      const outcome = result.timedOut ? "timed out" : `exited with ${result.code}`;
-      return `setup command "${command}" in ${worktree.shard.id} ${outcome}:\n${tail(`${result.stdout.trim()}\n${result.stderr.trim()}`)}`;
-    }
+  const steps = worktrees.flatMap((worktree) =>
+    (config.setup[worktree.shard.id] ?? []).map((command) => ({ worktree, command }))
+  );
+  if (steps.length === 0) return null;
+  const shell = setupShell(deps.env, deps.platform ?? process.platform);
+  if (shell === null) return environmentProblem(record, NO_SHELL);
+  for (const { worktree, command } of steps) {
+    log().info("setup", { run: record.id, shard: worktree.shard.id, command });
+    const result = await deps.run(shell, ["-c", command], {
+      cwd: worktree.tree,
+      env: { ...scrubbedEnv(deps.env), ...authorEnv(config), GLOBU_HOME: deps.home },
+      timeoutMs: config.limits.timeout
+    });
+    if (result.code === 0 && !result.timedOut) continue;
+    const start = notStarted(shell, result);
+    if (start !== null)
+      return environmentProblem(record, `setup command "${command}" in ${worktree.shard.id}: ${start}`);
+    const outcome = result.timedOut ? "timed out" : `exited with ${result.code}`;
+    return `setup command "${command}" in ${worktree.shard.id} ${outcome}:\n${tail(`${result.stdout.trim()}\n${result.stderr.trim()}`)}`;
   }
   return null;
 }
@@ -467,13 +487,21 @@ async function runClaude(
   record.costUsd = summary.costUsd;
   record.turns = summary.turns;
   record.blocked = summary.blocked;
-  return { timedOut: result.timedOut, code: result.code, stderr: result.stderr, summary };
+  return {
+    timedOut: result.timedOut,
+    code: result.code,
+    stderr: result.stderr,
+    startError: result.startError,
+    summary
+  };
 }
 
 async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome | null): Promise<RunRecord> {
   const { config, jira } = deps;
   const { record, dir, worktrees, target, handbackFile } = prepared;
   const commits = commitsOn(target);
+  const unstarted = outcome === null ? null : notStarted("claude", outcome);
+  if (unstarted !== null) return await release(deps, record, environmentProblem(record, unstarted));
   if (outcome?.timedOut) return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`);
   if (outcome?.summary.subtype === "error_max_turns") {
     return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`);
@@ -746,6 +774,8 @@ async function attemptRepair(
     const handbackFile = path.join(dir, "handback.md");
     fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
     const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile));
+    const unstarted = notStarted("claude", outcome);
+    if (unstarted !== null) return environmentProblem(record, unstarted);
     if (outcome.timedOut) return `timed out after ${minutes(deps.config.limits.timeout)}`;
     if (conflictedFiles(tree).length > 0) return "conflicts are left unresolved";
     if (fs.existsSync(git(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"], tree))) {
@@ -807,7 +837,7 @@ export async function repairPullRequest(
   } else {
     record.state = "released";
     record.reason = problem;
-    const repairs = failures + 1;
+    const repairs = record.environment ? failures : failures + 1;
     const exhausted = repairs >= deps.config.limits.repairs;
     log().warn("repair failed", { run: record.id, key: record.key, pullRequest: url, reason: problem, exhausted });
     const next = exhausted ? "It needs a person now." : "The worker will try again.";
@@ -916,7 +946,12 @@ export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () =>
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<void> {
   for (;;) {
     try {
-      await once(deps);
+      const broken = (await once(deps)).runs.find((record) => record.environment);
+      if (broken !== undefined) {
+        log().error("stopping", { run: broken.id, reason: broken.reason });
+        deps.io.err(`globu-worker: stopping, the machine needs fixing first: ${broken.reason}`);
+        return;
+      }
     } catch (err) {
       log().error("cycle failed", { error: (err as Error).message });
       deps.io.err(`globu-worker: ${(err as Error).message}`);

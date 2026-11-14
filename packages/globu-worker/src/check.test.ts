@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register } from "../../globu-core/src/index.js";
@@ -95,9 +96,10 @@ describe("checkAccess", () => {
     const { worker, calls } = deps(world());
     const reported: string[] = [];
     const checks = await checkAccess(worker, (check) => reported.push(check.name));
-    expect([...reported].sort()).toEqual(["claude", "github", "jira", "shards"]);
+    expect([...reported].sort()).toEqual(["claude", "github", "jira", "setup", "shards"]);
     expect(checks.map((check) => [check.name, check.ok])).toEqual([
       ["shards", true],
+      ["setup", true],
       ["jira", true],
       ["github", true],
       ["claude", true]
@@ -116,7 +118,10 @@ describe("checkAccess", () => {
     const remote = calls.find((call) => call.command === "git") as Call;
     expect(remote.args.slice(-3, -1)).toEqual(["ls-remote", "--heads"]);
     expect(formatCheck(checks[0])).toBe("ok    shards: backend");
-    expect(checksLine(checks)).toBe("✔ shards backend   ✔ jira Bot   ✔ github octocat   ✔ claude claude-test");
+    expect(detail(checks, "setup")).toBe("no setup commands");
+    expect(checksLine(checks)).toBe(
+      "✔ shards backend   ✔ setup none   ✔ jira Bot   ✔ github octocat   ✔ claude claude-test"
+    );
     expect(checksLine([{ name: "configuration", ok: false, detail: "missing" }])).toBe("✖ configuration");
   });
 
@@ -138,7 +143,7 @@ describe("checkAccess", () => {
     expect(detail(checks, "shards")).toContain('shard "ghost" is not registered');
     expect(detail(checks, "jira")).toBe("Jira GET /myself failed: 401");
     expect(detail(checks, "github")).toBe("set GH_TOKEN to push branches and open pull requests");
-    expect(formatCheck(checks[1])).toBe("FAIL  jira: Jira GET /myself failed: 401");
+    expect(formatCheck(checks[2])).toBe("FAIL  jira: Jira GET /myself failed: 401");
 
     const empty = deps(setup, {
       jira: jira({ search: async () => [] }),
@@ -195,6 +200,65 @@ describe("checkAccess", () => {
     const { worker } = deps(setup, { replies: { claude: { stdout: `${plain}\n${RESULT}\n` } } });
     expect(detail(await checkAccess(worker), "claude")).toBe(
       "m answers in /claude with the issue-deliver skill (0.08 USD)"
+    );
+  });
+
+  it("checks that the setup shell finds the first program of each setup command", async () => {
+    const setup = world();
+    const config = configOf(
+      `${CONFIG}setup:\n  backend: ["npm ci", "CI=1 npm run build", "./script.sh", "FOO=1", "make -j4"]\n`
+    );
+    const found = deps({ ...setup, config });
+    const checks = await checkAccess(found.worker);
+    expect(detail(checks, "setup")).toBe("sh finds npm, make");
+    const probes = found.calls.filter((call) => call.command === "sh");
+    expect(probes.map((call) => call.args)).toEqual([
+      ["-c", 'command -v "$1"', "sh", "npm"],
+      ["-c", 'command -v "$1"', "sh", "make"]
+    ]);
+    expect(probes[0].env.JIRA_API_TOKEN).toBeUndefined();
+    expect(probes[0].cwd).toBe(setup.home);
+
+    const missing = deps({ ...setup, config });
+    missing.worker.run = async (command, args) => ({
+      code: command === "sh" && args[3] === "make" ? 1 : 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false
+    });
+    expect(detail(await checkAccess(missing.worker), "setup")).toBe("sh cannot find make for the setup commands");
+
+    const broken = deps({ ...setup, config }, { replies: {} });
+    broken.worker.run = async () => ({ code: null, stdout: "", stderr: "", timedOut: false, startError: "ENOENT" });
+    expect(detail(await checkAccess(broken.worker), "setup")).toBe("could not start sh: not found on PATH");
+  });
+
+  it("finds Git's sh on Windows and warns when long paths are off", async () => {
+    const setup = world();
+    const root = tempDir();
+    const git = path.join(root, "Git");
+    fs.mkdirSync(path.join(git, "cmd"), { recursive: true });
+    write(git, "cmd/git.exe", "");
+    const sh = write(git, "bin/sh.exe", "");
+    const config = configOf(`${CONFIG}setup:\n  backend: ["npm ci"]\n`);
+    const windows = deps({ ...setup, config }, { replies: { git: { stdout: "false\n" } } });
+    windows.worker.platform = "win32";
+    windows.worker.env = { ...windows.worker.env, PATH: path.join(git, "cmd"), PATHEXT: ".EXE" };
+    const checks = await checkAccess(windows.worker);
+    expect(detail(checks, "setup")).toBe(
+      `${sh} finds npm, core.longpaths is off, deep node_modules paths can fail: git config --global core.longpaths true`
+    );
+    expect(windows.calls.some((call) => call.command === sh)).toBe(true);
+
+    const plain = deps(setup, { replies: { git: { stdout: "true\n" } } });
+    plain.worker.platform = "win32";
+    expect(detail(await checkAccess(plain.worker), "setup")).toBe("no setup commands");
+
+    const shellless = deps({ ...setup, config }, { replies: { git: { stdout: "true\n" } } });
+    shellless.worker.platform = "win32";
+    shellless.worker.env = { PATH: root };
+    expect(detail(await checkAccess(shellless.worker), "setup")).toBe(
+      "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"
     );
   });
 });

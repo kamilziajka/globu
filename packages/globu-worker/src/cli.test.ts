@@ -255,6 +255,8 @@ describe("globu-worker", () => {
     expect(seen[0].ANTHROPIC_API_KEY).toBe("sk-file-key");
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();
     expect(seen[0].JIRA_EMAIL).toBeUndefined();
+    expect([seen[0].GIT_TERMINAL_PROMPT, seen[0].GCM_INTERACTIVE]).toEqual(["0", "never"]);
+    expect(process.env.GIT_TERMINAL_PROMPT).toBe("0");
     const logs = fs
       .readdirSync(path.join(home, "logs"))
       .map((name) => fs.readFileSync(path.join(home, "logs", name), "utf8"));
@@ -273,6 +275,7 @@ describe("globu-worker", () => {
     expect(ok.stdout.split("\n").map((line) => line.split(":")[0])).toEqual([
       "ok    configuration",
       "ok    shards",
+      "ok    setup",
       "ok    jira",
       "ok    github",
       "ok    claude",
@@ -394,7 +397,7 @@ describe("globu-worker", () => {
     const during = captureIo(root);
     const jira = idleJira(() => signals.emit("SIGINT"));
     expect(await workerMain(["run"], during, withGithub(), { jira, signals, run: healthy })).toBe(0);
-    expect(during.stdout.split("\n").slice(4).join("\n")).toBe("stopping after the current cycle\nnothing eligible\n");
+    expect(during.stdout.split("\n").slice(5).join("\n")).toBe("stopping after the current cycle\nnothing eligible\n");
 
     const later = new EventEmitter();
     const paused = captureIo(root);
@@ -403,6 +406,6 @@ describe("globu-worker", () => {
     setTimeout(() => later.emit("SIGTERM"), 50);
     expect(await pending).toBe(0);
     expect(Date.now() - started).toBeLessThan(900);
-    expect(paused.stdout.split("\n").slice(4).join("\n")).toBe("nothing eligible\nstopping after the current cycle\n");
+    expect(paused.stdout.split("\n").slice(5).join("\n")).toBe("nothing eligible\nstopping after the current cycle\n");
   });
 });

@@ -1,6 +1,8 @@
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
-import { scrubbedEnv } from "./config.js";
+import { scrubbedEnv, type WorkerConfig } from "./config.js";
+import { notStarted } from "./exec.js";
 import { log } from "./logger.js";
+import { NO_SHELL, setupShell } from "./shell.js";
 import { checkShards, type WorkerDeps } from "./worker.js";
 
 export type Check = { name: string; ok: boolean; detail: string; short?: string };
@@ -103,11 +105,56 @@ function shardsProbe(deps: WorkerDeps): Found {
   return { detail: ids, short: ids };
 }
 
-export const CHECK_NAMES = ["shards", "jira", "github", "claude"];
+const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const PLAIN_NAME_RE = /^[\w.+-]+$/;
+const LONG_PATHS = "core.longpaths is off, deep node_modules paths can fail: git config --global core.longpaths true";
+
+function setupPrograms(config: WorkerConfig): string[] {
+  const words = Object.values(config.setup)
+    .flat()
+    .map(
+      (command) =>
+        command
+          .trim()
+          .split(/\s+/)
+          .find((word) => !ASSIGNMENT_RE.test(word)) ?? ""
+    )
+    .filter((word) => PLAIN_NAME_RE.test(word));
+  return [...new Set(words)];
+}
+
+async function longPathsNote(deps: WorkerDeps): Promise<string[]> {
+  const result = await deps.run("git", ["config", "--get", "core.longpaths"], { env: deps.env });
+  return result.stdout.trim() === "true" ? [] : [LONG_PATHS];
+}
+
+async function setupProbe(deps: WorkerDeps): Promise<Found> {
+  const platform = deps.platform ?? process.platform;
+  const notes = platform === "win32" ? await longPathsNote(deps) : [];
+  const programs = setupPrograms(deps.config);
+  if (programs.length === 0) return { detail: ["no setup commands", ...notes].join(", "), short: "none" };
+  const shell = setupShell(deps.env, platform);
+  if (shell === null) throw new Error(NO_SHELL);
+  const missing: string[] = [];
+  for (const program of programs) {
+    const result = await deps.run(shell, ["-c", 'command -v "$1"', "sh", program], {
+      cwd: deps.home,
+      env: { ...scrubbedEnv(deps.env), GLOBU_HOME: deps.home }
+    });
+    const start = notStarted(shell, result);
+    if (start !== null) throw new Error(start);
+    if (result.code !== 0) missing.push(program);
+  }
+  if (missing.length > 0) throw new Error(`${shell} cannot find ${missing.join(", ")} for the setup commands`);
+  return { detail: [`${shell} finds ${programs.join(", ")}`, ...notes].join(", "), short: programs.join(", ") };
+}
+
+export const CHECK_NAMES = ["shards", "setup", "jira", "github", "claude"];
 
 export async function checkAccess(deps: WorkerDeps, onCheck: (check: Check) => void = () => {}): Promise<Check[]> {
   const probes: Record<string, () => Promise<Found> | Found> = {
     shards: () => shardsProbe(deps),
+    setup: () => setupProbe(deps),
     jira: () => jiraProbe(deps),
     github: () => githubProbe(deps),
     claude: () => claudeProbe(deps)

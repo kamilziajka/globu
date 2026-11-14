@@ -62,6 +62,8 @@ describe("renderBrief", () => {
       "Companion shards, each on a worktree of its own with the same branch name:\n- `product`: /runs/r1/companions/product"
     );
     expect(brief).toContain("Write the handback to /runs/r1/handback.md when done.");
+    expect(brief).toContain("Do not move the issue, comment on it or create issues");
+    expect(brief).toContain("a `## Follow-ups` section of the handback");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain("### Description\n\n> Do it.\n> Carefully.");
     expect(brief).toContain("### Comments\n\n**Kamil, 2026-11-05**\n\n> Also this.");

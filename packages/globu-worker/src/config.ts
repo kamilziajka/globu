@@ -136,11 +136,16 @@ export function parseSecretsFile(text: string): Record<string, string> {
 
 export type LoadedSecrets = { env: NodeJS.ProcessEnv; file: string | null; warnings: string[] };
 
-export function withSecretsFile(env: NodeJS.ProcessEnv, home: string): LoadedSecrets {
+export function withSecretsFile(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  platform: NodeJS.Platform = process.platform
+): LoadedSecrets {
   const file = path.join(home, SECRETS_FILE);
   if (!fs.existsSync(file)) return { env, file: null, warnings: [] };
   const values = parseSecretsFile(fs.readFileSync(file, "utf8"));
-  const warnings = (fs.statSync(file).mode & 0o077) === 0 ? [] : [`${file} is readable by others, run chmod 600 on it`];
+  const open = platform !== "win32" && (fs.statSync(file).mode & 0o077) !== 0;
+  const warnings = open ? [`${file} is readable by others, run chmod 600 on it`] : [];
   return { env: { ...values, ...env }, file, warnings };
 }
 

@@ -16,15 +16,25 @@ function httpTarget(repo: string): HttpTarget | null {
 
 export type GitCredentials = { token: string; user?: string };
 
-function envCredentials(): GitCredentials | null {
-  const token = process.env.GLOBU_GIT_TOKEN;
-  return token ? { token, user: process.env.GLOBU_GIT_USER } : null;
+const GITHUB = "https://github.com/";
+let githubToken: string | null = null;
+
+export function useGitHubToken(token: string | null): void {
+  githubToken = token;
 }
 
-export function gitAuthArgs(repo: string | null, credentials: GitCredentials | null = envCredentials()): string[] {
-  if (credentials === null || repo === null) return [];
+function envCredentials(base: string): GitCredentials | null {
+  const token = process.env.GLOBU_GIT_TOKEN;
+  if (token) return { token, user: process.env.GLOBU_GIT_USER };
+  return githubToken !== null && base.toLowerCase() === GITHUB ? { token: githubToken } : null;
+}
+
+export function gitAuthArgs(repo: string | null, given?: GitCredentials): string[] {
+  if (repo === null) return [];
   const target = httpTarget(repo);
   if (target === null) return [];
+  const credentials = given ?? envCredentials(target.base);
+  if (credentials === null) return [];
   const user = credentials.user || "x-access-token";
   const header = `Authorization: Basic ${Buffer.from(`${user}:${credentials.token}`).toString("base64")}`;
   return [

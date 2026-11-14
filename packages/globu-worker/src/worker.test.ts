@@ -146,12 +146,13 @@ type Script = {
   timedOut?: boolean;
   ghFails?: boolean;
   ghLoginFails?: boolean;
-  setup?: { code?: number; timedOut?: boolean; stdout?: string; stderr?: string };
+  startError?: string;
+  setup?: { code?: number | null; timedOut?: boolean; stdout?: string; stderr?: string; startError?: string };
 };
 type Calls = {
   gh: string[][];
   claude: { args: string[]; cwd: string; env: NodeJS.ProcessEnv }[];
-  setup?: { command: string; cwd: string; env: NodeJS.ProcessEnv }[];
+  setup?: { command: string; cwd: string; env: NodeJS.ProcessEnv; shell: string }[];
 };
 
 const RESULT = JSON.stringify({
@@ -176,8 +177,13 @@ function commitIn(dir: string, file: string): void {
 
 function fakeRunner(script: Script, calls: Calls): Runner {
   return async (command, args, options = {}) => {
-    if (command === "sh") {
-      calls.setup?.push({ command: args[1], cwd: options.cwd as string, env: options.env as NodeJS.ProcessEnv });
+    if (/^sh(\.exe)?$/.test(path.basename(command))) {
+      calls.setup?.push({
+        command: args[1],
+        cwd: options.cwd as string,
+        env: options.env as NodeJS.ProcessEnv,
+        shell: command
+      });
       return { code: 0, stdout: "", stderr: "", timedOut: false, ...script.setup };
     }
     if (command === "gh") {
@@ -200,7 +206,14 @@ function fakeRunner(script: Script, calls: Calls): Runner {
     if (script.companionCommit) commitIn(path.join(runDir, "companions/product"), "docs/new.md");
     if (script.handback) fs.writeFileSync(path.join(runDir, "handback.md"), "## Summary\n\nDone.\n");
     fs.appendFileSync(options.stdoutFile as string, `${script.stream ?? `${BLOCKED}\n${RESULT}`}\n`);
-    return { code: script.code ?? 0, stdout: "", stderr: script.stderr ?? "", timedOut: script.timedOut ?? false };
+    const started = script.startError === undefined ? {} : { startError: script.startError };
+    return {
+      code: script.code ?? 0,
+      stdout: "",
+      stderr: script.stderr ?? "",
+      timedOut: script.timedOut ?? false,
+      ...started
+    };
   };
 }
 
@@ -459,6 +472,61 @@ describe("once", () => {
     expect(failed.calls.claude).toEqual([]);
     const slow = await runWith(world, [issue("MR-2")], { setup: { timedOut: true, code: null as unknown as number } });
     expectReleased(slow.jira, slow.record as RunRecord, 'setup command "npm ci" in backend timed out:');
+  });
+
+  it("finds Git's sh for the setup commands on Windows", async () => {
+    const world = setup();
+    world.config.setup = { backend: ["npm ci"] };
+    const git = path.join(world.root, "Git");
+    write(git, "cmd/git.exe", "");
+    const sh = write(git, "bin/sh.exe", "");
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker } = deps(world, fakeJira([issue("MR-7")]), fakeRunner({ commit: true }, calls));
+    worker.platform = "win32";
+    worker.env = { ...worker.env, PATH: path.join(git, "cmd"), PATHEXT: ".EXE" };
+    const run = (await once(worker)).runs[0];
+    expect([run.state, run.reason]).toEqual(["handed-back", null]);
+    expect(calls.setup?.map((call) => [call.shell, call.command])).toEqual([[sh, "npm ci"]]);
+  });
+
+  it("releases without the blocked label when the machine cannot start the setup or Claude, and the loop stops", async () => {
+    const world = setup();
+    world.config.setup = { backend: ["npm ci"] };
+    const machine = (jira: FakeJira, record: RunRecord, reason: string) => {
+      expect(record.state).toBe("released");
+      expect(record.environment).toBe(true);
+      expect(record.reason).toBe(reason);
+      expect((jira.store.get(record.key) as JiraIssue).labels).not.toContain("agent-blocked");
+      expect(jira.comments[record.key]?.at(-1)).toContain(
+        `Released by the Globu worker: ${reason}\n\nThis is a problem with the worker's machine, not with the issue, so it is not labelled agent-blocked`
+      );
+    };
+    const unstarted = await runWith(world, [issue("MR-1")], { setup: { code: null, startError: "ENOENT" } });
+    machine(
+      unstarted.jira,
+      unstarted.record as RunRecord,
+      'setup command "npm ci" in backend: could not start sh: not found on PATH'
+    );
+    expect(unstarted.calls.claude).toEqual([]);
+
+    const jira = fakeJira([issue("MR-2")]);
+    const { worker, io } = deps(world, jira, fakeRunner({}, { gh: [], claude: [] }));
+    worker.platform = "win32";
+    worker.env = { ...worker.env, PATH: tempDir() };
+    const slept: number[] = [];
+    await loop(worker, { sleep: async (ms) => void slept.push(ms), stopped: () => false });
+    expect(slept).toEqual([]);
+    const shellless = loadRuns(world.home).find(({ record }) => record.key === "MR-2")?.record as RunRecord;
+    machine(
+      jira,
+      shellless,
+      "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"
+    );
+    expect(io.stderr).toContain("globu-worker: stopping, the machine needs fixing first: could not find sh");
+
+    world.config.setup = {};
+    const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
+    machine(claudeless.jira, claudeless.record as RunRecord, "could not start claude: not found on PATH");
   });
 
   it("opens a plain pull request without labels or a commit author and notes a run without a last message", async () => {
