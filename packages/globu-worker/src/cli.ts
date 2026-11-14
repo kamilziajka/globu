@@ -18,6 +18,7 @@ import {
 } from "./config.js";
 import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
+import { hold, POLL_MS, withLockPid } from "./hold.js";
 import { jiraClient } from "./jira.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
@@ -26,7 +27,7 @@ import { delegate, retry, why } from "./triage.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
 import { claimIssue, finishRun, loop, once, releaseRun, type WorkerDeps } from "./worker.js";
 
-export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now">> & {
+export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platform">> & {
   signals: EventEmitter;
   screen?: Screen;
   readKey?: ReadKey;
@@ -54,7 +55,7 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
   process.env.GLOBU_HOME = homes.home;
   process.env.CLAUDE_CONFIG_DIR = homes.claudeConfigDir;
   const loaded = withSecretsFile(given, homes.home);
-  const env: NodeJS.ProcessEnv = { ...loaded.env, ...NON_INTERACTIVE };
+  const env: NodeJS.ProcessEnv = withLockPid({ ...loaded.env, ...NON_INTERACTIVE }, process.pid);
   Object.assign(process.env, NON_INTERACTIVE);
   for (const name of GIT_VARIABLES) {
     const value = env[name];
@@ -280,6 +281,19 @@ export async function workerMain(
         return;
       }
       await untilStopped(deps);
+    });
+
+  program
+    .command("hold")
+    .description("take the lock files of exclusive resources, run a command and give them back when it ends")
+    .argument("<resources>", "resource names separated by commas, such as gpu or gpu,disk")
+    .argument("<command...>", "the command and its arguments, after --")
+    .option("--wait <duration>", "wait up to this long, such as 30s, 5m or 1h, while another process holds one")
+    .action(async (resources: string, command: string[], options: { wait?: string }) => {
+      const now = overrides.now ?? (() => new Date());
+      const platform = overrides.platform ?? process.platform;
+      const deps = { io, env, signals: overrides.signals, now, platform, pollMs: POLL_MS };
+      exitCode = await hold(deps, resources, command, options);
     });
 
   program

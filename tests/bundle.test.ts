@@ -1,10 +1,14 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { baseIndex, initRepo, read, tempDir, write } from "../packages/testing/index.js";
+import { register } from "../packages/globu-core/src/index.js";
+import { workerMain } from "../packages/globu-worker/src/cli.js";
+import type { JiraClient } from "../packages/globu-worker/src/jira.js";
+import { baseIndex, captureIo, initRepo, read, tempDir, write } from "../packages/testing/index.js";
 
 const root = path.join(import.meta.dirname, "..");
 const GLOBU = path.join(root, "packages/globu-cli/dist/globu.mjs");
@@ -129,6 +133,95 @@ describe("bundled worker", () => {
     const result = spawnSync(GLOBU_WORKER, ["once"], { encoding: "utf8", env });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GLOBU_HOME points at");
+  });
+});
+
+const RENDER = `
+const fs = require("node:fs");
+const timer = setInterval(() => {
+  if (fs.existsSync(process.argv[1])) {
+    clearInterval(timer);
+    process.exit(0);
+  }
+}, 20);
+`;
+
+const WAITING_CONFIG = `
+jira:
+  site: https://acme.atlassian.net
+  jql: project = MR
+  claimedStatus: Delivery
+  releasedStatus: Ready for delivery
+  repository:
+    labelPrefix: "repo:"
+shards:
+  deliverable: [backend]
+limits:
+  exclusive: [gpu]
+`;
+
+function unclaimedJira(claims: string[]): JiraClient {
+  const issue = {
+    key: "MR-1",
+    summary: "Render the thing",
+    description: "",
+    labels: ["repo:backend"],
+    status: "Ready for delivery",
+    statusId: "1",
+    assignee: null,
+    comments: [],
+    fields: {}
+  };
+  const nothing = async () => {};
+  return {
+    myself: async () => ({ accountId: "bot", displayName: "Bot" }),
+    search: async () => [{ key: "MR-1", labels: issue.labels }],
+    issue: async () => structuredClone(issue),
+    assign: async (key) => {
+      claims.push(key);
+    },
+    transitionTo: nothing,
+    comment: nothing,
+    addLabel: nothing,
+    removeLabel: nothing,
+    setField: nothing,
+    remoteLink: nothing
+  };
+}
+
+describe("globu-worker hold", () => {
+  it("makes a worker cycle on the same machine wait on gpu until the command ends", async () => {
+    const root = tempDir();
+    const home = process.env.GLOBU_HOME as string;
+    const remote = initRepo(path.join(root, "remotes/backend"), { "README.md": "backend\n" });
+    register({ locator: `file://${remote}`, cwd: root, dest: path.join(home, "work/backend") });
+    write(home, "worker.yaml", WAITING_CONFIG);
+    const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
+    const go = path.join(root, "render-done");
+    const render = spawn(GLOBU_WORKER, ["hold", "gpu", "--", process.execPath, "-e", RENDER, go], {
+      env: { ...process.env },
+      stdio: "ignore"
+    });
+    const ended = new Promise<number | null>((resolve) => render.on("close", resolve));
+    while (!fs.existsSync(lock)) await new Promise((resolve) => setTimeout(resolve, 20));
+    const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
+    expect(holder).toMatchObject({ pid: render.pid, host: os.hostname() });
+
+    const claims: string[] = [];
+    const env = { GLOBU_HOME: home, JIRA_EMAIL: "bot@acme.example", JIRA_API_TOKEN: "secret" };
+    const io = captureIo(root);
+    const overrides = { signals: new EventEmitter(), jira: unclaimedJira(claims) };
+    expect(await workerMain(["once"], io, env, overrides)).toBe(0);
+    const line = io.stdout.split("\n").find((entry) => entry.startsWith("MR-1\t"));
+    expect(line).toBe(
+      `MR-1\twaiting on gpu (held by ${holder.holder}, pid ${render.pid} on ${os.hostname()} since ${holder.since})`
+    );
+    expect(holder.holder).toMatch(/^globu-worker hold \(.+ -e .+\.\.\.\)$/);
+    expect(claims).toEqual([]);
+
+    fs.writeFileSync(go, "");
+    expect(await ended).toBe(0);
+    expect(fs.existsSync(lock)).toBe(false);
   });
 });
 

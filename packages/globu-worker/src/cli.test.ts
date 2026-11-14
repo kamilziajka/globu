@@ -297,6 +297,7 @@ describe("globu-worker", () => {
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();
     expect(seen[0].JIRA_EMAIL).toBeUndefined();
     expect([seen[0].GIT_TERMINAL_PROMPT, seen[0].GCM_INTERACTIVE]).toEqual(["0", "never"]);
+    expect(seen[0].GLOBU_LOCK_PIDS).toBe(String(process.pid));
     expect(process.env.GIT_TERMINAL_PROMPT).toBe("0");
     const logs = fs
       .readdirSync(path.join(home, "logs"))
@@ -433,6 +434,20 @@ describe("globu-worker", () => {
     const jira = idleJira(() => signals.emit("SIGTERM"));
     expect(await workerMain(["start"], auto, withGithub(), { jira, signals, run: healthy })).toBe(0);
     expect(auto.stdout.trim().split("\n").at(-1)).toBe("stopping after the current cycle");
+  });
+
+  it("holds a resource for the length of a command without a worker configuration", async () => {
+    const io = captureIo(tempDir());
+    const command = ["--", process.execPath, "-e", "process.exit(4)"];
+    expect(await workerMain(["hold", "gpu", ...command], io, process.env, quiet())).toBe(4);
+    const windows = { ...quiet(), platform: "win32" as const, now: () => new Date() };
+    expect(await workerMain(["hold", "gpu", "--wait", "5s", ...command], io, process.env, windows)).toBe(4);
+    expect(io.stderr).toBe("");
+    expect(fs.readdirSync(process.env.GLOBU_LOCK_DIR as string)).toEqual([]);
+    const bad = captureIo(tempDir());
+    expect(await workerMain(["hold", "../gpu", ...command], bad, process.env, quiet())).toBe(1);
+    expect(bad.stderr).toContain('globu-worker: invalid resource "../gpu"');
+    expect(await workerMain(["hold", "gpu"], captureIo(tempDir()), process.env, quiet())).toBe(1);
   });
 
   it("writes a diagnostics archive to the given path or a timestamped one in the current directory", async () => {

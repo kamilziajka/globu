@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [globu-worker](./worker.md): `globu-worker hold <resource>[,<resource>] [--wait <duration>] -- <command>` takes the exclusive lock files for the length of a command and passes its exit code through: exit code 75 and the holder when a lock is held, `--wait` to try again for up to a duration, `SIGTERM` and `SIGHUP` passed on outside Windows, 127 when the command cannot start. The worker and `hold` give their commands `GLOBU_LOCK_PIDS`, so a hook wrapped in `hold` inside a run that holds the lock does not wait on its parent.
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14
