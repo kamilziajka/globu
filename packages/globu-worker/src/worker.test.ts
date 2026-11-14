@@ -414,6 +414,7 @@ describe("once", () => {
     expect(claude.args.slice(claude.args.indexOf("--disallowedTools"), claude.args.indexOf("--add-dir"))).toEqual([
       "--disallowedTools",
       "Bash(git push*)",
+      "Bash(git stash*)",
       "Bash(gh *)",
       "Bash(curl *)",
       "Bash(wget *)"
@@ -542,6 +543,32 @@ describe("once", () => {
     world.config.setup = {};
     const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
     machine(claudeless.jira, claudeless.record as RunRecord, "could not start claude: not found on PATH");
+  });
+
+  it("records denied tool calls and the time in the model API in run.json and the footer", async () => {
+    const world = setup();
+    const stream = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      total_cost_usd: 1.25,
+      num_turns: 59,
+      result: "done",
+      duration_ms: 798_000,
+      duration_api_ms: 228_000,
+      permission_denials: [
+        { tool_name: "Bash", tool_input: { command: "git stash push -u" } },
+        { tool_name: "Bash", tool_input: { command: "cat <<'EOF' > a.ts\nexport {};\nEOF" } },
+        { tool_name: "Bash", tool_input: { command: `node -e "${"x".repeat(200)}"` } }
+      ]
+    });
+    const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true, stream });
+    expect(record).toMatchObject({ durationMs: 798_000, apiMs: 228_000 });
+    expect(record?.denied).toHaveLength(3);
+    const comment = jira.comments["MR-7"][0];
+    expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 3.");
+    expect(comment).toContain("- denied Bash: git stash push -u\n");
+    expect(comment).toContain("- denied Bash: cat <<'EOF' > a.ts …\n");
+    expect(comment).toContain(`- denied Bash: node -e "${"x".repeat(145)} …`);
   });
 
   it("opens a plain pull request without labels or a commit author and notes a run without a last message", async () => {

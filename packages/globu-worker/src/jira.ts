@@ -1,3 +1,5 @@
+import { type AdfNode, adfToMarkdown } from "./adf.js";
+
 export type JiraComment = { author: string; created: string; body: string };
 export type JiraIssue = {
   key: string;
@@ -11,6 +13,7 @@ export type JiraIssue = {
   fields: Record<string, unknown>;
 };
 export type JiraBlocker = { key: string; summary: string; status: string; done: boolean };
+export type JiraLink = { relation: string; key: string; summary: string; status: string };
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
 export type JiraClient = {
@@ -31,11 +34,11 @@ type RawIssue = {
   key: string;
   fields: Record<string, unknown> & {
     summary: string;
-    description: string | null;
+    description: AdfNode | null;
     labels: string[];
     status: { id: string; name: string };
     assignee: { accountId: string } | null;
-    comment?: { comments: { author: { displayName: string }; created: string; body: string }[] };
+    comment?: { comments: { author: { displayName: string }; created: string; body: AdfNode }[] };
   };
 };
 type Transition = { id: string; to: { id: string; name: string } };
@@ -55,12 +58,35 @@ type RawLinked = {
   key: string;
   fields?: { summary?: string; status?: { name: string; statusCategory?: { key: string } } };
 };
-type RawLink = { type?: { name?: string }; inwardIssue?: RawLinked };
+type RawLink = {
+  type?: { name?: string; inward?: string; outward?: string };
+  inwardIssue?: RawLinked;
+  outwardIssue?: RawLinked;
+};
+
+function rawLinks(issue: JiraIssue): RawLink[] {
+  return Array.isArray(issue.fields.issuelinks) ? (issue.fields.issuelinks as RawLink[]) : [];
+}
+
+export function linksOf(issue: JiraIssue): JiraLink[] {
+  return rawLinks(issue).flatMap((link) => {
+    const linked = link.inwardIssue ?? link.outwardIssue;
+    if (linked === undefined) return [];
+    const named = link.inwardIssue === undefined ? link.type?.outward : link.type?.inward;
+    return [
+      {
+        relation: named ?? link.type?.name ?? "linked to",
+        key: linked.key,
+        summary: linked.fields?.summary ?? "",
+        status: linked.fields?.status?.name ?? "unknown"
+      }
+    ];
+  });
+}
 
 export function blockersOf(issue: JiraIssue, types: string[]): JiraBlocker[] {
   const wanted = types.map((type) => type.toLowerCase());
-  const links = Array.isArray(issue.fields.issuelinks) ? (issue.fields.issuelinks as RawLink[]) : [];
-  return links.flatMap((link) => {
+  return rawLinks(issue).flatMap((link) => {
     const linked = link.inwardIssue;
     if (linked === undefined || !wanted.includes((link.type?.name ?? "").toLowerCase())) return [];
     const status = linked.fields?.status;
@@ -80,7 +106,7 @@ function toIssue(raw: RawIssue): JiraIssue {
   return {
     key: raw.key,
     summary,
-    description: description ?? "",
+    description: adfToMarkdown(description),
     labels,
     status: status.name,
     statusId: status.id,
@@ -88,7 +114,7 @@ function toIssue(raw: RawIssue): JiraIssue {
     comments: (comment?.comments ?? []).map((entry) => ({
       author: entry.author.displayName,
       created: entry.created,
-      body: entry.body
+      body: adfToMarkdown(entry.body)
     })),
     fields: rest
   };
@@ -98,8 +124,8 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
   const base = site.replace(/\/+$/, "");
   const authorization = `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`;
 
-  async function request<T>(method: string, route: string, body?: unknown): Promise<T> {
-    const response = await fetchFn(`${base}/rest/api/2${route}`, {
+  async function request<T>(method: string, route: string, body?: unknown, version = 2): Promise<T> {
+    const response = await fetchFn(`${base}/rest/api/${version}${route}`, {
       method,
       headers: { Authorization: authorization, Accept: "application/json", "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body)
@@ -122,7 +148,7 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
       return result.issues.map((issue) => ({ key: issue.key, labels: issue.fields.labels }));
     },
     async issue(key) {
-      return toIssue(await request<RawIssue>("GET", `${issuePath(key)}?fields=${ISSUE_FIELDS}`));
+      return toIssue(await request<RawIssue>("GET", `${issuePath(key)}?fields=${ISSUE_FIELDS}`, undefined, 3));
     },
     assign: (key, accountId) => request("PUT", `${issuePath(key)}/assignee`, { accountId }),
     async transitionTo(key, status) {

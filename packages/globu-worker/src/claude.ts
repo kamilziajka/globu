@@ -50,8 +50,12 @@ export type ClaudeSummary = {
   result: string | null;
   blocked: string[];
   failedTools: string[];
+  denied: string[];
+  durationMs: number;
+  apiMs: number;
 };
 
+type Denial = { tool_name: string; tool_input?: Record<string, unknown> };
 type ToolResult = { type: string; content?: unknown; is_error?: boolean };
 type StreamEvent = {
   type: string;
@@ -60,6 +64,9 @@ type StreamEvent = {
   total_cost_usd?: number;
   num_turns?: number;
   result?: string;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  permission_denials?: Denial[];
   message?: { content?: ToolResult[] };
 };
 
@@ -72,6 +79,12 @@ function textOf(content: unknown): string {
     .filter((part: { type?: string }) => part.type === "text")
     .map((part: { text: string }) => part.text)
     .join("\n");
+}
+
+function deniedCall(denial: Denial): string {
+  const input = denial.tool_input ?? {};
+  const what = typeof input.command === "string" ? input.command : JSON.stringify(input);
+  return `${denial.tool_name}: ${what}`;
 }
 
 function parseLine(line: string): StreamEvent | null {
@@ -90,7 +103,10 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     turns: 0,
     result: null,
     blocked: [],
-    failedTools: []
+    failedTools: [],
+    denied: [],
+    durationMs: 0,
+    apiMs: 0
   };
   for (const line of jsonl.split("\n")) {
     const event = parseLine(line);
@@ -101,6 +117,9 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
       summary.costUsd = event.total_cost_usd ?? 0;
       summary.turns = event.num_turns ?? 0;
       summary.result = event.result ?? null;
+      summary.denied = (event.permission_denials ?? []).map(deniedCall);
+      summary.durationMs = event.duration_ms ?? 0;
+      summary.apiMs = event.duration_api_ms ?? 0;
       continue;
     }
     for (const part of event.message?.content ?? []) {

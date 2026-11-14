@@ -110,7 +110,9 @@ describe("checkAccess", () => {
     expect(detail(checks, "shards")).toBe("backend");
     expect(detail(checks, "jira")).toBe("https://acme.atlassian.net as Bot, the JQL matches issues");
     expect(detail(checks, "github")).toBe("as octocat, 1 deliverable repositories readable");
-    expect(detail(checks, "claude")).toBe("claude-test answers in /claude with the issue-deliver skill (0.08 USD)");
+    expect(detail(checks, "claude")).toBe(
+      "claude-test (the default, set claude.model to choose) answers in /claude with the issue-deliver skill (0.08 USD)"
+    );
     const claude = calls.find((call) => call.command === "claude") as Call;
     expect(claude.args).not.toContain("--model");
     expect(claude.args).not.toContain("--plugin-dir");
@@ -202,6 +204,10 @@ describe("checkAccess", () => {
     const plain = JSON.stringify({ type: "system", subtype: "init", model: "m", skills: ["issue-deliver"] });
     const { worker } = deps(setup, { replies: { claude: { stdout: `${plain}\n${RESULT}\n` } } });
     expect(detail(await checkAccess(worker), "claude")).toBe(
+      "m (the default, set claude.model to choose) answers in /claude with the issue-deliver skill (0.08 USD)"
+    );
+    const chosen = deps({ ...setup, config }, { replies: { claude: { stdout: `${plain}\n${RESULT}\n` } } });
+    expect(detail(await checkAccess(chosen.worker), "claude")).toBe(
       "m answers in /claude with the issue-deliver skill (0.08 USD)"
     );
   });

@@ -6,7 +6,10 @@ type Call = { method: string; url: string; body: unknown; authorization: string 
 function fakeFetch(routes: Record<string, { status?: number; body?: unknown }>) {
   const calls: Call[] = [];
   const fetchFn: Fetch = async (url, init) => {
-    const route = `${init.method} ${url.replace("https://acme.atlassian.net/rest/api/2", "")}`;
+    const path = url
+      .replace("https://acme.atlassian.net/rest/api/2", "")
+      .replace("https://acme.atlassian.net/rest/api/3", "v3:");
+    const route = `${init.method} ${path}`;
     calls.push({
       method: init.method as string,
       url,
@@ -25,11 +28,33 @@ const RAW_ISSUE = {
   key: "MR-7",
   fields: {
     summary: "Add the thing",
-    description: "Lands in `backend`.",
+    description: {
+      type: "doc",
+      version: 1,
+      content: [
+        { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Description" }] },
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Lands in " },
+            { type: "text", text: "backend/src/app.ts", marks: [{ type: "code" }] },
+            { type: "text", text: "." }
+          ]
+        }
+      ]
+    },
     labels: ["agent-eligible", "repo:backend"],
     status: { id: "10001", name: "Ready for delivery" },
     assignee: null,
-    comment: { comments: [{ author: { displayName: "Kamil" }, created: "2026-11-05T10:00:00.000+0000", body: "go" }] },
+    comment: {
+      comments: [
+        {
+          author: { displayName: "Kamil" },
+          created: "2026-11-05T10:00:00.000+0000",
+          body: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "go" }] }] }
+        }
+      ]
+    },
     customfield_10042: { value: "backend" }
   }
 };
@@ -53,8 +78,8 @@ describe("jiraClient", () => {
           ]
         }
       },
-      "GET /issue/MR-7?fields=*all": { body: RAW_ISSUE },
-      "GET /issue/MR-9?fields=*all": {
+      "GET v3:/issue/MR-7?fields=*all": { body: RAW_ISSUE },
+      "GET v3:/issue/MR-9?fields=*all": {
         body: {
           key: "MR-9",
           fields: {
@@ -76,7 +101,7 @@ describe("jiraClient", () => {
     expect(await client.issue("MR-7")).toEqual({
       key: "MR-7",
       summary: "Add the thing",
-      description: "Lands in `backend`.",
+      description: "## Description\n\nLands in `backend/src/app.ts`.",
       labels: ["agent-eligible", "repo:backend"],
       status: "Ready for delivery",
       statusId: "10001",
@@ -85,6 +110,7 @@ describe("jiraClient", () => {
       fields: { customfield_10042: { value: "backend" } }
     });
     const bare = await client.issue("MR-9");
+    expect(calls[1].url).toBe("https://acme.atlassian.net/rest/api/3/issue/MR-7?fields=*all");
     expect(bare.description).toBe("");
     expect(bare.comments).toEqual([]);
     expect(bare.assignee).toBe("a1");

@@ -29,12 +29,27 @@ describe("renderBrief", () => {
         key: "MR-7",
         summary: "Add the thing",
         description: "Do it.\nCarefully.",
-        labels: [],
+        labels: ["windows", "bug"],
         status: "Delivery",
         statusId: "10023",
         assignee: "bot",
-        comments: [{ author: "Kamil", created: "2026-11-05", body: "Also this." }],
-        fields: {}
+        comments: [
+          { author: "Bot", created: "2026-11-04", body: "Released by the Globu worker: setup failed\n\nRun r0 as Bot" },
+          { author: "Kamil", created: "2026-11-05", body: "Also this." },
+          { author: "Bot", created: "2026-11-05", body: `Released by the Globu worker: ${"x".repeat(250)}` }
+        ],
+        fields: {
+          issuelinks: [
+            { type: { name: "Blocks", inward: "is blocked by" }, inwardIssue: { key: "MR-5" } },
+            {
+              type: { name: "Relates", outward: "relates to" },
+              outwardIssue: { key: "MR-3", fields: { summary: "Nearby", status: { name: "Done" } } }
+            },
+            { type: { name: "Cloners" }, inwardIssue: { key: "MR-2" } },
+            { inwardIssue: { key: "MR-1" } },
+            { type: { name: "Odd" } }
+          ]
+        }
       },
       site: "https://acme.atlassian.net",
       shard: "backend",
@@ -54,6 +69,7 @@ describe("renderBrief", () => {
         },
         { key: "MR-6", summary: "Other", status: "In Review", done: false, resolved: false, pullRequests: [] }
       ],
+      allowedTools: ["Read", "Bash(npm run *)", "Bash(git status*)"],
       handbackFile: "/runs/r1/handback.md"
     });
     expect(brief).toContain("# MR-7: Add the thing\n\nIssue: https://acme.atlassian.net/browse/MR-7");
@@ -66,7 +82,17 @@ describe("renderBrief", () => {
     expect(brief).toContain("a `## Follow-ups` section of the handback");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain("### Description\n\n> Do it.\n> Carefully.");
-    expect(brief).toContain("### Comments\n\n**Kamil, 2026-11-05**\n\n> Also this.");
+    expect(brief).toContain("### Comments\n\n**Kamil, 2026-11-05**\n\n> Also this.\n\n## Earlier attempts");
+    expect(brief).not.toContain("setup failed");
+    expect(brief).toContain(`The worker released this issue 2 times before, the last time with: ${"x".repeat(200)} …`);
+    expect(brief).toContain("Status: Delivery. Labels: windows, bug.");
+    expect(brief).toContain(
+      "Bash runs only these commands, matched by prefix: `npm run *`, `git status*`. Every part of a command joined with"
+    );
+    expect(brief).toContain("`git stash` is denied");
+    expect(brief).toContain(
+      "## Linked issues\n\n- relates to MR-3: Nearby (Done)\n- Cloners MR-2 (unknown)\n- linked to MR-1 (unknown)\n"
+    );
     expect(brief).toContain("- `product/docs/api.md`: /w/product/docs/api.md");
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main), perhaps `src/new.ts`");
     expect(brief).toContain(
@@ -95,6 +121,7 @@ describe("renderBrief", () => {
       refs: [],
       informational: [],
       blockers: [],
+      allowedTools: ["Read"],
       handbackFile: "/h.md"
     });
     expect(brief).toContain("> (empty)");
@@ -103,6 +130,38 @@ describe("renderBrief", () => {
     expect(brief).not.toContain("### Comments");
     expect(brief).not.toContain("Paths the issue mentions");
     expect(brief).not.toContain("## Blocked by");
+    expect(brief).not.toContain("## Earlier attempts");
+    expect(brief).not.toContain("## Linked issues");
+    expect(brief).toContain("Labels: none.");
+    expect(brief).toContain("Bash is not allowed in this run.");
+  });
+
+  it("says once for a single earlier release", () => {
+    const brief = renderBrief({
+      issue: {
+        key: "MR-8",
+        summary: "Bare",
+        description: "",
+        labels: [],
+        status: "Delivery",
+        statusId: "10023",
+        assignee: null,
+        comments: [{ author: "Bot", created: "2026-11-04", body: "Released by the Globu worker: no marker" }],
+        fields: {}
+      },
+      site: "s",
+      shard: "backend",
+      tree: "/t",
+      branch: "b",
+      companions: [],
+      refs: [],
+      informational: [],
+      blockers: [],
+      allowedTools: [],
+      handbackFile: "/h.md"
+    });
+    expect(brief).toContain("The worker released this issue once before, the last time with: no marker");
+    expect(brief).not.toContain("### Comments");
   });
 
   it("writes a missing reference without candidates plainly", () => {
@@ -126,6 +185,7 @@ describe("renderBrief", () => {
       refs: [{ ...missing, candidates: [] }],
       informational: [],
       blockers: [],
+      allowedTools: ["Read"],
       handbackFile: "/h.md"
     });
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main)\n");

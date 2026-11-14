@@ -24,6 +24,9 @@ export type RunRecord = {
   repairOf?: string;
   followUp?: FollowUp;
   environment?: boolean;
+  denied?: string[];
+  durationMs?: number;
+  apiMs?: number;
 };
 export type StoredRun = { dir: string; record: RunRecord };
 
