@@ -64,6 +64,7 @@ jira:
   releasedStatus: 10001
   doneStatus: Done
   blockedLabel: agent-blocked
+  blockingLinks: [Blocks]
   repository:
     labelPrefix: "repo:"
 shards:
@@ -117,6 +118,7 @@ github:
 | `jira.releasedStatus` | Where a released issue goes back to, by name or by id | required |
 | `jira.doneStatus` | Where an issue goes once all its pull requests are merged, by name or by id. Without it the issue stays in `claimedStatus` and only gets a comment | none |
 | `jira.blockedLabel` | Added when the worker gives an issue back, so the JQL above excludes it until a person removes it | `agent-blocked` |
+| `jira.blockingLinks` | Issue link types, by name, that make an issue wait for the issue on their "is blocked by" side, see [Issues that wait](#issues-that-wait). An empty list turns waiting off | `[Blocks]` |
 | `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | required |
 | `shards.deliverable` | Shards the worker may run in. The repository marker of an issue must name one; anything else is released, so the list is the team's whitelist of repositories the agent delivers to | required |
 | `shards.companion` | Shards a run may also write to, each on a worktree of its own with the same branch name, whether or not the issue names them. Commits there become a second pull request. A run never consists of companion changes alone: the deliverable is where it lives and where the per-shard limit counts | none |
@@ -162,9 +164,9 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 
 Every command takes `--log-level` before its name, as in `globu-worker --log-level debug start`.
 
-`start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd` and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log. The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
+`start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `waiting` (with the blockers it waits on), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd` and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it prints one line per state change, `<time> <key> <state>: <detail>`, which reads well in a service log. The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
 
-`once` prints one line per issue it looked at (`claimed`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
+`once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
 
 ## From a session
 
@@ -175,12 +177,12 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 ## A run
 
 1. **Reconcile.** Runs left in a non-final state by a crash or a restart are closed: their worktrees are removed and, when the issue is still assigned to the worker in the claimed status, it is released with a comment saying so.
-2. **Poll.** The JQL, oldest first as the team wrote it. Up to `limits.concurrent` issues are taken, skipping an issue already assigned and an issue whose shard already has `limits.perShard` runs this cycle.
+2. **Poll.** The JQL, oldest first as the team wrote it. Up to `limits.concurrent` issues are taken, skipping an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
 3. **Claim.** Assign to the worker's own account, transition to `claimedStatus`, read the issue back. If someone else got there first, drop it without a word.
 4. **Find the target.** The repository marker names a shard. Not a deliverable shard: release.
 5. **Resolve.** Shard-qualified refs such as `product/docs/decisions/012-pricing.md` and code host links to files in a shard's repo are checked with the same code as `globu resolve`, after a fetch. One missing: release, with the resolver's report and its candidates in the comment, before a token is spent. Bare paths in backticks are resolved too but only reported in the brief, since they may be files the change creates.
 6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the `setup` commands of each worktree's shard; a failing one releases the issue.
-7. **Brief.** `brief.md` holds the issue as Jira returned it under a heading that says it is untrusted input, the resolved references with their locations on this machine, the worktrees and the handback path.
+7. **Brief.** `brief.md` holds the issue as Jira returned it under a heading that says it is untrusted input, the resolved references with their locations on this machine, the issues it is blocked by with their status and the worker's pull requests for them, the worktrees and the handback path.
 8. **Run.** From the worktree root: `claude -p "Implement the issue described in <brief> with the issue-deliver skill. Write the handback to <handback>." --permission-mode dontAsk --allowedTools <claude.allowedTools> --disallowedTools "Bash(git push*)" "Bash(gh *)" "Bash(curl *)" "Bash(wget *)" --add-dir <run dir> --max-turns N --max-budget-usd X --output-format stream-json --verbose`, plus `--model` and `--plugin-dir` when configured. The disallowed four keep the run from acting as the courier and are not configurable. The stream goes to `claude.jsonl`. `--add-dir` is what lets the run write the handback outside the repository.
 9. **Collect.** Cost, turns and the end state from the stream. Every failed tool call that carries the guard's `shard "<id>"` wording is recorded as a blocked write. Commits on the branch are counted.
 10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, comment on the issue with the handback and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
@@ -203,6 +205,14 @@ Each repair is a run of its own, with an id of the form `<KEY>-repair-<attempt>-
 Then the cap: with `limits.openPullRequests` or more pull requests open, conflicted and needing a person included, the cycle claims nothing and says `holding new issues`. The cap bounds how many branches can drift apart at once, so the number of conflicts stays small and review shows up as the bottleneck it is. `once --issue` and Enter in pick mode are deliberate and ignore the cap.
 
 Merging stays with people. A merge queue, or GitHub's auto-merge with required checks, is the natural partner: it lands approved pull requests in order and tests each on top of the ones ahead of it, which catches the conflicts that only show when two changes meet.
+
+## Issues that wait
+
+An issue linked as "is blocked by" another issue, through a link type in `jira.blockingLinks`, waits until every such blocker is resolved. JQL cannot say "no open blocker" without a Jira app, so the worker reads the links of each issue the JQL returns. A blocker is resolved when its status is in Jira's Done category, or when one of the worker's own runs for it has its pull requests merged; the second keeps a chain moving when `jira.doneStatus` is not set. A waiting issue is listed as `waiting on <key> (<status>)` and takes no slot, so the cycle goes on to the next issue. `once --issue` runs it anyway, and in pick mode it is a gray row that cannot be selected.
+
+That makes delivery sequential: with A blocking B and both matching the JQL, a cycle claims A. Once A's pull request is merged the follow-ups above settle it, and the next cycle claims B, built on a default branch that has A, with A and its pull request named in B's brief. How fast the chain moves depends on the merges: with GitHub's auto-merge and required checks it moves without a person.
+
+A blocker the worker's Jira account cannot see is left out of the links by Jira and does not hold anything up. A cycle of links holds both issues; each row says what it waits on. Branching B from A's pull request before it merges, stacked pull requests, is not supported.
 
 ## What the guard does in a run
 

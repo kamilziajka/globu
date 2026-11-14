@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Fetch, jiraClient } from "./jira.js";
+import { blockersOf, type Fetch, type JiraIssue, jiraClient } from "./jira.js";
 
 type Call = { method: string; url: string; body: unknown; authorization: string };
 
@@ -135,5 +135,44 @@ describe("jiraClient", () => {
     const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
     await expect(client.myself()).rejects.toThrow('Jira GET /myself failed: 401 {"message":"bad token"}');
     await expect(client.search("x", 1)).rejects.toThrow("Jira POST /search/jql failed: 404 no such route");
+  });
+});
+
+describe("blockersOf", () => {
+  const linked = (key: string, status: string, category: string) => ({
+    key,
+    fields: { summary: `Summary of ${key}`, status: { name: status, statusCategory: { key: category } } }
+  });
+  const withLinks = (issuelinks: unknown): JiraIssue => ({
+    key: "MR-7",
+    summary: "",
+    description: "",
+    labels: [],
+    status: "Ready for delivery",
+    statusId: "10001",
+    assignee: null,
+    comments: [],
+    fields: { issuelinks }
+  });
+
+  it("returns the inward side of links whose type blocks, with the blocker's status", () => {
+    const issue = withLinks([
+      { type: { name: "Blocks" }, inwardIssue: linked("MR-1", "In Review", "indeterminate") },
+      { type: { name: "blocks" }, inwardIssue: linked("MR-2", "Done", "done") },
+      { type: { name: "Blocks" }, outwardIssue: linked("MR-9", "To Do", "new") },
+      { type: { name: "Relates" }, inwardIssue: linked("MR-3", "To Do", "new") },
+      { type: { name: "Dependency" }, inwardIssue: { key: "MR-4" } },
+      { inwardIssue: linked("MR-5", "To Do", "new") }
+    ]);
+    expect(blockersOf(issue, ["Blocks"])).toEqual([
+      { key: "MR-1", summary: "Summary of MR-1", status: "In Review", done: false },
+      { key: "MR-2", summary: "Summary of MR-2", status: "Done", done: true }
+    ]);
+    expect(blockersOf(issue, ["Dependency"])).toEqual([{ key: "MR-4", summary: "", status: "unknown", done: false }]);
+    expect(blockersOf(issue, [])).toEqual([]);
+  });
+
+  it("finds nothing when the issue has no links field", () => {
+    expect(blockersOf(withLinks(undefined), ["Blocks"])).toEqual([]);
   });
 });

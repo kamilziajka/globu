@@ -12,11 +12,11 @@ import {
   resolveRefs,
   sameRepo
 } from "../../globu-core/src/index.js";
-import { renderBrief } from "./brief.js";
+import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
 import { type Runner, runOrThrow } from "./exec.js";
-import { type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
+import { blockersOf, type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { log, tail } from "./logger.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
@@ -330,6 +330,18 @@ async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree
   return null;
 }
 
+function blockers(deps: WorkerDeps, issue: JiraIssue, stored: StoredRun[]): Blocker[] {
+  return blockersOf(issue, deps.config.jira.blockingLinks).map((blocker) => {
+    const own = stored
+      .map(({ record }) => record)
+      .filter(
+        (record) => record.key === blocker.key && record.repairOf === undefined && record.state === "handed-back"
+      );
+    const merged = own.some((record) => record.followUp?.state === "merged");
+    return { ...blocker, pullRequests: own.flatMap((record) => record.pullRequests), resolved: blocker.done || merged };
+  });
+}
+
 async function prepare(
   deps: WorkerDeps,
   candidate: Candidate,
@@ -400,6 +412,7 @@ async function prepare(
       companions,
       refs: resolved.gating,
       informational: resolved.informational,
+      blockers: blockers(deps, issue, loadRuns(deps.home)),
       handbackFile
     })
   );
@@ -860,14 +873,19 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
   log().info("cycle", { dryRun, eligible: keys });
   const picked: Candidate[] = [];
   const plan: PlanEntry[] = [];
+  const stored = loadRuns(home);
   for (const key of keys) {
     if (picked.length >= slots) break;
     const issue = await jira.issue(key);
     const candidate = { issue, shardId: markerShard(issue, config) };
     const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
     plan.push(entry);
+    const waiting = blockers(deps, issue, stored).filter((blocker) => !blocker.resolved);
     if (options.issue === undefined && issue.assignee !== null) {
       entry.action = "skipped, already assigned";
+    } else if (options.issue === undefined && waiting.length > 0) {
+      entry.action = `waiting on ${waiting.map((blocker) => `${blocker.key} (${blocker.status})`).join(", ")}`;
+      log().info("waiting", { key, on: waiting.map((blocker) => blocker.key) });
     } else if (picked.filter((other) => other.shardId === candidate.shardId).length >= config.limits.perShard) {
       entry.action = `skipped, ${candidate.shardId} has a run already`;
     } else if (dryRun) {

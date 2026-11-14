@@ -34,6 +34,7 @@ function planRow(entry: PlanEntry): Omit<Row, "key" | "summary"> {
   if (action.startsWith("would release: "))
     return { state: "not ready", detail: action.slice("would release: ".length) };
   if (action === "claimed") return { state: "preparing", detail: "" };
+  if (action.startsWith("waiting on ")) return { state: "waiting", detail: action.slice("waiting ".length) };
   return { state: "skipped", detail: action.replace(/^skipped, /, "") };
 }
 

@@ -21,13 +21,15 @@ describe("sessionList", () => {
       },
       { key: "MR-2", summary: "Broken refs", shard: "backend", action: "would release: 1 of 2 references missing" },
       { key: "MR-3", summary: "Taken", shard: "backend", action: "skipped, already assigned" },
-      { key: "MR-4", summary: "Now", shard: "backend", action: "claimed" }
+      { key: "MR-4", summary: "Now", shard: "backend", action: "claimed" },
+      { key: "MR-5", summary: "Later", shard: "backend", action: "waiting on MR-1 (In Review)" }
     ]);
     expect(changed.map((row) => [row.key, row.state, row.detail])).toEqual([
       ["MR-1", "available", "backend (2 references resolved)"],
       ["MR-2", "not ready", "1 of 2 references missing"],
       ["MR-3", "skipped", "already assigned"],
-      ["MR-4", "preparing", ""]
+      ["MR-4", "preparing", ""],
+      ["MR-5", "waiting", "on MR-1 (In Review)"]
     ]);
     expect(list.pickable().map((row) => row.key)).toEqual(["MR-1"]);
     expect(

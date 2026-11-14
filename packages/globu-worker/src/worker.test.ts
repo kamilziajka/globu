@@ -476,6 +476,53 @@ describe("once", () => {
     expect(jira.comments["MR-7"][0]).toContain("The run wrote no handback. Its last message:\n\n(none)");
   });
 
+  it("waits on unresolved blockers, counts a merged worker pull request as resolved and names blockers in the brief", async () => {
+    const world = setup();
+    const link = (key: string, status: string, category: string) => ({
+      type: { name: "Blocks" },
+      inwardIssue: {
+        key,
+        fields: { summary: `Base ${key}`, status: { name: status, statusCategory: { key: category } } }
+      }
+    });
+    const handedBack = (key: string, state: "open" | "merged") => {
+      const record: RunRecord = {
+        ...newRun(key, NOW, { jira: "x", github: null }),
+        state: "handed-back",
+        pullRequests: [`https://github.com/acme/backend/pull/${key.slice(3)}`],
+        followUp: { state, repairs: 0 }
+      };
+      saveRun(path.join(runsDir(world.home), record.id), record);
+    };
+    handedBack("MR-3", "open");
+    handedBack("MR-4", "merged");
+    const issues = [
+      issue("MR-7", {
+        fields: { issuelinks: [link("MR-5", "In Review", "indeterminate"), link("MR-6", "Done", "done")] }
+      }),
+      issue("MR-8", { fields: { issuelinks: [link("MR-6", "Done", "done")] } }),
+      issue("MR-9", { fields: { issuelinks: [link("MR-4", "In Review", "indeterminate")] } }),
+      issue("MR-10", { fields: { issuelinks: [link("MR-3", "In Review", "indeterminate")] } })
+    ];
+    const calls: Calls = { gh: [], claude: [] };
+    const { worker } = deps(world, fakeJira(issues), fakeRunner({}, calls));
+    const { plan } = await once(worker, { dryRun: true });
+    expect(plan.map((entry) => `${entry.key} ${entry.action}`)).toEqual([
+      "MR-7 waiting on MR-5 (In Review)",
+      "MR-8 would claim and run in backend (1 references resolved)",
+      "MR-9 would claim and run in backend (1 references resolved)",
+      "MR-10 waiting on MR-3 (In Review)"
+    ]);
+    const named = await once(worker, { dryRun: true, issue: "MR-7" });
+    expect(named.plan[0].action).toBe("would claim and run in backend (1 references resolved)");
+
+    const { record } = await runWith(world, [issues[2]], {}, { githubToken: null });
+    const brief = fs.readFileSync(path.join(runsDir(world.home), (record as RunRecord).id, "brief.md"), "utf8");
+    expect(brief).toContain(
+      "- MR-4: Base MR-4 (In Review), the worker's pull requests: https://github.com/acme/backend/pull/4\n"
+    );
+  });
+
   it("holds the per-shard limit and the concurrency limit", async () => {
     const world = setup();
     const { result, jira } = await runWith(world, [issue("MR-7"), issue("MR-8"), issue("MR-9")], {});

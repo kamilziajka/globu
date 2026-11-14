@@ -1,5 +1,7 @@
 import type { RefResult } from "../../globu-core/src/index.js";
-import type { JiraIssue } from "./jira.js";
+import type { JiraBlocker, JiraIssue } from "./jira.js";
+
+export type Blocker = JiraBlocker & { pullRequests: string[]; resolved: boolean };
 
 export type BriefInput = {
   issue: JiraIssue;
@@ -10,6 +12,7 @@ export type BriefInput = {
   companions: { id: string; tree: string }[];
   refs: RefResult[];
   informational: RefResult[];
+  blockers: Blocker[];
   handbackFile: string;
 };
 
@@ -31,6 +34,11 @@ export function renderBrief(input: BriefInput): string {
   const comments = issue.comments.map(
     (comment) => `**${comment.author}, ${comment.created}**\n\n${quoted(comment.body)}`
   );
+  const blockers = input.blockers.map((blocker) => {
+    const pulls =
+      blocker.pullRequests.length > 0 ? `, the worker's pull requests: ${blocker.pullRequests.join(" ")}` : "";
+    return `- ${blocker.key}: ${blocker.summary} (${blocker.status}${blocker.resolved ? "" : ", not resolved yet"})${pulls}`;
+  });
   const companions = input.companions.map((companion) => `- \`${companion.id}\`: ${companion.tree}`);
   return [
     `# ${issue.key}: ${issue.summary}`,
@@ -51,6 +59,16 @@ export function renderBrief(input: BriefInput): string {
     "",
     quoted(issue.description || "(empty)"),
     ...(comments.length > 0 ? ["", "### Comments", "", comments.join("\n\n")] : []),
+    ...(blockers.length > 0
+      ? [
+          "",
+          "## Blocked by",
+          "",
+          "This issue builds on the issues below. Their changes are on the default branch once they are merged; read them before you start.",
+          "",
+          ...blockers
+        ]
+      : []),
     "",
     "## Referenced files",
     "",

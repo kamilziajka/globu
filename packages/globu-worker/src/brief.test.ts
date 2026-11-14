@@ -43,6 +43,17 @@ describe("renderBrief", () => {
       companions: [{ id: "product", tree: "/runs/r1/companions/product" }],
       refs: [ok],
       informational: [missing],
+      blockers: [
+        {
+          key: "MR-5",
+          summary: "Add the base",
+          status: "Done",
+          done: true,
+          resolved: true,
+          pullRequests: ["https://github.com/acme/backend/pull/4"]
+        },
+        { key: "MR-6", summary: "Other", status: "In Review", done: false, resolved: false, pullRequests: [] }
+      ],
       handbackFile: "/runs/r1/handback.md"
     });
     expect(brief).toContain("# MR-7: Add the thing\n\nIssue: https://acme.atlassian.net/browse/MR-7");
@@ -56,6 +67,9 @@ describe("renderBrief", () => {
     expect(brief).toContain("### Comments\n\n**Kamil, 2026-11-05**\n\n> Also this.");
     expect(brief).toContain("- `product/docs/api.md`: /w/product/docs/api.md");
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main), perhaps `src/new.ts`");
+    expect(brief).toContain(
+      "## Blocked by\n\nThis issue builds on the issues below. Their changes are on the default branch once they are merged; read them before you start.\n\n- MR-5: Add the base (Done), the worker's pull requests: https://github.com/acme/backend/pull/4\n- MR-6: Other (In Review, not resolved yet)\n"
+    );
   });
 
   it("marks an empty description and leaves out empty sections", () => {
@@ -78,6 +92,7 @@ describe("renderBrief", () => {
       companions: [],
       refs: [],
       informational: [],
+      blockers: [],
       handbackFile: "/h.md"
     });
     expect(brief).toContain("> (empty)");
@@ -85,6 +100,7 @@ describe("renderBrief", () => {
     expect(brief).not.toContain("Companion");
     expect(brief).not.toContain("### Comments");
     expect(brief).not.toContain("Paths the issue mentions");
+    expect(brief).not.toContain("## Blocked by");
   });
 
   it("writes a missing reference without candidates plainly", () => {
@@ -107,6 +123,7 @@ describe("renderBrief", () => {
       companions: [],
       refs: [{ ...missing, candidates: [] }],
       informational: [],
+      blockers: [],
       handbackFile: "/h.md"
     });
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main)\n");
