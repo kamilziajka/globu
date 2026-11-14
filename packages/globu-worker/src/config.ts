@@ -73,6 +73,7 @@ const WorkerConfigSchema = z.object({
     releasedStatus: StatusSetting,
     doneStatus: StatusSetting.optional(),
     priorityLabel: z.string().min(1).optional(),
+    eligibleLabel: z.string().min(1).default("agent-eligible"),
     blockedLabel: z.string().min(1).default("agent-blocked"),
     blockingLinks: z.array(z.string().min(1)).default(["Blocks"]),
     repository: RepositorySchema

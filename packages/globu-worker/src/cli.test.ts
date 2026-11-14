@@ -74,6 +74,8 @@ function idleJira(onSearch: () => void = () => {}): JiraClient {
     transitionTo: async () => {},
     comment: async () => {},
     addLabel: async () => {},
+    removeLabel: async () => {},
+    setField: async () => {},
     remoteLink: async () => {}
   };
 }
@@ -207,6 +209,45 @@ describe("globu-worker", () => {
     const done = captureIo(root);
     expect(await workerMain(["finish", runId(fourth), "--json"], done, env(), { ...quiet(), jira })).toBe(1);
     expect(done.stderr).toContain("only a prepared run can be finished");
+  });
+
+  it("explains, delegates and retries an issue, in the worker's home or the session's", async () => {
+    const root = prepare();
+    const jira = sessionJira();
+    const json = (io: { stdout: string }) => JSON.parse(io.stdout.slice(io.stdout.indexOf("\n{") + 1));
+    const explain = captureIo(root);
+    expect(await workerMain(["why", "MR-1"], explain, env(), { ...quiet(), jira })).toBe(0);
+    expect(explain.stdout).toContain("verdict\tthe next cycle claims it\n");
+    const explainJson = captureIo(root);
+    expect(await workerMain(["why", "MR-1", "--json"], explainJson, env(), { ...quiet(), jira })).toBe(0);
+    expect(json(explainJson).picked).toBe(true);
+
+    const delegated = captureIo(root);
+    expect(await workerMain(["delegate", "MR-1", "--repo", "backend"], delegated, env(), { ...quiet(), jira })).toBe(0);
+    expect(delegated.stdout).toBe("MR-1\tdelegated to backend, matches jira.jql\n");
+    const delegatedJson = captureIo(root);
+    const args = ["delegate", "MR-1", "--repo", "backend", "--json"];
+    expect(await workerMain(args, delegatedJson, env(), { ...quiet(), jira })).toBe(0);
+    expect(json(delegatedJson)).toEqual({ key: "MR-1", shard: "backend", matches: true });
+
+    const retried = captureIo(root);
+    expect(await workerMain(["retry", "MR-1"], retried, env(), { ...quiet(), jira, run: healthy })).toBe(0);
+    expect(retried.stdout.split("\n")[0]).toBe("MR-1\tremoved agent-blocked");
+    const retriedJson = captureIo(root);
+    expect(await workerMain(["retry", "MR-1", "--json"], retriedJson, env(), { ...quiet(), jira, run: healthy })).toBe(
+      0
+    );
+    expect(json(retriedJson).plan).toHaveLength(1);
+
+    const sessionHome = tempDir();
+    const elsewhere = { ...env(), GLOBU_HOME: sessionHome };
+    const session = captureIo(root);
+    expect(await workerMain(["why", "MR-1", "--session"], session, elsewhere, { ...quiet(), jira })).toBe(1);
+    expect(session.stderr).toContain(`no worker configuration at ${path.join(sessionHome, "worker.yaml")}`);
+    const sessionDelegate = captureIo(root);
+    const sessionArgs = ["delegate", "MR-1", "--repo", "backend", "--session"];
+    expect(await workerMain(sessionArgs, sessionDelegate, elsewhere, { ...quiet(), jira })).toBe(1);
+    expect(sessionDelegate.stderr).toContain(`no worker configuration at ${path.join(sessionHome, "worker.yaml")}`);
   });
 
   it("logs at the level of the flag, the environment or info, and refuses an unknown one", async () => {

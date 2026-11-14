@@ -130,6 +130,8 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
     addLabel: async (key, label) => {
       get(key).labels.push(label);
     },
+    removeLabel: async () => {},
+    setField: async () => {},
     remoteLink: async (key, url) => {
       links[key] = [...(links[key] ?? []), url];
     }

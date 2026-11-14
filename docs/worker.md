@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "globu-worker"
-description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run and diagnostics commands, logs and a run step by step."
+description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its homes, worker.yaml and secrets.env, the start, check, once, run, retry, why, delegate and diagnostics commands, logs and a run step by step."
 ---
 
 # globu-worker
@@ -66,6 +66,7 @@ jira:
   releasedStatus: 10001
   doneStatus: Done
   priorityLabel: agent-next
+  eligibleLabel: agent-eligible
   blockedLabel: agent-blocked
   blockingLinks: [Blocks]
   repository:
@@ -121,6 +122,7 @@ github:
 | `jira.releasedStatus` | Where a released issue goes back to, by name or by id, one value or a map by project | required |
 | `jira.doneStatus` | Where an issue goes once all its pull requests are merged, by name or by id, one value or a map by project. Without it, or without an entry for the issue's project, the issue stays in `claimedStatus` and only gets a comment | none |
 | `jira.priorityLabel` | Issues carrying this label are taken before the rest, in the order the JQL returns them; the rest follow in the same order. See [Pointing the queue](#pointing-the-queue) | none |
+| `jira.eligibleLabel` | The label `delegate` adds to mark an issue for the worker. It should be the eligibility label the JQL asks for, since the worker never reads it anywhere else | `agent-eligible` |
 | `jira.blockedLabel` | Added when the worker gives an issue back, so the JQL above excludes it until a person removes it | `agent-blocked` |
 | `jira.blockingLinks` | Issue link types, by name, that make an issue wait for the issue on their "is blocked by" side, see [Issues that wait](#issues-that-wait). An empty list turns waiting off | `[Blocks]` |
 | `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | required |
@@ -140,11 +142,11 @@ github:
 | `claude.maxTurns` | Passed as `--max-turns`. A run that hits it is released | 80 |
 | `claude.maxBudgetUsd` | Passed as `--max-budget-usd`. Claude stops at its own estimate, which counts subagents and can overshoot; a run that stopped with commits is still handed back | 5 |
 | `claude.allowedTools` | Passed as `--allowedTools`. Everything else is denied, since nobody can answer a prompt | `Read`, `Edit`, `Write`, `Glob`, `Grep`, `npm run`, `npx vitest`, `git status`, `git diff`, `git log`, `git add` and `git commit` through Bash |
-
-Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
 | `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
 | `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
 | `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
+
+Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
 
 ### Several projects
 
@@ -183,7 +185,10 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 | `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue, or repairs the selected pull request, and polls again, `r` polls Jira and GitHub again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. Pick mode also polls in the background every `poll.every` and redraws; it never claims or repairs without Enter, but it does move merged issues to `doneStatus`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
 | `check` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; the setup shell is found and finds the first program of each `setup` command (`command -v`), with a note on Windows when `core.longpaths` is off; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill. Jira, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache |
 | `diagnostics [--out <file>]` | A `.tar.gz` with the log files, every `run.json`, `worker.yaml` and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
-| `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how a released issue is retried and how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
+| `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
+| `retry <key> [--json]` | Removes `jira.blockedLabel` from the issue, then does what `once --issue <key>` does. The way to try a released issue again once its problem is fixed |
+| `why <key> [--session] [--json]` | Says why the next cycle would or would not claim the issue, touching nothing: whether it matches `jira.jql` (searched as `key = <key> AND (<jql>)` without the `ORDER BY`) and carries `blockedLabel`, its repository marker, its assignee, the blockers it [waits](#issues-that-wait) on, which limit holds it (`limits.dayUsd`, `limits.openPullRequests`, or `limits.concurrent` and `limits.perShard` with the repairs and the issues ahead of it in the JQL order) and whether its references resolve. `--session` reads the session's home instead of the worker's. `--json` prints the same as one object |
+| `delegate <key> --repo <shard> [--session] [--json]` | Marks the issue for the worker without the Jira UI: adds `jira.eligibleLabel` and the repository marker for a deliverable shard, a `labelPrefix` label that replaces any other marker label, or the custom field, set as text or as an option by its type. Then says whether the issue now matches `jira.jql`, since a status in the JQL still takes a transition. `--session` reads the session's `worker.yaml` |
 | `run` | Shard bootstrap and `check`, then `once` on the configured interval until `SIGINT` or `SIGTERM`. A failed check stops it before the first cycle. A signal during a cycle lets the cycle finish |
 | `poll [--json]` | The dry run of `once`, for a session: what could be claimed now and why, touching nothing |
 | `claim <key> [--json]` | Steps 3 to 7 of a run for a session: claim the issue, resolve its references, add the worktrees and write the brief, then stop with the run `prepared` and the worktrees in place. Prints the run directory; `--json` adds the record and the paths of the brief, the tree, the handback and the companions |
@@ -216,7 +221,7 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, comment on the issue with the handback and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
 11. **Clean up.** Worktrees are removed, unpushed branches deleted, the run directory kept.
 
-A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue, removes the label and either waits for the next poll or runs `once --issue <key>`.
+A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. The worker never retries on its own. A person fixes the issue and runs `retry <key>`, which removes the label and takes the issue at once, or removes the label by hand and waits for the next poll. `why <key>` says what still keeps an issue out.
 
 A problem of the machine is not the issue's fault: the setup shell is missing, or a setup command or `claude` cannot start at all. Such a release says "could not start `<program>`: not found on PATH" rather than an exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop, since every next issue would fail the same way; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `limits.repairs`.
 
@@ -258,7 +263,7 @@ To look at a run on another machine, run `globu-worker --log-level debug start` 
 
 By hand, `globu-worker start` in a terminal. As a service, `globu-worker start --mode auto` or `globu-worker run`; on a Mac under launchd, with the secrets in the job's environment or in `secrets.env`. In a container, a Cloud Run job or a cron entry runs the bootstrap against an empty `GLOBU_HOME` and then `globu-worker once`; a second invocation while one is running finds the issues already claimed and does nothing. No endpoint is exposed, because the trigger is the poll. Two workers on one Jira project are not supported: the claim is a read-back after assign and transition, which is enough for one.
 
-What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label, the blocked label in the JQL and a repository marker per issue. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).
+What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label, the blocked label in the JQL and a repository marker per issue. `delegate` sets the label and the marker from a terminal. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).
 
 ### On Windows
 

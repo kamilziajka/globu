@@ -21,6 +21,8 @@ export type JiraClient = {
   transitionTo(key: string, status: string): Promise<void>;
   comment(key: string, body: string): Promise<void>;
   addLabel(key: string, label: string): Promise<void>;
+  removeLabel(key: string, label: string): Promise<void>;
+  setField(key: string, field: string, value: string): Promise<void>;
   remoteLink(key: string, url: string, title: string): Promise<void>;
 };
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -37,6 +39,7 @@ type RawIssue = {
   };
 };
 type Transition = { id: string; to: { id: string; name: string } };
+type EditMeta = { fields: Record<string, { schema?: { type?: string } }> };
 
 export function isStatusId(status: string): boolean {
   return /^\d+$/.test(status);
@@ -133,6 +136,14 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
     },
     comment: (key, body) => request("POST", `${issuePath(key)}/comment`, { body }),
     addLabel: (key, label) => request("PUT", issuePath(key), { update: { labels: [{ add: label }] } }),
+    removeLabel: (key, label) => request("PUT", issuePath(key), { update: { labels: [{ remove: label }] } }),
+    async setField(key, field, value) {
+      const { fields } = await request<EditMeta>("GET", `${issuePath(key)}/editmeta`);
+      const meta = fields[field];
+      if (meta === undefined) throw new Error(`${field} cannot be edited on ${key}`);
+      const content = meta.schema?.type === "option" ? { value } : value;
+      await request("PUT", issuePath(key), { fields: { [field]: content } });
+    },
     remoteLink: (key, url, title) => request("POST", `${issuePath(key)}/remotelink`, { object: { url, title } })
   };
 }
