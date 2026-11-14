@@ -79,7 +79,10 @@ describe("renderBrief", () => {
     );
     expect(brief).toContain("Write the handback to /runs/r1/handback.md when done.");
     expect(brief).toContain("Do not move the issue, comment on it or create issues");
-    expect(brief).toContain("a `## Follow-ups` section of the handback");
+    expect(brief).toContain(
+      "a `## Follow-ups` section of the handback, one bullet per follow-up whose first line is its summary"
+    );
+    expect(brief).toContain("The worker posts the section on the issue.");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain("### Description\n\n> Do it.\n> Carefully.");
     expect(brief).toContain("### Comments\n\n**Kamil, 2026-11-05**\n\n> Also this.\n\n## Earlier attempts");
@@ -122,8 +125,12 @@ describe("renderBrief", () => {
       informational: [],
       blockers: [],
       allowedTools: ["Read"],
-      handbackFile: "/h.md"
+      handbackFile: "/h.md",
+      followUps: true
     });
+    expect(brief).toContain(
+      "The worker files each bullet as an issue linked to this one and lists the new keys on this issue."
+    );
     expect(brief).toContain("> (empty)");
     expect(brief).toContain("- none");
     expect(brief).not.toContain("Companion");

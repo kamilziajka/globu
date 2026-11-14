@@ -23,6 +23,7 @@ export type RunRecord = {
   identity: { jira: string; github: string | null };
   repairOf?: string;
   followUp?: FollowUp;
+  followUpIssues?: string[];
   environment?: boolean;
   denied?: string[];
   durationMs?: number;

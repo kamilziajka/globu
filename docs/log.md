@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [globu-worker](./worker.md): `jira.followUps` (off by default) files each bullet of a handback's `## Follow-ups` section as an issue in the original's project with `issueType`, links it with `linkType` (`Relates` by default) and lists the new keys in the handback comment, up to `max` (10) per handback; a follow-up Jira refuses is reported in the comment and the log and never fails the run, and none is marked for the worker. The brief and the `issue-deliver` skill ([plugin skills](./skills.md)) describe the bullet format.
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14

@@ -16,6 +16,7 @@ export type JiraBlocker = { key: string; summary: string; status: string; done: 
 export type JiraLink = { relation: string; key: string; summary: string; status: string };
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
+export type NewIssue = { project: string; issueType: string; summary: string; description: string };
 export type JiraClient = {
   myself(): Promise<JiraUser>;
   search(jql: string, max: number): Promise<JiraHit[]>;
@@ -27,6 +28,8 @@ export type JiraClient = {
   removeLabel(key: string, label: string): Promise<void>;
   setField(key: string, field: string, value: string): Promise<void>;
   remoteLink(key: string, url: string, title: string): Promise<void>;
+  createIssue(issue: NewIssue): Promise<string>;
+  linkIssues(type: string, inward: string, outward: string): Promise<void>;
 };
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -170,6 +173,19 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
       const content = meta.schema?.type === "option" ? { value } : value;
       await request("PUT", issuePath(key), { fields: { [field]: content } });
     },
-    remoteLink: (key, url, title) => request("POST", `${issuePath(key)}/remotelink`, { object: { url, title } })
+    remoteLink: (key, url, title) => request("POST", `${issuePath(key)}/remotelink`, { object: { url, title } }),
+    async createIssue({ project, issueType, summary, description }) {
+      const issuetype = isStatusId(issueType) ? { id: issueType } : { name: issueType };
+      const created = await request<{ key: string }>("POST", "/issue", {
+        fields: { project: { key: project }, issuetype, summary, description }
+      });
+      return created.key;
+    },
+    linkIssues: (type, inward, outward) =>
+      request("POST", "/issueLink", {
+        type: { name: type },
+        inwardIssue: { key: inward },
+        outwardIssue: { key: outward }
+      })
   };
 }
