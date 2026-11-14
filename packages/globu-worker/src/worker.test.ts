@@ -707,6 +707,70 @@ describe("once", () => {
     );
   });
 
+  it("delivers a chain of three without jira.doneStatus after the first run is pruned", async () => {
+    const world = setup();
+    world.config.limits.keepRuns = 1;
+    const link = (key: string) => ({
+      type: { name: "Blocks" },
+      inwardIssue: {
+        key,
+        fields: { summary: `Base ${key}`, status: { name: "Delivery", statusCategory: { key: "indeterminate" } } }
+      }
+    });
+    const jira = fakeJira([
+      issue("MR-1"),
+      issue("MR-2", { fields: { issuelinks: [link("MR-1")] } }),
+      issue("MR-3", { fields: { issuelinks: [link("MR-1"), link("MR-2")] } })
+    ]);
+    const calls: Calls = { gh: [], claude: [] };
+    const merged = new Map<string, string>();
+    const base = fakeRunner({ commit: true, handback: true }, calls);
+    const run: Runner = async (command, args, options) => {
+      if (command !== "gh" || args[1] !== "view") return await base(command, args, options);
+      const url = args[2];
+      const pull = {
+        url,
+        number: Number(url.split("/").at(-1)),
+        title: "MR: Add the thing",
+        state: merged.has(url) ? "MERGED" : "OPEN",
+        mergeable: "MERGEABLE",
+        headRefName: merged.get(url) ?? "other",
+        baseRefName: "main",
+        statusCheckRollup: []
+      };
+      return { code: 0, stdout: JSON.stringify(pull), stderr: "", timedOut: false };
+    };
+    const { worker } = deps(world, jira, run);
+    const day = async (date: string) => {
+      worker.now = () => new Date(`${date}T10:00:00.000Z`);
+      return await once(worker);
+    };
+    const mergeAll = (records: RunRecord[]) => {
+      for (const record of records) for (const url of record.pullRequests) merged.set(url, record.branch as string);
+    };
+
+    const first = await day("2026-11-05");
+    expect(first.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-1 handed-back"]);
+    expect(first.plan.map((entry) => `${entry.key} ${entry.action}`)).toEqual([
+      "MR-1 claimed",
+      "MR-2 waiting on MR-1 (Delivery)",
+      "MR-3 waiting on MR-1 (Delivery), MR-2 (Delivery)"
+    ]);
+    mergeAll(first.runs);
+    const second = await day("2026-11-06");
+    expect(second.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-2 handed-back"]);
+    expect(second.plan.at(-1)?.action).toBe("waiting on MR-2 (Delivery)");
+    mergeAll(second.runs);
+    const third = await day("2026-11-07");
+    expect(loadRuns(world.home).some(({ record }) => record.key === "MR-1")).toBe(false);
+    expect(third.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-3 handed-back"]);
+    expect(jira.transitions).not.toContain("MR-1 -> Done");
+    const brief = fs.readFileSync(path.join(runsDir(world.home), third.runs[0].id, "brief.md"), "utf8");
+    expect(brief).toContain(
+      `- MR-1: Base MR-1 (Delivery), the worker's pull requests: ${first.runs[0].pullRequests[0]}\n`
+    );
+  });
+
   it("holds the per-shard limit and the concurrency limit", async () => {
     const world = setup();
     const { result, jira } = await runWith(world, [issue("MR-7"), issue("MR-8"), issue("MR-9")], {});

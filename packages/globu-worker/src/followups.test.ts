@@ -8,6 +8,7 @@ import { loadWorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import type { JiraClient } from "./jira.js";
 import { setLogger, silentLogger } from "./logger.js";
+import { mergedIssues } from "./merged.js";
 import { loadRun, loadRuns, newRun, type RunRecord, saveRun } from "./runs.js";
 import { start } from "./start.js";
 import { type FollowUpRow, followUps, once, type WorkerDeps } from "./worker.js";
@@ -342,6 +343,9 @@ describe("following pull requests", () => {
     expect(fake.transitions).toEqual([]);
     expect(fake.comments).toEqual([`Merged: ${setup.url}`]);
     expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+    expect(mergedIssues(setup.home, [])).toEqual({
+      "MR-7": { pullRequests: [setup.url], mergedAt: NOW.toISOString() }
+    });
     expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
     expect(git(clone, "branch", "--all", "--list", `*${BRANCH}`)).toBe("");
     expect(await followUps(worker, true)).toEqual([]);

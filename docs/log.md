@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [globu-worker](./worker.md): merged issues are kept in `merged.json` in the worker's home, with their pull requests and the merge time, written when a merged run is settled and seeded from the run records of an existing home. `limits.keepRuns` never prunes it and blockers are resolved from it, so a chain keeps moving without `jira.doneStatus` after the run of its first issue is pruned.
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14
