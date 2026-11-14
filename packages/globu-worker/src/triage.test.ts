@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register } from "../../globu-core/src/index.js";
@@ -184,6 +185,16 @@ describe("why", () => {
     );
     expect(jira.searches[0]).toBe("key = MR-1 AND (project = MR AND labels != agent-blocked)");
     expect(jira.edits).toEqual([]);
+    config.limits.exclusive = ["gpu"];
+    const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: "render-box", holder: "klayboy render" }));
+    const held = await why(worker, "MR-1");
+    expect(held.holds).toEqual([
+      { limit: "exclusive", detail: `waiting on gpu (held by klayboy render, pid ${process.pid} on render-box)` }
+    ]);
+    expect(held.picked).toBe(false);
+    expect(fs.existsSync(lock)).toBe(true);
   });
 
   it("names the blocked label, a missing or foreign marker, an assignee and open blockers", async () => {

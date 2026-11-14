@@ -12,6 +12,7 @@ beforeEach(() => {
   const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "globu-home-")));
   process.env.GLOBU_HOME = path.join(sandbox, "globu");
   process.env.CLAUDE_CONFIG_DIR = path.join(sandbox, "claude");
+  process.env.GLOBU_LOCK_DIR = path.join(sandbox, "locks");
   delete process.env.GLOBU_CONTEXT;
   delete process.env.GLOBU_GIT_TOKEN;
   delete process.env.GLOBU_GIT_USER;

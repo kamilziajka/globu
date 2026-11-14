@@ -58,7 +58,8 @@ describe("loadWorkerConfig", () => {
       timeout: 2_700_000,
       dayUsd: 40,
       openPullRequests: 5,
-      repairs: 2
+      repairs: 2,
+      exclusive: []
     });
     expect(config.claude).toEqual({
       skill: "issue-deliver",
@@ -80,6 +81,7 @@ poll:
 limits:
   timeout: 1h
   concurrent: 2
+  exclusive: [gpu]
 claude:
   model: claude-sonnet-5-5
   pluginDir: /src/globu/plugins/globu
@@ -99,6 +101,7 @@ github:
     expect(config.poll.every).toBe(300_000);
     expect(config.limits.timeout).toBe(3_600_000);
     expect(config.limits.concurrent).toBe(2);
+    expect(config.limits.exclusive).toEqual(["gpu"]);
     expect(config.claude.model).toBe("claude-sonnet-5-5");
     expect(config.claude.pluginDir).toBe("/src/globu/plugins/globu");
     expect(config.claude.maxTurns).toBe(20);
@@ -132,6 +135,8 @@ github:
     const file = write(tempDir(), "worker.yaml", "jira:\n  site: nope\n  jql: x\npoll:\n  every: soon\n");
     expect(() => loadWorkerConfig(file)).toThrow(/jira.site: /);
     expect(() => loadWorkerConfig(file)).toThrow(/poll.every: invalid duration "soon"/);
+    const lock = write(tempDir(), "worker.yaml", `${MINIMAL}limits:\n  exclusive: [../gpu]\n`);
+    expect(() => loadWorkerConfig(lock)).toThrow(/limits.exclusive.0: a resource name is letters/);
     expect(() => loadWorkerConfig(file)).toThrow(/shards: /);
   });
 

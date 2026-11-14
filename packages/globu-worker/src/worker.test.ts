@@ -633,6 +633,38 @@ describe("once", () => {
     expect(broken.io.stdout).toContain("MR-8\treleased: references that are not on the default branch:");
   });
 
+  it("holds the exclusive resources for the whole run and waits while another process has one", async () => {
+    const world = setup();
+    world.config.limits.exclusive = ["gpu"];
+    const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
+    const seen: unknown[] = [];
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const run = fakeRunner({ commit: true }, calls);
+    const watching: Runner = async (command, args, options) => {
+      if (command === "sh" || command === "claude") seen.push(JSON.parse(fs.readFileSync(lock, "utf8")).holder);
+      return await run(command, args, options);
+    };
+    world.config.setup = { backend: ["npm ci"] };
+    const jira = fakeJira([issue("MR-7")]);
+    const { worker } = deps(world, jira, watching);
+    expect((await once(worker)).runs[0].state).toBe("handed-back");
+    expect(seen).toEqual(["globu-worker", "globu-worker"]);
+    expect(fs.existsSync(lock)).toBe(false);
+
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: "render-box", holder: "klayboy render" }));
+    const held = `waiting on gpu (held by klayboy render, pid ${process.pid} on render-box)`;
+    const busy = deps(world, fakeJira([issue("MR-8")]), fakeRunner({}, calls));
+    expect((await once(busy.worker, { dryRun: true })).plan[0].action).toBe(held);
+    const blocked = fakeJira([issue("MR-8")]);
+    const cycle = deps(world, blocked, fakeRunner({}, calls), null);
+    const result = await once(cycle.worker);
+    expect(result.runs).toEqual([]);
+    expect(result.plan[0].action).toBe(held);
+    expect(cycle.io.stdout).toContain(`MR-8\t${held}`);
+    expect(blocked.transitions).toEqual([]);
+    expect(fs.existsSync(lock)).toBe(true);
+  });
+
   it("claims by status id when the configuration gives one", async () => {
     const world = setup();
     world.config.jira = { ...world.config.jira, claimedStatus: "10023" };

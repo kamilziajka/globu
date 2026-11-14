@@ -347,6 +347,32 @@ describe("globu-worker", () => {
     expect(noGithub.stdout).toContain("FAIL  github: set GH_TOKEN");
   });
 
+  it("runs the smoke test after the checks pass and skips it when one fails", async () => {
+    const root = prepare();
+    const smoke = captureIo(root);
+    const options = { ...quiet(), jira: idleJira(), run: healthy };
+    expect(await workerMain(["check", "--smoke"], smoke, withGithub(), options)).toBe(0);
+    expect(smoke.stdout).toMatch(/\nok {4}smoke backend: 0 setup commands, a commit as .* opened as a draft/);
+
+    const frames: string[] = [];
+    const screen = { write: (text: string) => frames.push(text), columns: 300 };
+    expect(await workerMain(["check", "--smoke"], captureIo(root), withGithub(), { ...options, screen })).toBe(0);
+    expect(plain(frames.join(""))).toContain("✔ smoke backend: 0 setup commands");
+
+    const brokenCommit: Runner = async (command, args, opts) =>
+      command === "git" && args[0] === "commit"
+        ? { code: 1, stdout: "", stderr: "hook failed", timedOut: false }
+        : await healthy(command, args, opts);
+    const failing = captureIo(root);
+    expect(await workerMain(["check", "--smoke"], failing, withGithub(), { ...options, run: brokenCommit })).toBe(1);
+    expect(failing.stdout).toContain("FAIL  smoke backend: git commit failed:\nhook failed");
+
+    const skipped = captureIo(root);
+    expect(await workerMain(["check", "--smoke"], skipped, env(), options)).toBe(1);
+    expect(skipped.stdout).toContain("smoke test skipped, fix the failing checks first");
+    expect(skipped.stdout).not.toContain("smoke backend");
+  });
+
   it("does not start the loop when a check fails", async () => {
     const root = prepare();
     const io = captureIo(root);
