@@ -143,6 +143,13 @@ function slug(text: string): string {
     .replace(/-+$/, "");
 }
 
+const LINE_LIMIT = 160;
+
+function oneLine(text: string): string {
+  const first = text.split("\n")[0];
+  return first.length < text.length || first.length > LINE_LIMIT ? `${first.slice(0, LINE_LIMIT)} …` : first;
+}
+
 function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(1)} min`;
 }
@@ -208,9 +215,12 @@ function footer(record: RunRecord, now: Date): string {
   if (record.driver === "session") {
     return `Run ${record.id} as ${record.identity.jira}${github} from a Claude Code session, ${elapsed}.`;
   }
+  const denied = record.denied ?? [];
+  const api = record.apiMs ? `, ${minutes(record.apiMs)} of it in the model API` : "";
   const lines = [
-    `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns, ${record.costUsd.toFixed(2)} USD, ${elapsed}. Blocked writes: ${record.blocked.length}.`,
-    ...record.blocked.map((text) => `- ${text}`)
+    `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns, ${record.costUsd.toFixed(2)} USD, ${elapsed}${api}. Blocked writes: ${record.blocked.length}. Denied tool calls: ${denied.length}.`,
+    ...record.blocked.map((text) => `- ${text}`),
+    ...denied.map((text) => `- denied ${oneLine(text)}`)
   ];
   return lines.join("\n");
 }
@@ -452,6 +462,7 @@ async function prepare(
       refs: resolved.gating,
       informational: resolved.informational,
       blockers: blockers(deps, issue, loadRuns(deps.home)),
+      allowedTools: config.claude.allowedTools,
       handbackFile
     })
   );
@@ -506,6 +517,9 @@ async function runClaude(
   record.costUsd = summary.costUsd;
   record.turns = summary.turns;
   record.blocked = summary.blocked;
+  record.denied = summary.denied;
+  record.durationMs = summary.durationMs;
+  record.apiMs = summary.apiMs;
   return {
     timedOut: result.timedOut,
     code: result.code,

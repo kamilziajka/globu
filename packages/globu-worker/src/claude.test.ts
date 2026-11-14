@@ -68,7 +68,14 @@ describe("summarizeStream", () => {
       is_error: false,
       total_cost_usd: 1.25,
       num_turns: 12,
-      result: "done"
+      result: "done",
+      duration_ms: 798_000,
+      duration_api_ms: 228_000,
+      permission_denials: [
+        { tool_name: "Bash", tool_input: { command: "cat a.txt | wc -l" } },
+        { tool_name: "Write", tool_input: { file_path: "/etc/x" } },
+        { tool_name: "Task" }
+      ]
     })
   ];
 
@@ -80,7 +87,10 @@ describe("summarizeStream", () => {
       turns: 12,
       result: "done",
       blocked: ['Edit blocked: belongs to shard "product", which is read-only'],
-      failedTools: ["Permission to use Bash denied", ""]
+      failedTools: ["Permission to use Bash denied", ""],
+      denied: ["Bash: cat a.txt | wc -l", 'Write: {"file_path":"/etc/x"}', "Task: {}"],
+      durationMs: 798_000,
+      apiMs: 228_000
     });
   });
 
@@ -92,7 +102,10 @@ describe("summarizeStream", () => {
       turns: 0,
       result: null,
       blocked: [],
-      failedTools: []
+      failedTools: [],
+      denied: [],
+      durationMs: 0,
+      apiMs: 0
     });
     expect(summarizeStream("").turns).toBe(0);
   });

@@ -13,6 +13,7 @@ export type JiraIssue = {
   fields: Record<string, unknown>;
 };
 export type JiraBlocker = { key: string; summary: string; status: string; done: boolean };
+export type JiraLink = { relation: string; key: string; summary: string; status: string };
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
 export type JiraClient = {
@@ -57,12 +58,35 @@ type RawLinked = {
   key: string;
   fields?: { summary?: string; status?: { name: string; statusCategory?: { key: string } } };
 };
-type RawLink = { type?: { name?: string }; inwardIssue?: RawLinked };
+type RawLink = {
+  type?: { name?: string; inward?: string; outward?: string };
+  inwardIssue?: RawLinked;
+  outwardIssue?: RawLinked;
+};
+
+function rawLinks(issue: JiraIssue): RawLink[] {
+  return Array.isArray(issue.fields.issuelinks) ? (issue.fields.issuelinks as RawLink[]) : [];
+}
+
+export function linksOf(issue: JiraIssue): JiraLink[] {
+  return rawLinks(issue).flatMap((link) => {
+    const linked = link.inwardIssue ?? link.outwardIssue;
+    if (linked === undefined) return [];
+    const named = link.inwardIssue === undefined ? link.type?.outward : link.type?.inward;
+    return [
+      {
+        relation: named ?? link.type?.name ?? "linked to",
+        key: linked.key,
+        summary: linked.fields?.summary ?? "",
+        status: linked.fields?.status?.name ?? "unknown"
+      }
+    ];
+  });
+}
 
 export function blockersOf(issue: JiraIssue, types: string[]): JiraBlocker[] {
   const wanted = types.map((type) => type.toLowerCase());
-  const links = Array.isArray(issue.fields.issuelinks) ? (issue.fields.issuelinks as RawLink[]) : [];
-  return links.flatMap((link) => {
+  return rawLinks(issue).flatMap((link) => {
     const linked = link.inwardIssue;
     if (linked === undefined || !wanted.includes((link.type?.name ?? "").toLowerCase())) return [];
     const status = linked.fields?.status;

@@ -93,8 +93,9 @@ async function claudeProbe(deps: WorkerDeps): Promise<Found> {
   }
   const cost = end.total_cost_usd.toFixed(2);
   const model = (init as InitEvent).model as string;
+  const chosen = claude.model === undefined ? `${model} (the default, set claude.model to choose)` : model;
   return {
-    detail: `${model} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)`,
+    detail: `${chosen} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)`,
     short: model
   };
 }
