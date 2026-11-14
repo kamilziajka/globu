@@ -42,7 +42,7 @@ function jira(overrides: Partial<JiraClient> = {}): JiraClient {
   };
   return {
     myself: async () => ({ accountId: "bot", displayName: "Bot" }),
-    search: async () => ["MR-1"],
+    search: async () => [{ key: "MR-1", labels: [] }],
     issue: unused,
     assign: unused,
     transitionTo: unused,

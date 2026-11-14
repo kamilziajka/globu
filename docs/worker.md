@@ -65,6 +65,7 @@ jira:
   claimedStatus: Delivery
   releasedStatus: 10001
   doneStatus: Done
+  priorityLabel: agent-next
   blockedLabel: agent-blocked
   blockingLinks: [Blocks]
   repository:
@@ -116,9 +117,10 @@ github:
 |---|---|---|
 | `jira.site` | The Jira Cloud site | required |
 | `jira.jql` | What is eligible. The worker runs it as written and adds nothing, so the team owns the gate and the order | required |
-| `jira.claimedStatus` | The status a claimed issue is moved to, by name or by id: an all-digit value is an id. Transitions are looked up per issue, so a same-named status in another project is never picked | required |
-| `jira.releasedStatus` | Where a released issue goes back to, by name or by id | required |
-| `jira.doneStatus` | Where an issue goes once all its pull requests are merged, by name or by id. Without it the issue stays in `claimedStatus` and only gets a comment | none |
+| `jira.claimedStatus` | The status a claimed issue is moved to, by name or by id: an all-digit value is an id. Names match without regard to case. Transitions are looked up per issue, so a same-named status in another project is never picked. Either one value or a [map by project](#several-projects) | required |
+| `jira.releasedStatus` | Where a released issue goes back to, by name or by id, one value or a map by project | required |
+| `jira.doneStatus` | Where an issue goes once all its pull requests are merged, by name or by id, one value or a map by project. Without it, or without an entry for the issue's project, the issue stays in `claimedStatus` and only gets a comment | none |
+| `jira.priorityLabel` | Issues carrying this label are taken before the rest, in the order the JQL returns them; the rest follow in the same order. See [Pointing the queue](#pointing-the-queue) | none |
 | `jira.blockedLabel` | Added when the worker gives an issue back, so the JQL above excludes it until a person removes it | `agent-blocked` |
 | `jira.blockingLinks` | Issue link types, by name, that make an issue wait for the issue on their "is blocked by" side, see [Issues that wait](#issues-that-wait). An empty list turns waiting off | `[Blocks]` |
 | `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | required |
@@ -143,6 +145,30 @@ Every key under `claude` except `skill` is a `claude -p` flag in camelCase and g
 | `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
 | `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
 | `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
+
+### Several projects
+
+One JQL can span several projects whose workflows name their statuses differently. Each of the three status keys then takes a map keyed by Jira project key, with an optional `default` entry for every project the map does not name:
+
+```yaml
+jira:
+  jql: project in (KLAYBOY, SANDBOX) AND labels = agent-eligible AND assignee is EMPTY ORDER BY created ASC
+  claimedStatus:
+    KLAYBOY: In Progress
+    SANDBOX: Doing
+  releasedStatus:
+    default: To Do
+  doneStatus:
+    KLAYBOY: Done
+```
+
+The project is the part of the issue key before the hyphen. An issue whose project has neither an entry nor a default for `claimedStatus` or `releasedStatus` is not claimed: the cycle stops with an error that names the key and the project, before the issue is assigned.
+
+### Pointing the queue
+
+Auto mode takes issues in the order the JQL returns them, so with `limits.concurrent` at 1 the first eligible issue always wins, the oldest one under `ORDER BY created ASC`. Adding the `priorityLabel` label to an issue in Jira moves it to the front on the next poll, without touching the JQL or `worker.yaml`. Several labelled issues keep their JQL order among themselves. Pick mode lists the issues in the same order.
+
+A label was chosen over a weight per project: it points at the issue a person wants next, it is set from Jira by whoever triages, it works the same within one project and across several, and it costs nothing extra since the search already returns the labels.
 
 ## Secrets
 
@@ -179,8 +205,8 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 ## A run
 
 1. **Reconcile.** Runs left in a non-final state by a crash or a restart are closed: their worktrees are removed and, when the issue is still assigned to the worker in the claimed status, it is released with a comment saying so.
-2. **Poll.** The JQL, oldest first as the team wrote it. Up to `limits.concurrent` issues are taken, skipping an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
-3. **Claim.** Assign to the worker's own account, transition to `claimedStatus`, read the issue back. If someone else got there first, drop it without a word.
+2. **Poll.** The JQL, in the order the team wrote it, with issues that carry `jira.priorityLabel` moved to the front. Up to `limits.concurrent` issues are taken, skipping an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
+3. **Claim.** Assign to the worker's own account, transition to the `claimedStatus` of the issue's project, read the issue back. If someone else got there first, drop it without a word.
 4. **Find the target.** The repository marker names a shard. Not a deliverable shard: release.
 5. **Resolve.** Shard-qualified refs such as `product/docs/decisions/012-pricing.md` and code host links to files in a shard's repo are checked with the same code as `globu resolve`, after a fetch. One missing: release, with the resolver's report and its candidates in the comment, before a token is spent. Bare paths in backticks are resolved too but only reported in the brief, since they may be files the change creates.
 6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the `setup` commands of each worktree's shard; a failing one releases the issue.

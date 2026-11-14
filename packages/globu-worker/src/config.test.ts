@@ -9,10 +9,12 @@ import {
   ownHomes,
   parseDuration,
   parseSecretsFile,
+  projectOf,
   readSecrets,
   scrubbedEnv,
   secretValues,
   sessionHomes,
+  statusFor,
   withSecretsFile,
   workerConfigPath
 } from "./config.js";
@@ -104,6 +106,27 @@ github:
     expect(config.github).toEqual({ draft: true, labels: ["agent"] });
   });
 
+  it("reads a status per project and a priority label", () => {
+    const file = write(
+      tempDir(),
+      "worker.yaml",
+      `${MINIMAL.replace(
+        "  releasedStatus: Ready for delivery",
+        "  releasedStatus:\n    KLAYBOY: To Do\n    default: To do\n  doneStatus:\n    SANDBOX: Done\n  priorityLabel: agent-next"
+      )}`
+    );
+    const { jira } = loadWorkerConfig(file);
+    expect(jira.claimedStatus).toBe("Delivery");
+    expect(jira.releasedStatus).toEqual({ KLAYBOY: "To Do", default: "To do" });
+    expect(jira.doneStatus).toEqual({ SANDBOX: "Done" });
+    expect(jira.priorityLabel).toBe("agent-next");
+  });
+
+  it("rejects a status map without entries", () => {
+    const file = write(tempDir(), "worker.yaml", MINIMAL.replace("claimedStatus: Delivery", "claimedStatus: {}"));
+    expect(() => loadWorkerConfig(file)).toThrow(/jira.claimedStatus: name at least one project or a default/);
+  });
+
   it("names every problem with its path", () => {
     const file = write(tempDir(), "worker.yaml", "jira:\n  site: nope\n  jql: x\npoll:\n  every: soon\n");
     expect(() => loadWorkerConfig(file)).toThrow(/jira.site: /);
@@ -115,6 +138,17 @@ github:
     const dir = tempDir();
     expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(`no worker configuration at ${dir}/worker.yaml`);
     expect(() => loadWorkerConfig(write(dir, "worker.yaml", ""))).toThrow(/root: /);
+  });
+});
+
+describe("statusFor", () => {
+  it("resolves a single status, a project entry, the default and nothing", () => {
+    expect(projectOf("KLAYBOY-108")).toBe("KLAYBOY");
+    expect(statusFor("Doing", "SANDBOX-2")).toBe("Doing");
+    expect(statusFor({ KLAYBOY: "In Progress", default: "Doing" }, "KLAYBOY-108")).toBe("In Progress");
+    expect(statusFor({ KLAYBOY: "In Progress", default: "Doing" }, "SANDBOX-2")).toBe("Doing");
+    expect(statusFor({ KLAYBOY: "In Progress" }, "SANDBOX-2")).toBeUndefined();
+    expect(statusFor(undefined, "SANDBOX-2")).toBeUndefined();
   });
 });
 

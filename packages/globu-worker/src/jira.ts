@@ -12,9 +12,10 @@ export type JiraIssue = {
 };
 export type JiraBlocker = { key: string; summary: string; status: string; done: boolean };
 export type JiraUser = { accountId: string; displayName: string };
+export type JiraHit = { key: string; labels: string[] };
 export type JiraClient = {
   myself(): Promise<JiraUser>;
-  search(jql: string, max: number): Promise<string[]>;
+  search(jql: string, max: number): Promise<JiraHit[]>;
   issue(key: string): Promise<JiraIssue>;
   assign(key: string, accountId: string | null): Promise<void>;
   transitionTo(key: string, status: string): Promise<void>;
@@ -110,12 +111,12 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
   return {
     myself: () => request<JiraUser>("GET", "/myself"),
     async search(jql, max) {
-      const result = await request<{ issues: { key: string }[] }>("POST", "/search/jql", {
+      const result = await request<{ issues: { key: string; fields: { labels: string[] } }[] }>("POST", "/search/jql", {
         jql,
         maxResults: max,
-        fields: ["summary"]
+        fields: ["summary", "labels"]
       });
-      return result.issues.map((issue) => issue.key);
+      return result.issues.map((issue) => ({ key: issue.key, labels: issue.fields.labels }));
     },
     async issue(key) {
       return toIssue(await request<RawIssue>("GET", `${issuePath(key)}?fields=${ISSUE_FIELDS}`));

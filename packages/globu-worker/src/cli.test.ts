@@ -92,7 +92,7 @@ function sessionJira(): JiraClient {
   };
   return {
     ...idleJira(),
-    search: async () => ["MR-1"],
+    search: async () => [{ key: "MR-1", labels: [] }],
     issue: async () => structuredClone(stored),
     assign: async (_key, accountId) => {
       stored.assignee = accountId;

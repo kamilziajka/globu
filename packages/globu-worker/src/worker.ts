@@ -14,9 +14,9 @@ import {
 } from "../../globu-core/src/index.js";
 import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
-import { type Secrets, scrubbedEnv, type WorkerConfig } from "./config.js";
+import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
 import { notStarted, type Runner, runOrThrow } from "./exec.js";
-import { blockersOf, type JiraClient, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
+import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { log, tail } from "./logger.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
@@ -122,6 +122,17 @@ function sameStatus(issue: JiraIssue, wanted: string): boolean {
   return matchesStatus({ id: issue.statusId, name: issue.status }, wanted);
 }
 
+function statusOf(config: WorkerConfig, name: "claimedStatus" | "releasedStatus", key: string): string {
+  const status = statusFor(config.jira[name], key);
+  if (status === undefined) throw new Error(`jira.${name} names no status for ${projectOf(key)} and has no default`);
+  return status;
+}
+
+function prioritized(hits: JiraHit[], label: string | undefined): string[] {
+  const first = hits.filter((hit) => label !== undefined && hit.labels.includes(label));
+  return [...first, ...hits.filter((hit) => !first.includes(hit))].map((hit) => hit.key);
+}
+
 function slug(text: string): string {
   return text
     .toLowerCase()
@@ -213,7 +224,7 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
     ? `\n\nThis is a problem with the worker's machine, not with the issue, so it is not labelled ${config.jira.blockedLabel} and the worker stops until the machine is fixed.`
     : "";
   try {
-    await jira.transitionTo(record.key, config.jira.releasedStatus);
+    await jira.transitionTo(record.key, statusOf(config, "releasedStatus", record.key));
     await jira.assign(record.key, null);
     if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
     await jira.comment(
@@ -229,10 +240,12 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
 
 async function claim(deps: WorkerDeps, issue: JiraIssue, me: JiraUser): Promise<boolean> {
   const { jira, config } = deps;
+  const claimed = statusOf(config, "claimedStatus", issue.key);
+  statusOf(config, "releasedStatus", issue.key);
   await jira.assign(issue.key, me.accountId);
-  if (!sameStatus(issue, config.jira.claimedStatus)) await jira.transitionTo(issue.key, config.jira.claimedStatus);
+  if (!sameStatus(issue, claimed)) await jira.transitionTo(issue.key, claimed);
   const after = await jira.issue(issue.key);
-  return after.assignee === me.accountId && sameStatus(after, config.jira.claimedStatus);
+  return after.assignee === me.accountId && sameStatus(after, claimed);
 }
 
 function fetchShard(shard: PresentShard): boolean {
@@ -644,7 +657,7 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
       record.state = "released";
       record.reason = "the worker restarted during this repair";
       record.endedAt = deps.now().toISOString();
-    } else if (issue.assignee === me.accountId && sameStatus(issue, config.jira.claimedStatus)) {
+    } else if (issue.assignee === me.accountId && sameStatus(issue, statusOf(config, "claimedStatus", record.key))) {
       await release(deps, record, "the worker restarted while this issue was claimed");
     } else {
       record.state = "released";
@@ -681,7 +694,7 @@ async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[])
   const merged = pulls.some((pull) => pull.state === "MERGED");
   const urls = pulls.map((pull) => pull.url).join(" ");
   record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
-  const done = deps.config.jira.doneStatus;
+  const done = statusFor(deps.config.jira.doneStatus, record.key);
   if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
   await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
   log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
@@ -899,7 +912,10 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
     }
   }
   const slots = config.limits.concurrent - repaired.length;
-  const keys = options.issue === undefined ? await jira.search(config.jira.jql, SEARCH_LIMIT) : [options.issue];
+  const keys =
+    options.issue === undefined
+      ? prioritized(await jira.search(config.jira.jql, SEARCH_LIMIT), config.jira.priorityLabel)
+      : [options.issue];
   log().info("cycle", { dryRun, eligible: keys });
   const picked: Candidate[] = [];
   const plan: PlanEntry[] = [];
