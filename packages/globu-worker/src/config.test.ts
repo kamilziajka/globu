@@ -46,6 +46,7 @@ describe("loadWorkerConfig", () => {
     const file = write(tempDir(), "worker.yaml", MINIMAL);
     const config = loadWorkerConfig(file);
     expect(config.jira.blockedLabel).toBe("agent-blocked");
+    expect(config.jira.eligibleLabel).toBe("agent-eligible");
     expect(config.jira.blockingLinks).toEqual(["Blocks"]);
     expect(config.shards.companion).toEqual([]);
     expect(config.poll.every).toBe(60_000);

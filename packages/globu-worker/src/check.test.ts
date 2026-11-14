@@ -47,6 +47,8 @@ function jira(overrides: Partial<JiraClient> = {}): JiraClient {
     transitionTo: unused,
     comment: unused,
     addLabel: unused,
+    removeLabel: unused,
+    setField: unused,
     remoteLink: unused,
     ...overrides
   };

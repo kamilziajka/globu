@@ -117,6 +117,35 @@ describe("jiraClient", () => {
     ]);
   });
 
+  it("removes a label and sets a text or option field after reading its type", async () => {
+    const { fetchFn, calls } = fakeFetch({
+      "PUT /issue/MR-7": {},
+      "GET /issue/MR-7/editmeta": {
+        body: {
+          fields: {
+            customfield_1: { schema: { type: "string" } },
+            customfield_2: { schema: { type: "option" } },
+            customfield_3: {}
+          }
+        }
+      }
+    });
+    const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
+    await client.removeLabel("MR-7", "agent-blocked");
+    await client.setField("MR-7", "customfield_1", "backend");
+    await client.setField("MR-7", "customfield_2", "backend");
+    await client.setField("MR-7", "customfield_3", "backend");
+    expect(calls.filter((call) => call.method === "PUT").map((call) => call.body)).toEqual([
+      { update: { labels: [{ remove: "agent-blocked" }] } },
+      { fields: { customfield_1: "backend" } },
+      { fields: { customfield_2: { value: "backend" } } },
+      { fields: { customfield_3: "backend" } }
+    ]);
+    await expect(client.setField("MR-7", "customfield_9", "backend")).rejects.toThrow(
+      "customfield_9 cannot be edited on MR-7"
+    );
+  });
+
   it("names the available transitions when none leads to the status", async () => {
     const { fetchFn } = fakeFetch({
       "GET /issue/MR-7/transitions": { body: { transitions: [{ id: "21", to: { id: "10024", name: "Done" } }] } },

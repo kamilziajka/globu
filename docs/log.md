@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-14
+* [globu-worker](./worker.md): `retry` removes the blocked label and takes the issue, `why` says why the next cycle would or would not claim an issue, `delegate` adds the eligibility label and the repository marker, and the new `jira.eligibleLabel` key names that label. The paragraph on the `claude` keys moved below the configuration table, which it split.
 * [Development](./development.md): releasing is one `/release` run that checks the docs, bumps, runs the workflow, pushes the site's `release.json` and docs snapshot to its `main` through `scripts/release-site.ts`, waits for the deploy and records the release, resumable by running it again. The workflow tolerates a version npm accepted but does not list yet, names the by-hand command when npm refuses a package and writes release notes from commits. The drift hook reads the site's `main` instead of looking for a pull request.
 
 ## 2026-11-13

@@ -63,7 +63,7 @@ export type OnceResult = { runs: RunRecord[]; plan: PlanEntry[] };
 type PresentShard = ResolvedShard & { path: string };
 type Registry = { all: ResolvedShard[]; active: ResolvedShard[]; context: string | null };
 type Worktree = { shard: PresentShard; tree: string; branch: string; base: string; pushed: boolean };
-type Candidate = { issue: JiraIssue; shardId: string | null };
+export type Candidate = { issue: JiraIssue; shardId: string | null };
 type Prepared = {
   record: RunRecord;
   dir: string;
@@ -82,8 +82,8 @@ export type ClaimResult = {
   companions: { id: string; tree: string }[];
 };
 
-const SEARCH_LIMIT = 50;
-const OPEN_FOLLOW_UPS = new Set<FollowUpState>(["in review", "conflict", "checks failing", "needs human"]);
+export const SEARCH_LIMIT = 50;
+export const OPEN_FOLLOW_UPS = new Set<FollowUpState>(["in review", "conflict", "checks failing", "needs human"]);
 const ORIGIN = "origin/";
 
 function persist(deps: WorkerDeps, dir: string, record: RunRecord): void {
@@ -340,6 +340,10 @@ function blockers(deps: WorkerDeps, issue: JiraIssue, stored: StoredRun[]): Bloc
     const merged = own.some((record) => record.followUp?.state === "merged");
     return { ...blocker, pullRequests: own.flatMap((record) => record.pullRequests), resolved: blocker.done || merged };
   });
+}
+
+export function waitingOn(deps: WorkerDeps, issue: JiraIssue, stored: StoredRun[]): Blocker[] {
+  return blockers(deps, issue, stored).filter((blocker) => !blocker.resolved);
 }
 
 async function prepare(
@@ -821,7 +825,7 @@ export async function repairPullRequest(
   return record;
 }
 
-function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
+export function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
   const { config } = deps;
   const { issue, shardId } = candidate;
   if (shardId === null || !config.shards.deliverable.includes(shardId)) return "would release: no deliverable marker";
@@ -880,7 +884,7 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
     const candidate = { issue, shardId: markerShard(issue, config) };
     const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
     plan.push(entry);
-    const waiting = blockers(deps, issue, stored).filter((blocker) => !blocker.resolved);
+    const waiting = waitingOn(deps, issue, stored);
     if (options.issue === undefined && issue.assignee !== null) {
       entry.action = "skipped, already assigned";
     } else if (options.issue === undefined && waiting.length > 0) {

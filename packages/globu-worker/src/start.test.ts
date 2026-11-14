@@ -46,6 +46,8 @@ function jira(issues: JiraIssue[], overrides: Partial<JiraClient> = {}): JiraCli
     addLabel: async (key, label) => {
       get(key).labels.push(label);
     },
+    removeLabel: async () => {},
+    setField: async () => {},
     remoteLink: async () => {},
     ...overrides
   };

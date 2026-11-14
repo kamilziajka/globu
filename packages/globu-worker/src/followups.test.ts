@@ -79,6 +79,8 @@ function jira(): FakeJira {
       comments.push(body);
     },
     addLabel: async () => {},
+    removeLabel: async () => {},
+    setField: async () => {},
     remoteLink: async () => {}
   };
 }

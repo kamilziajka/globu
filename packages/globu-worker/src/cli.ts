@@ -20,6 +20,7 @@ import { spawnRunner } from "./exec.js";
 import { jiraClient } from "./jira.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { parseMode, type ReadKey, start } from "./start.js";
+import { delegate, retry, why } from "./triage.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
 import { claimIssue, finishRun, loop, once, releaseRun, type WorkerDeps } from "./worker.js";
 
@@ -33,8 +34,9 @@ export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now">> & {
 
 const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the right Globu shard.";
 const FOOTER = `
-once and run start Claude headless in a home of the worker's own: GLOBU_HOME defaults to ~/.globu/worker and
+once, run and retry start Claude headless in a home of the worker's own: GLOBU_HOME defaults to ~/.globu/worker and
 CLAUDE_CONFIG_DIR to <GLOBU_HOME>/claude, and neither may be ~/.globu or ~/.claude. worker.yaml lives in GLOBU_HOME.
+why and delegate read that home too, or the session's with --session.
 poll, claim, finish and release serve a Claude Code session that does the implementing itself: they use the
 session's own home, ~/.globu unless GLOBU_HOME says otherwise, and its worker.yaml and runs directory.
 Secrets come from JIRA_EMAIL, JIRA_API_TOKEN and GH_TOKEN, in the environment or in <GLOBU_HOME>/secrets.env, where
@@ -163,6 +165,40 @@ export async function workerMain(
     .action(async (options: { dryRun?: boolean; issue?: string; repair?: string; json?: boolean }) => {
       const deps = ownDeps();
       const result = await once(deps, { dryRun: options.dryRun, issue: options.issue, repair: options.repair });
+      if (options.json) io.out(JSON.stringify(result, null, 2));
+    });
+
+  program
+    .command("retry <key>")
+    .description("remove the blocked label from an issue and take it as once --issue does")
+    .option("--json", "print machine-readable JSON")
+    .action(async (key: string, options: { json?: boolean }) => {
+      const result = await retry(ownDeps(), key);
+      if (options.json) io.out(JSON.stringify(result, null, 2));
+    });
+
+  const homesOf = (session?: boolean) => (session ? sessionHomes(env) : ownHomes(env));
+
+  program
+    .command("why <key>")
+    .description("say why the next cycle would or would not claim an issue, touching nothing")
+    .option("--session", "use the session's home instead of the worker's")
+    .option("--json", "print machine-readable JSON")
+    .action(async (key: string, options: { session?: boolean; json?: boolean }) => {
+      const deps = buildDeps(io, env, overrides, homesOf(options.session), global());
+      const report = await why(deps, key);
+      if (options.json) io.out(JSON.stringify(report, null, 2));
+    });
+
+  program
+    .command("delegate <key>")
+    .description("mark an issue for the worker: add the eligibility label and the repository marker")
+    .requiredOption("--repo <shard>", "the deliverable shard the issue lands in")
+    .option("--session", "use the session's home instead of the worker's")
+    .option("--json", "print machine-readable JSON")
+    .action(async (key: string, options: { repo: string; session?: boolean; json?: boolean }) => {
+      const deps = buildDeps(io, env, overrides, homesOf(options.session), global());
+      const result = await delegate(deps, key, options.repo);
       if (options.json) io.out(JSON.stringify(result, null, 2));
     });
 
