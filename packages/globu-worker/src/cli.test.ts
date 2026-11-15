@@ -127,9 +127,10 @@ describe("globu-worker", () => {
   });
 
   it("reads the registry from the default home when GLOBU_HOME is unset", async () => {
-    const saved = { HOME: process.env.HOME, GLOBU_HOME: process.env.GLOBU_HOME };
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GLOBU_HOME: process.env.GLOBU_HOME };
     const fakeHome = tempDir();
     process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
     try {
       const io = captureIo(fakeHome);
       expect(await workerMain(["once"], io, { JIRA_EMAIL: "b", JIRA_API_TOKEN: "s" }, quiet())).toBe(1);
@@ -137,6 +138,7 @@ describe("globu-worker", () => {
       expect(process.env.GLOBU_HOME).toBe(path.join(fakeHome, ".globu/worker"));
     } finally {
       process.env.HOME = saved.HOME;
+      process.env.USERPROFILE = saved.USERPROFILE;
       process.env.GLOBU_HOME = saved.GLOBU_HOME;
     }
   });
@@ -183,7 +185,7 @@ describe("globu-worker", () => {
     expect(finish.stdout).toBe("MR-1\treleased: the run made no commits\n");
 
     const runId = (io: { stdout: string }) =>
-      io.stdout.split("\t")[1].replace("prepared ", "").trim().split("/").at(-1) as string;
+      io.stdout.split("\t")[1].replace("prepared ", "").trim().split(/[/\\]/).at(-1) as string;
     const second = captureIo(root);
     expect(await workerMain(["claim", "MR-1"], second, env(), { ...quiet(), jira, ...at(2) })).toBe(0);
     const finishJson = captureIo(root);
@@ -291,7 +293,8 @@ describe("globu-worker", () => {
     const io = captureIo(root);
     const args = ["--log-level", "debug", "once", "--issue", "MR-1"];
     expect(await workerMain(args, io, given, { ...quiet(), jira: sessionJira(), run })).toBe(0);
-    expect(io.stderr).toBe(`globu-worker: ${file} is readable by others, run chmod 600 on it\n`);
+    const modes = process.platform !== "win32";
+    expect(io.stderr).toBe(modes ? `globu-worker: ${file} is readable by others, run chmod 600 on it\n` : "");
     expect(seen).toHaveLength(1);
     expect(seen[0].ANTHROPIC_API_KEY).toBe("sk-file-key");
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();
@@ -301,7 +304,7 @@ describe("globu-worker", () => {
     const logs = fs
       .readdirSync(path.join(home, "logs"))
       .map((name) => fs.readFileSync(path.join(home, "logs", name), "utf8"));
-    expect(logs.join("")).toContain("readable by others");
+    expect(logs.join("").includes("readable by others")).toBe(modes);
     expect(logs.join("")).not.toContain("sk-file-key");
   });
 

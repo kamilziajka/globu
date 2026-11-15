@@ -7,9 +7,10 @@ for (const name of Object.keys(process.env)) {
   if (name.startsWith("GIT_")) delete process.env[name];
 }
 process.env.GIT_TERMINAL_PROMPT = "0";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 beforeEach(() => {
-  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "globu-home-")));
+  const sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "globu-home-")));
   process.env.GLOBU_HOME = path.join(sandbox, "globu");
   process.env.CLAUDE_CONFIG_DIR = path.join(sandbox, "claude");
   process.env.GLOBU_LOCK_DIR = path.join(sandbox, "locks");

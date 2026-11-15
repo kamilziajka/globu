@@ -72,6 +72,7 @@ function deps(setup: ReturnType<typeof world>, script: Script = {}, githubToken:
     run: runner(script, calls),
     io: captureIo(setup.root),
     now: () => NOW,
+    platform: "linux",
     env: { PATH: process.env.PATH, HOME: process.env.HOME, JIRA_API_TOKEN: "jira-secret", GH_TOKEN: "gh-token" }
   };
   return { worker, calls };

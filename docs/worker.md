@@ -364,3 +364,6 @@ The worker runs on Windows with Git for Windows, Node and `claude`, installed na
 - **Long paths.** Worktrees sit under `runs\<run-id>\tree`, and a `node_modules` below that can pass the 260-character limit. `git config --global core.longpaths true`, and Windows' own long path setting for the tools that run in setup; `check` notes when the git setting is off.
 - **`secrets.env`** needs no `chmod`: NTFS has no POSIX mode bits, so the worker does not warn about them.
 - **Finding programs.** In PowerShell `where` is `Where-Object`; use `where.exe git` or `Get-Command git` to see which `git`, `sh` or `claude` is on `PATH`.
+- **`diagnostics`** runs `tar` in the directory of the archive and names the archive without its drive, since the GNU `tar` that Git for Windows can put on `PATH` reads `C:\...` as a remote host.
+
+The test suite runs on a Windows runner in CI, see [tests on Windows](./development.md#tests-on-windows).

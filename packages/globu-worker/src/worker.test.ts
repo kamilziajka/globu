@@ -8,6 +8,7 @@ import type { Runner } from "./exec.js";
 import type { JiraClient, JiraIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
+import { setupShell } from "./shell.js";
 import { loadSubscription, recordUsage } from "./subscription.js";
 import {
   addWorktree,
@@ -244,6 +245,7 @@ function deps(world: World, jira: JiraClient, run: Runner, githubToken: string |
     run,
     io,
     now: () => NOW,
+    platform: "linux",
     env: { PATH: process.env.PATH, HOME: process.env.HOME, JIRA_API_TOKEN: "jira-secret", GH_TOKEN: "gh-token" }
   };
   return { worker, io };
@@ -469,7 +471,7 @@ describe("once", () => {
     expect(claude.cwd).toBe(path.join(runDir, "tree"));
     expect(claude.args.slice(0, 2)).toEqual([
       "-p",
-      `Implement the issue described in ${runDir}/brief.md with the issue-deliver skill. Write the handback to ${runDir}/handback.md.`
+      `Implement the issue described in ${path.join(runDir, "brief.md")} with the issue-deliver skill. Write the handback to ${path.join(runDir, "handback.md")}.`
     ]);
     expect(claude.args).toContain("--allowedTools");
     expect(claude.args).toContain("Bash(git commit *)");
@@ -492,12 +494,12 @@ describe("once", () => {
     const brief = fs.readFileSync(path.join(runDir, "brief.md"), "utf8");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain(
-      `- \`product/docs/decisions/012-pricing.md\`: ${world.clones.product}/docs/decisions/012-pricing.md`
+      `- \`product/docs/decisions/012-pricing.md\`: ${path.join(world.clones.product, "docs/decisions/012-pricing.md")}`
     );
-    expect(brief).toContain(`- \`src/x.ts\`: ${world.clones.backend}/src/x.ts`);
+    expect(brief).toContain(`- \`src/x.ts\`: ${path.join(world.clones.backend, "src/x.ts")}`);
     expect(brief).toContain("**Kamil, 2026-11-05**\n\n> Also read `docs/index.md`.");
-    expect(brief).toContain(`- \`docs/index.md\`: ${world.clones.backend}/docs/index.md`);
-    expect(brief).toContain(`- \`product\`: ${runDir}/companions/product`);
+    expect(brief).toContain(`- \`docs/index.md\`: ${path.join(world.clones.backend, "docs/index.md")}`);
+    expect(brief).toContain(`- \`product\`: ${path.join(runDir, "companions/product")}`);
     expect(fs.readFileSync(path.join(runDir, "pull-request-backend.md"), "utf8")).toContain(
       "## Summary\n\nDone.\n\n---\n\nRun MR-7"
     );
@@ -565,6 +567,16 @@ describe("once", () => {
     const run = (await once(worker)).runs[0];
     expect([run.state, run.reason]).toEqual(["handed-back", null]);
     expect(calls.setup?.map((call) => [call.shell, call.command])).toEqual([[sh, "npm ci"]]);
+  });
+
+  it("looks the setup shell up for the host platform when none is given", async () => {
+    const world = setup();
+    world.config.setup = { backend: ["npm ci"] };
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker } = deps(world, fakeJira([issue("MR-7")]), fakeRunner({ commit: true }, calls));
+    delete worker.platform;
+    expect((await once(worker)).runs[0].state).toBe("handed-back");
+    expect(calls.setup?.map((call) => call.shell)).toEqual([setupShell(worker.env, process.platform)]);
   });
 
   it("releases without the blocked label when the machine cannot start the setup or Claude, and the loop stops", async () => {

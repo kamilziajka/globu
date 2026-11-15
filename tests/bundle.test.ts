@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
+import { setupShell } from "../packages/globu-worker/src/shell.js";
 import { baseIndex, initRepo, read, tempDir, write } from "../packages/testing/index.js";
 
 const root = path.join(import.meta.dirname, "..");
@@ -13,10 +14,16 @@ const PACKAGE = "packages/globu-cli";
 const WORKER = "packages/globu-worker";
 const GLOBU_WORKER = path.join(root, WORKER, "dist/globu-worker.mjs");
 
+const WINDOWS = process.platform === "win32";
+
+function executable(bundle: string, args: string[]): [string, string[]] {
+  return WINDOWS ? [process.execPath, [bundle, ...args]] : [bundle, args];
+}
+
 type HooksFile = { hooks: Record<string, { hooks: { command: string }[] }[]> };
 
 function runBundle(bundle: string, args: string[], input: unknown = "") {
-  return spawnSync(bundle, args, {
+  return spawnSync(...executable(bundle, args), {
     input: typeof input === "string" ? input : JSON.stringify(input),
     encoding: "utf8",
     env: { ...process.env }
@@ -95,7 +102,10 @@ describe("bundled CLI", () => {
     const blocked = runBundle(GLOBU, ["hook", "guard"], { cwd: root, tool_input: { file_path: target } });
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain('belongs to shard "product", which is read-only');
-    const bash = runBundle(GLOBU, ["hook", "guard"], { cwd: root, tool_input: { command: `echo x > ${target}` } });
+    const bash = runBundle(GLOBU, ["hook", "guard"], {
+      cwd: root,
+      tool_input: { command: `echo x > ${target.replaceAll("\\", "/")}` }
+    });
     expect(bash.status).toBe(2);
   });
 
@@ -126,7 +136,7 @@ describe("bundled worker", () => {
   it("runs as a standalone executable and refuses the interactive homes", () => {
     expect(runBundle(GLOBU_WORKER, ["--version"]).stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
     const env = { PATH: process.env.PATH, GLOBU_HOME: path.join(os.homedir(), ".globu") };
-    const result = spawnSync(GLOBU_WORKER, ["once"], { encoding: "utf8", env });
+    const result = spawnSync(...executable(GLOBU_WORKER, ["once"]), { encoding: "utf8", env });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GLOBU_HOME points at");
   });
@@ -142,7 +152,7 @@ describe("plugin hooks", () => {
         expect(command).toContain(`"\${CLAUDE_PLUGIN_ROOT}/node_modules/${name}/${bundle}"`);
       }
       const result = spawnSync(command, {
-        shell: true,
+        shell: setupShell(process.env, process.platform) as string,
         input: "{}",
         encoding: "utf8",
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: path.join(root, PLUGIN) }

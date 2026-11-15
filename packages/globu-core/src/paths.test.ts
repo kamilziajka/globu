@@ -22,27 +22,30 @@ describe("paths", () => {
   it("follow the environment overrides", () => {
     process.env.GLOBU_HOME = "/tmp/custom-globu";
     process.env.CLAUDE_CONFIG_DIR = "/tmp/custom-claude";
-    expect(manifestPath()).toBe("/tmp/custom-globu/manifest.yaml");
-    expect(statePath()).toBe("/tmp/custom-globu/state.yaml");
-    expect(clonesDir()).toBe("/tmp/custom-globu/clones");
-    expect(claudeSettingsPath()).toBe("/tmp/custom-claude/settings.json");
+    expect(manifestPath()).toBe(path.resolve("/tmp/custom-globu/manifest.yaml"));
+    expect(statePath()).toBe(path.resolve("/tmp/custom-globu/state.yaml"));
+    expect(clonesDir()).toBe(path.resolve("/tmp/custom-globu/clones"));
+    expect(claudeSettingsPath()).toBe(path.resolve("/tmp/custom-claude/settings.json"));
   });
 
-  it("fall back to the temp directory when the home directory is not writable", () => {
-    delete process.env.GLOBU_HOME;
-    const home = tempDir();
-    process.env.HOME = home;
-    expect(globuHome()).toBe(path.join(home, ".globu"));
-
-    fs.chmodSync(home, 0o500);
-    try {
-      expect(globuHome()).toBe(path.join(os.tmpdir(), "globu"));
-      fs.chmodSync(home, 0o700);
-      fs.mkdirSync(path.join(home, ".globu"));
-      fs.chmodSync(home, 0o500);
+  it.skipIf(process.platform === "win32")(
+    "fall back to the temp directory when the home directory is not writable",
+    () => {
+      delete process.env.GLOBU_HOME;
+      const home = tempDir();
+      process.env.HOME = home;
       expect(globuHome()).toBe(path.join(home, ".globu"));
-    } finally {
-      fs.chmodSync(home, 0o700);
+
+      fs.chmodSync(home, 0o500);
+      try {
+        expect(globuHome()).toBe(path.join(os.tmpdir(), "globu"));
+        fs.chmodSync(home, 0o700);
+        fs.mkdirSync(path.join(home, ".globu"));
+        fs.chmodSync(home, 0o500);
+        expect(globuHome()).toBe(path.join(home, ".globu"));
+      } finally {
+        fs.chmodSync(home, 0o700);
+      }
     }
-  });
+  );
 });
