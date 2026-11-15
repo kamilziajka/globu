@@ -29,7 +29,7 @@ describe("diagnostics", () => {
     );
   });
 
-  it("packs logs, run records, worker.yaml, merged.json and versions, with secrets redacted", async () => {
+  it("packs logs, run records, worker.yaml, merged.json, subscription.json, followups.json and versions, with secrets redacted", async () => {
     const home = tempDir();
     write(home, "logs/worker-2026-11-13.log", '{"msg":"command","args":["uses sk-secret-value"]}\n');
     write(home, "worker.yaml", "jira:\n  site: https://acme.atlassian.net # sk-secret-value\n");
@@ -38,6 +38,8 @@ describe("diagnostics", () => {
       "merged.json",
       `${JSON.stringify({ "MR-0": { pullRequests: ["https://github.com/acme/app/pull/7"], mergedAt: "sk-secret-value" } })}\n`
     );
+    write(home, "subscription.json", '{"fiveHour":{"utilization":15,"note":"sk-secret-value"}}\n');
+    write(home, "followups.json", '{"MR-1":[{"summary":"Tidy up","key":"MR-9","linked":true}]}\n');
     write(home, "secrets.env", "ANTHROPIC_API_KEY=sk-secret-value\n");
     saveRun(
       path.join(home, "runs/MR-1-x"),
@@ -53,6 +55,8 @@ describe("diagnostics", () => {
       "runs/MR-1-x.json",
       "worker.yaml",
       "merged.json",
+      "subscription.json",
+      "followups.json",
       "environment.txt"
     ]);
     const dir = unpack(out);
@@ -62,6 +66,8 @@ describe("diagnostics", () => {
     expect(JSON.parse(fs.readFileSync(path.join(dir, "merged.json"), "utf8"))).toEqual({
       "MR-0": { pullRequests: ["https://github.com/acme/app/pull/7"], mergedAt: "[redacted]" }
     });
+    expect(fs.readFileSync(path.join(dir, "subscription.json"), "utf8")).toContain('"note":"[redacted]"');
+    expect(fs.readFileSync(path.join(dir, "followups.json"), "utf8")).toContain('"key":"MR-9"');
     expect(fs.existsSync(path.join(dir, "secrets.env"))).toBe(false);
     const environment = fs.readFileSync(path.join(dir, "environment.txt"), "utf8").split("\n");
     expect(environment[0]).toMatch(/^globu-worker \d+\.\d+\.\d+$/);

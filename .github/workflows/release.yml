@@ -46,19 +46,23 @@ jobs:
 
       - name: Publish the packages
         run: |
+          echo "npm $(npm --version)"
           failed=""
           while IFS=$'\t' read -r name version tarball; do
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already on npm, skipping"
             elif ! npm view "$name" name >/dev/null 2>&1; then
               echo "::warning::$name is not on npm yet. Its first release is done by hand, see docs/development.md, then npm trust binds it to this workflow."
-            elif output=$(npm publish "$tarball" 2>&1); then
+            elif output=$(npm publish "$tarball" --loglevel verbose 2>&1); then
               echo "$output"
             elif echo "$output" | grep -qE "EPUBLISHCONFLICT|cannot publish over the previously published"; then
               echo "$output"
               echo "$name@$version was published meanwhile, npm only lists it a few minutes later"
             else
               echo "$output"
+              echo "::group::Trusted publishing lines for $name"
+              echo "$output" | grep -iE "oidc|provenance|token" || echo "npm printed no trusted publishing lines for $name"
+              echo "::endgroup::"
               echo "::error::npm refused $name@$version. Publish it by hand from this commit with: npm run build && npm run pin && npm publish $tarball, wait until npm view $name@$version version prints $version, then run this workflow again."
               failed="$failed $name"
             fi

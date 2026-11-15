@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import type { Runner } from "./exec.js";
+import { FILED_FILE } from "./filed.js";
 import { redact } from "./logger.js";
 import { MERGED_FILE } from "./merged.js";
 import { latestRuns, loadRuns } from "./runs.js";
+import { SUBSCRIPTION_FILE } from "./subscription.js";
 
 export type DiagnosticsDeps = { home: string; env: NodeJS.ProcessEnv; run: Runner; secrets: string[] };
 
@@ -49,7 +51,7 @@ export async function writeDiagnostics(deps: DiagnosticsDeps, out: string): Prom
     for (const { dir, record } of runs) {
       put(`runs/${path.basename(dir)}.json`, `${JSON.stringify(record, null, 2)}\n`);
     }
-    for (const name of ["worker.yaml", MERGED_FILE]) {
+    for (const name of ["worker.yaml", MERGED_FILE, SUBSCRIPTION_FILE, FILED_FILE]) {
       const file = path.join(deps.home, name);
       if (fs.existsSync(file)) put(name, fs.readFileSync(file, "utf8"));
     }

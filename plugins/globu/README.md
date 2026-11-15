@@ -4,14 +4,14 @@ Claude Code plugin that keeps [OKF](https://github.com/GoogleCloudPlatform/open-
 
 - `/globu:setup-knowledge-base [path]` bootstraps or upgrades a base, in `wiki` by default, or in `docs`, `knowledge` or a directory of your choice.
 - `/globu:register-knowledge-base` adds a shard to the registry and drafts its routing text.
-- `/globu:update-knowledge` writes what a session learned to the right base or shard.
+- `/globu:update-knowledge` writes what a session learned to the right base or shard and stamps `generated` on the docs it wrote, adding `verified` only when you confirm the content.
 - `/globu:issue-check` reads a Jira issue and checks with `globu resolve` that each reference exists on its repo's default branch.
 - `/globu:issue-fix` runs that check and rewrites the broken references in the issue after the user confirms the edit.
-- `/globu:issue-deliver` implements an issue from a brief that names the issue, the worktree and the referenced files, and writes a handback. The `globu-worker` program runs it unattended.
+- `/globu:issue-deliver` implements an issue from a brief that names the issue, the worktree and the referenced files, and writes a handback, stamping `generated` on the knowledge it wrote. The `globu-worker` program runs it unattended.
 - `/globu:issue-work` claims one issue with `globu-worker claim`, implements it here with the person watching and hands back with `globu-worker finish` on a yes.
 - `/globu:issue-watch` polls a project with `globu-worker poll`, claims up to the configured cap and delivers each issue through a subagent.
 - A session hook tells Claude which shards exist on this machine and when to consult them.
 - A guard hook blocks edits to read-only shards and makes Claude Code ask before edits to shards in `ask` mode. It covers the file tools and, best effort, shell commands.
-- An edit hook validates a base right after Claude edits a file in it.
+- An edit hook validates a base right after Claude edits a file in it. Errors block the edit; warnings about OKF fields such as `status`, `verified` or `stale_after` are passed to Claude without blocking.
 
 See [docs/knowledge-base.md](../../docs/knowledge-base.md), [docs/globu-cli.md](../../docs/globu-cli.md) and [docs/architecture.md](../../docs/architecture.md).

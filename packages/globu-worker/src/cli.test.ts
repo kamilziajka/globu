@@ -116,6 +116,7 @@ describe("globu-worker", () => {
     expect(await workerMain(["--help"], io, {}, quiet())).toBe(0);
     expect(io.stdout).toContain("once [options]");
     expect(io.stdout).toContain("GLOBU_HOME defaults to ~/.globu/worker");
+    expect(io.stdout).toContain("hold needs no home or worker.yaml");
     const version = captureIo(tempDir());
     expect(await workerMain(["--version"], version, {}, quiet())).toBe(0);
     expect(version.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);

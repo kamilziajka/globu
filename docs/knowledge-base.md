@@ -25,7 +25,7 @@ The `base` group of the [globu CLI](./globu-cli.md). Add `--json` to any command
 
 | Command | Purpose |
 |---|---|
-| `base setup [path] [--dir] [--name] [--description]` | Create a base or upgrade one in place. Idempotent. `--dir` names the base directory inside `path`, `wiki` by default. Without it an existing base directly under `path` is upgraded whatever it is called, and a `path` called `wiki` is the base directory itself. A `docs` directory that is not yet a base is left alone unless `--dir docs` names it. |
+| `base setup [path] [--dir] [--name] [--description]` | Create a base or upgrade one in place. Idempotent. `--dir` names the base directory inside `path`, `wiki` by default. Without it an existing base directly under `path` is upgraded whatever it is called, and a `path` called `wiki` is the base directory itself. A `docs` directory that is not yet a base is left alone unless `--dir docs` names it. The base is validated afterwards: errors fail the command, and `warning` lines for malformed OKF fields are printed with exit code 0. |
 | `base validate [path]` | Structural check of one base or of every base under a directory. Exit code 1 on errors. Malformed [optional OKF fields](./okf.md#what-validate-checks) are warnings: the base prints `WARN` and the exit code stays 0. |
 | `base stale [path]` | List the concept docs past `stale_after` or with `status: deprecated` in every base under a directory, with the reason. Exit code 0 whatever it finds, 1 when there is no base. |
 | `base stamp <files...> [--verified]` | Set `generated` to this version and the current time on each concept doc, or with `--verified` append a `human:<git user.name>` verification. See [stamping trust](./okf.md#stamping-trust). |

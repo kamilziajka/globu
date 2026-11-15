@@ -154,7 +154,7 @@ A GitHub Actions job, a cloud session or a fresh machine starts with no `~/.glob
 
 ## The worker
 
-`packages/globu-worker` is the poller described in [globu-worker](./worker.md). It imports the resolver, the registry and the git token plumbing from `globu-core` and shells out to `git`, `gh` and `claude` through `cross-spawn`, which also starts the `.cmd` shims npm installs on Windows. It hands `globu-core` the `GH_TOKEN` as the fallback credential for `github.com`, used only when `GLOBU_GIT_TOKEN` is unset; the `globu` CLI never sets it. Its own rule of separation: the worker detects structure (the JQL match, the repository marker, the refs it can extract without a model) and the `issue-deliver` skill handles meaning. The Claude process it starts holds no Jira or GitHub credential; the worker pushes and posts after the run ends. It never shares the interactive user's `~/.globu` or `~/.claude`: its homes default to `~/.globu/worker` and `~/.globu/worker/claude`, and it refuses to start when `GLOBU_HOME` or `CLAUDE_CONFIG_DIR` names one of the interactive ones.
+`packages/globu-worker` is the poller described in [globu-worker](./worker.md). It imports the resolver, the registry and the git token plumbing from `globu-core`, and the stamp from `knowledge-base`, and shells out to `git`, `gh` and `claude` through `cross-spawn`, which also starts the `.cmd` shims npm installs on Windows. It hands `globu-core` the `GH_TOKEN` as the fallback credential for `github.com`, used only when `GLOBU_GIT_TOKEN` is unset; the `globu` CLI never sets it. Its own rule of separation: the worker detects structure (the JQL match, the repository marker, the refs it can extract without a model) and the `issue-deliver` skill handles meaning. The Claude process it starts holds no Jira or GitHub credential; the worker pushes and posts after the run ends. It never shares the interactive user's `~/.globu` or `~/.claude`: its homes default to `~/.globu/worker` and `~/.globu/worker/claude`, and it refuses to start when `GLOBU_HOME` or `CLAUDE_CONFIG_DIR` names one of the interactive ones. The one Globu command a run may call is `globu base stamp <files...>`: the worker writes a `globu` launcher (`bin/globu` and `bin/globu.cmd`) into its home, outside the run's worktrees, puts that `bin` first on the run's `PATH` and allows exactly that command, which runs the worker's own bundle and refuses `--verified` and every other command.
 
 ## Shell commands in the guard
 
@@ -198,7 +198,7 @@ Rules that hold everywhere:
 packages/knowledge-base      OKF library: frontmatter, scan, validate, field checks, stale, stamp, lint, setup, log
 packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
 packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
-packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the once and run commands
+packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the cycle and its follow-ups, the session commands, locks and hold, the stamp launcher
 packages/testing             test helpers
 plugins/globu                the plugin: skills, session, guard and edit hooks, pinned dependency on the CLI
 mods/globu-status            the status mod: a plugin of function hooks with its own tests

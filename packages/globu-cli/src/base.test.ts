@@ -269,7 +269,7 @@ describe("globu hook validate-edit", () => {
     write(root, "wiki/good.md", '---\ntype: "Note"\n---\n');
     expect(edit("wiki/good.md").code).toBe(0);
     expect(edit(write(root, "README.md", "bare\n")).code).toBe(0);
-    expect(edit(path.join(tempDir(), "notes.md")).code).toBe(0);
+    expect(edit(path.join(initRepo(tempDir()), "notes.md")).code).toBe(0);
     expect(edit(write(root, "wiki/data.json", "{}")).code).toBe(0);
     expect(run(["hook", "validate-edit"], "").code).toBe(0);
   });

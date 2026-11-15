@@ -46,7 +46,8 @@ poll, claim, finish and release serve a Claude Code session that does the implem
 session's own home, ~/.globu unless GLOBU_HOME says otherwise, and its worker.yaml and runs directory.
 Secrets come from JIRA_EMAIL, JIRA_API_TOKEN and GH_TOKEN, in the environment or in <GLOBU_HOME>/secrets.env, where
 the environment wins. The Claude run never sees them, only ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN when set.
-The log is written to <GLOBU_HOME>/logs at the level of --log-level or GLOBU_LOG_LEVEL, info by default.`;
+The log is written to <GLOBU_HOME>/logs at the level of --log-level or GLOBU_LOG_LEVEL, info by default.
+hold needs no home or worker.yaml: it takes the lock files in GLOBU_LOCK_DIR, ~/.globu/locks by default.`;
 
 type Global = { logLevel?: string };
 

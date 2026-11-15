@@ -34,6 +34,7 @@ In a worktree of this repo on a branch at `origin/main` (`git fetch origin && gi
   * `curl -s https://globu.kazet.blog/version.json` (site deployed?)
   * the globu-knowledge-base `docs/log.md` for a `Globu <version> released` entry (recorded?)
 * Every non-private `packages/*/package.json` must exist on npm (`npm view <name> name`). A new package gets its first release by hand in step 5; say so now, because it needs `npm login` with the browser approval.
+* `npm whoami` prints the account. A by-hand publish in step 5 needs the login, and the token in `~/.npmrc` expires (`E401`), as it had before 1.0.0 and again before 1.3.0. When it fails, ask the user to run `npm login` now rather than in the middle of a failed run, and go on meanwhile.
 
 ## 3. The docs cover the changes
 
@@ -57,7 +58,7 @@ Skip when the tag exists and the GitHub release exists.
 
 When it fails, read `gh run view <id> --log-failed`:
 
-* `npm refused <name>@<version>` (`E404` or `E403` from trusted publishing, see GLOBU-30 in the knowledge base) or a package that is not on npm at all: the user publishes it by hand. In this worktree, at the `Release <version>` commit, run `npm run build && npm run pin` and give the user the exact command with the absolute path: `npm publish <worktree>/release/<tarball>`. It needs their `npm login` and the browser approval, so it is theirs to run. Then poll `npm view <name>@<version> version` every 30 seconds until it prints the version (npm takes minutes to list an accepted publish; a run started earlier tries to publish again and fails), check `dist.integrity` against `release/packages.json`, run `git checkout -- plugins` to drop the local pin, and run the workflow again. A new package is then bound with `npm trust github <name> --file release.yml --repo kamilziajka/globu --allow-publish`, again by the user.
+* `npm refused <name>@<version>` (`E404` or `E403` from trusted publishing, see GLOBU-30 in the knowledge base) or a package that is not on npm at all: the user publishes it by hand. First copy the group `Trusted publishing lines for <name>` from the run's log into the report and the knowledge base entry, since it holds npm's reason for refusing the OIDC exchange. In this worktree, at the `Release <version>` commit, run `npm run build && npm run pin` and give the user the exact command with the absolute path: `npm publish <worktree>/release/<tarball>`. It needs their `npm login` and the browser approval, so it is theirs to run. Then poll `npm view <name>@<version> version` every 30 seconds until it prints the version (npm takes minutes to list an accepted publish; a run started earlier tries to publish again and fails), check `dist.integrity` against `release/packages.json`, run `git checkout -- plugins` to drop the local pin, and run the workflow again. A new package is then bound with `npm trust github <name> --file release.yml --repo kamilziajka/globu --allow-publish`, again by the user.
 * A failure in `npm run verify`: the commit on `main` is broken. Fix it on `main`, then run the workflow again; it refuses only a version that is already tagged.
 * Anything else: read the log, fix the cause and run the workflow again. Never tag, push `stable` or create the GitHub release by hand.
 
