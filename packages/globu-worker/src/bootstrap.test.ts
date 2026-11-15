@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { register, resolveAll } from "../../globu-core/src/index.js";
+import { loadManifest, register, resolveAll, saveManifest } from "../../globu-core/src/index.js";
 import { escapeRegExp, initRepo, tempDir, write } from "../../testing/index.js";
 import { bootstrapShards } from "./bootstrap.js";
 import { loadWorkerConfig } from "./config.js";
@@ -77,5 +77,52 @@ describe("bootstrapShards", () => {
         "s"
       )
     );
+  });
+
+  it("clones the shards of a served project from the manifest, but not the reference ones", () => {
+    const root = tempDir();
+    const home = process.env.GLOBU_HOME as string;
+    const remote = (id: string) => `file://${initRepo(path.join(root, "remotes", id), { "README.md": `${id}\n` })}`;
+    register({ locator: remote("product"), cwd: root, dest: path.join(root, "product") });
+    const entry = (id: string, repo: string | null, access?: "read") => ({
+      id,
+      source: { type: "git" as const, repo },
+      format: "generic",
+      roots: [{ path: "." }],
+      description: "",
+      useWhen: "",
+      ...(access === undefined ? {} : { access })
+    });
+    const manifest = loadManifest();
+    saveManifest({
+      ...manifest,
+      shards: [
+        ...manifest.shards,
+        entry("backend", remote("backend")),
+        entry("handbook", remote("handbook"), "read"),
+        entry("local", null)
+      ],
+      projects: {
+        acme: {
+          shards: ["backend", "product", "handbook", "local"],
+          jira: "AC",
+          worker: { statuses: { claimed: "Doing", released: "Open" } }
+        }
+      }
+    });
+    const config = loadWorkerConfig(
+      write(tempDir(), "worker.yaml", "version: 2\njira: { site: https://acme.atlassian.net }\n")
+    );
+    expect(bootstrapShards(config, home)).toEqual([
+      `registered backend from ${remote("backend")} in ${path.join(home, "work/backend")}`,
+      `shard directories written to ${path.join(process.env.CLAUDE_CONFIG_DIR as string, "settings.json")}`
+    ]);
+    expect(resolveAll().shards.map((shard) => [shard.id, shard.mode, shard.path])).toEqual([
+      ["product", "write", path.join(root, "product")],
+      ["backend", "write", path.join(home, "work/backend")],
+      ["handbook", "read", null],
+      ["local", "read", null]
+    ]);
+    expect(bootstrapShards(config, home)).toEqual([]);
   });
 });

@@ -40,7 +40,8 @@ export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platf
 const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the right Globu shard.";
 const FOOTER = `
 once, run and retry start Claude headless in a home of the worker's own: GLOBU_HOME defaults to ~/.globu/worker and
-CLAUDE_CONFIG_DIR to <GLOBU_HOME>/claude, and neither may be ~/.globu or ~/.claude. worker.yaml lives in GLOBU_HOME.
+CLAUDE_CONFIG_DIR to <GLOBU_HOME>/claude, and neither may be ~/.globu or ~/.claude. worker.yaml lives in GLOBU_HOME
+and holds what is true on this machine; the projects it serves are defined in manifest.yaml next to it.
 claude.configDir: user in worker.yaml runs Claude in the user's own ~/.claude instead, see the worker docs.
 why and delegate read that home too, or the session's with --session.
 poll, claim, finish and release serve a Claude Code session that does the implementing itself: they use the
@@ -73,6 +74,10 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
     io.err(`globu-worker: ${warning}`);
   }
   const config = loadWorkerConfig(workerConfigPath(homes.home));
+  for (const warning of config.warnings) {
+    logger.warn(warning);
+    io.err(`globu-worker: ${warning}`);
+  }
   const claudeConfigDir = homes.claudeHome(config.claude.configDir);
   process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const secrets = readSecrets(env);
@@ -199,7 +204,10 @@ export async function workerMain(
   program
     .command("check")
     .description("check the configuration, the shards, Jira, GitHub and Claude, exit 1 when one fails")
-    .option("--smoke", "then set up, commit, push and open and close a draft pull request in each deliverable shard")
+    .option(
+      "--smoke",
+      "then set up, commit, push and open and close a draft pull request in each shard a run can land in"
+    )
     .action(async (options: { smoke?: boolean }) => {
       let deps: WorkerDeps | null = null;
       const loaded = await attempt("configuration", () => {
@@ -265,10 +273,10 @@ export async function workerMain(
   program
     .command("delegate <key>")
     .description("mark an issue for the worker: add the eligibility label and the repository marker")
-    .requiredOption("--repo <shard>", "the deliverable shard the issue lands in")
+    .option("--repo <shard>", "the shard the issue lands in, not needed when its project has one")
     .option("--session", "use the session's home instead of the worker's")
     .option("--json", "print machine-readable JSON")
-    .action(async (key: string, options: { repo: string; session?: boolean; json?: boolean }) => {
+    .action(async (key: string, options: { repo?: string; session?: boolean; json?: boolean }) => {
       const deps = buildDeps(io, env, overrides, homesOf(options.session), global());
       const result = await delegate(deps, key, options.repo);
       if (options.json) io.out(JSON.stringify(result, null, 2));

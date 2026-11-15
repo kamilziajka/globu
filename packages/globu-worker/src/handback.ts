@@ -1,4 +1,4 @@
-import { type FollowUpSettings, projectOf, statusFor, type WorkerConfig } from "./config.js";
+import { type FollowUpSettings, projectOf } from "./config.js";
 import { type FiledEntry, filedFor, saveFiled } from "./filed.js";
 import type { JiraClient } from "./jira.js";
 import { log } from "./logger.js";
@@ -108,13 +108,11 @@ async function create(
   runId: string,
   item: FollowUpItem
 ): Promise<FiledEntry | string> {
-  const issueType = statusFor(settings.issueType, ledger.key);
-  if (issueType === undefined) return `no jira.followUps.issueType for project ${projectOf(ledger.key)}`;
   let key: string;
   try {
     key = await jira.createIssue({
       project: projectOf(ledger.key),
-      issueType,
+      issueType: settings.issueType,
       summary: item.summary,
       description: description(item, ledger.key, runId)
     });
@@ -149,13 +147,12 @@ async function fileOne(
 
 export async function fileFollowUps(
   jira: JiraClient,
-  config: WorkerConfig,
+  settings: FollowUpSettings | undefined,
   home: string,
   key: string,
   runId: string,
   handback: string
 ): Promise<FiledFollowUp[]> {
-  const settings = config.jira.followUps;
   if (settings === undefined) return [];
   const entries = filedFor(home, key);
   const ledger: Ledger = { home, key, entries, earlier: [...entries] };

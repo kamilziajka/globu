@@ -2,14 +2,17 @@ import path from "node:path";
 import { register, resolveAll, syncClaudeDirectories } from "../../globu-core/src/index.js";
 import type { WorkerConfig } from "./config.js";
 import { log } from "./logger.js";
+import { deliveryShards } from "./projects.js";
 
 export function bootstrapShards(config: WorkerConfig, home: string): string[] {
-  const known = new Set(resolveAll().shards.map((shard) => shard.id));
-  const wanted = [...config.shards.deliverable, ...config.shards.companion];
-  const missing = wanted.filter((id) => !known.has(id) && Object.hasOwn(config.shards.repos, id));
+  const { shards } = resolveAll();
+  const missing = deliveryShards(config, shards).flatMap((id) => {
+    const shard = shards.find((candidate) => candidate.id === id);
+    const repo = shard === undefined ? config.repos[id] : shard.path === null ? shard.source.repo : null;
+    return repo === undefined || repo === null ? [] : [{ id, repo }];
+  });
   if (missing.length === 0) return [];
-  const lines = missing.map((id) => {
-    const repo = config.shards.repos[id];
+  const lines = missing.map(({ id, repo }) => {
     const dest = path.join(home, "work", id);
     try {
       register({ locator: repo, cwd: home, id, dest, mode: "write" });

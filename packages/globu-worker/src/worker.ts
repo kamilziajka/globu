@@ -14,7 +14,17 @@ import {
 } from "../../globu-core/src/index.js";
 import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
-import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
+import {
+  projectFor,
+  projectOf,
+  requireProject,
+  type Secrets,
+  type ServedProject,
+  type Settings,
+  scrubbedEnv,
+  settingsFor,
+  type WorkerConfig
+} from "./config.js";
 import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
 import { fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
@@ -24,6 +34,7 @@ import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
 import { mergedIssues, recordMerged } from "./merged.js";
 import { issueUrl, type NotifyEvent, notify } from "./notify.js";
+import { deliveryShards, layoutOf, othersOf, searchJql, setupShards, targetOf } from "./projects.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
@@ -79,9 +90,16 @@ export type OnceResult = { runs: RunRecord[]; plan: PlanEntry[] };
 export type PresentShard = ResolvedShard & { path: string };
 type Registry = { all: ResolvedShard[]; active: ResolvedShard[]; context: string | null };
 export type Worktree = { shard: PresentShard; tree: string; branch: string; base: string; pushed: boolean };
-export type Candidate = { issue: JiraIssue; shardId: string | null };
+export type Candidate = {
+  issue: JiraIssue;
+  project: ServedProject | null;
+  shardId: string | null;
+  problem: string | null;
+};
+type Claimed = Candidate & { project: ServedProject };
 type Prepared = {
   record: RunRecord;
+  settings: Settings;
   dir: string;
   worktrees: Worktree[];
   target: Worktree;
@@ -137,10 +155,8 @@ function sameStatus(issue: JiraIssue, wanted: string): boolean {
   return matchesStatus({ id: issue.statusId, name: issue.status }, wanted);
 }
 
-function statusOf(config: WorkerConfig, name: "claimedStatus" | "releasedStatus", key: string): string {
-  const status = statusFor(config.jira[name], key);
-  if (status === undefined) throw new Error(`jira.${name} names no status for ${projectOf(key)} and has no default`);
-  return status;
+function statusesOf(config: WorkerConfig, key: string): Settings["statuses"] {
+  return settingsFor(config, requireProject(config, key)).statuses;
 }
 
 export function prioritized(hits: JiraHit[], label: string | undefined): string[] {
@@ -175,17 +191,21 @@ function refLine(result: RefResult): string {
 
 export function checkShards(config: WorkerConfig, home: string): void {
   const { shards } = resolveAll();
-  const wanted = [...config.shards.deliverable, ...config.shards.companion];
-  for (const id of wanted) {
-    const shard = shards.find((candidate) => candidate.id === id);
-    if (shard === undefined) throw new Error(`shard "${id}" is not registered in ${home}`);
-    if (!shard.present || shard.owner !== "user") {
-      throw new Error(`shard "${id}" needs an editable clone, run \`globu register <url> --path <dir>\` in ${home}`);
-    }
-    if (shard.mode === "read")
-      throw new Error(`shard "${id}" is read-only on this machine, the worker cannot write to it`);
-    if (config.shards.companion.includes(id) && shard.mode !== "write") {
-      throw new Error(`companion shard "${id}" must be in write mode, run \`globu set ${id} --mode write\``);
+  for (const project of config.projects) {
+    const { targets, secondary } = layoutOf(project, shards);
+    for (const id of new Set([...targets, ...secondary])) {
+      const shard = shards.find((candidate) => candidate.id === id);
+      if (shard === undefined) throw new Error(`shard "${id}" is not registered in ${home}`);
+      if (!shard.present || shard.owner !== "user") {
+        throw new Error(`shard "${id}" needs an editable clone, run \`globu register <url> --path <dir>\` in ${home}`);
+      }
+      if (shard.mode === "read")
+        throw new Error(`shard "${id}" is read-only on this machine, the worker cannot write to it`);
+      if (secondary.includes(id) && shard.mode !== "write") {
+        const role =
+          project.legacy === undefined ? `shard "${id}" of project ${project.name}` : `companion shard "${id}"`;
+        throw new Error(`${role} must be in write mode, run \`globu set ${id} --mode write\``);
+      }
     }
   }
 }
@@ -200,6 +220,13 @@ export function markerShard(issue: JiraIssue, config: WorkerConfig): string | nu
   if (typeof value === "string") return value;
   const option = (value as { value?: unknown } | null)?.value;
   return typeof option === "string" ? option : null;
+}
+
+export function candidateOf(deps: WorkerDeps, issue: JiraIssue): Candidate {
+  const project = projectFor(deps.config, issue.key);
+  if (project === null) return { issue, project, shardId: markerShard(issue, deps.config), problem: null };
+  const target = targetOf(project, markerShard(issue, deps.config), resolveAll().shards);
+  return { issue, project, shardId: target.shard, problem: target.problem };
 }
 
 function issueText(issue: JiraIssue): string {
@@ -274,7 +301,7 @@ async function release(
     ? `\n\nThis is a problem with the worker's machine, not with the issue, so it is not labelled ${config.jira.blockedLabel} and the worker stops until the machine is fixed.`
     : "";
   try {
-    await jira.transitionTo(record.key, statusOf(config, "releasedStatus", record.key));
+    await jira.transitionTo(record.key, statusesOf(config, record.key).released);
     await jira.assign(record.key, null);
     if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
     await jira.comment(
@@ -293,8 +320,7 @@ async function release(
 
 async function claim(deps: WorkerDeps, issue: JiraIssue, me: JiraUser): Promise<boolean> {
   const { jira, config } = deps;
-  const claimed = statusOf(config, "claimedStatus", issue.key);
-  statusOf(config, "releasedStatus", issue.key);
+  const { claimed } = statusesOf(config, issue.key);
   await jira.assign(issue.key, me.accountId);
   if (!sameStatus(issue, claimed)) await jira.transitionTo(issue.key, claimed);
   const after = await jira.issue(issue.key);
@@ -350,8 +376,7 @@ export function cleanup(worktrees: Worktree[]): void {
   }
 }
 
-export function authorEnv(config: WorkerConfig): NodeJS.ProcessEnv {
-  const { author } = config.git;
+export function authorEnv({ author }: Settings["git"]): NodeJS.ProcessEnv {
   if (author === undefined) return {};
   return {
     GIT_AUTHOR_NAME: author.name,
@@ -367,9 +392,8 @@ export async function openPullRequest(
   title: string,
   bodyFile: string,
   token: string,
-  draft = deps.config.github.draft
+  github: Settings["github"]
 ): Promise<string> {
-  const { github } = deps.config;
   git(
     [...gitAuthArgs(worktree.shard.source.repo, { token }), "push", "--quiet", "-u", "origin", worktree.branch],
     worktree.tree
@@ -386,7 +410,7 @@ export async function openPullRequest(
     title,
     "--body-file",
     bodyFile,
-    ...(draft ? ["--draft"] : []),
+    ...(github.draft ? ["--draft"] : []),
     ...github.labels.flatMap((label) => ["--label", label])
   ];
   const output = await runOrThrow(deps.run, "gh", args, { cwd: worktree.tree, env: { ...deps.env, GH_TOKEN: token } });
@@ -403,10 +427,14 @@ function failureOf(record: RunRecord, err: unknown): string {
   return err instanceof MachineProblem ? environmentProblem(record, message) : `worker error: ${message}`;
 }
 
-export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
-  const { config } = deps;
+export async function runSetup(
+  deps: WorkerDeps,
+  record: RunRecord,
+  worktrees: Worktree[],
+  settings: Settings
+): Promise<string | null> {
   const steps = worktrees.flatMap((worktree) =>
-    (config.setup[worktree.shard.id] ?? []).map((command) => ({ worktree, command }))
+    (settings.setup[worktree.shard.id] ?? []).map((command) => ({ worktree, command }))
   );
   if (steps.length === 0) return null;
   const shell = setupShell(deps.env, deps.platform ?? process.platform);
@@ -415,8 +443,8 @@ export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: W
     log().info("setup", { run: record.id, shard: worktree.shard.id, command });
     const result = await deps.run(shell, ["-c", command], {
       cwd: worktree.tree,
-      env: { ...scrubbedEnv(deps.env), ...authorEnv(config), GLOBU_HOME: deps.home },
-      timeoutMs: config.limits.timeout
+      env: { ...scrubbedEnv(deps.env), ...authorEnv(settings.git), GLOBU_HOME: deps.home },
+      timeoutMs: settings.timeout
     });
     if (result.code === 0 && !result.timedOut) continue;
     const start = machineFailure(shell, result);
@@ -452,24 +480,25 @@ export function waitingOn(deps: WorkerDeps, issue: JiraIssue, stored: StoredRun[
 
 async function prepare(
   deps: WorkerDeps,
-  candidate: Candidate,
+  candidate: Claimed,
   record: RunRecord,
   dir: string,
   worktrees: Worktree[]
 ): Promise<Prepared | null> {
   const { config } = deps;
-  const { issue, shardId } = candidate;
+  const { issue, project, shardId, problem } = candidate;
   persist(deps, dir, record);
-  if (shardId === null || !config.shards.deliverable.includes(shardId)) {
-    const accepted = config.shards.deliverable.join(", ");
-    await release(deps, record, `no deliverable repository marker, the worker delivers to ${accepted}`);
+  if (shardId === null) {
+    await release(deps, record, problem as string);
     return null;
   }
   record.shard = shardId;
   record.state = "resolving";
   persist(deps, dir, record);
   const reg = registry();
-  const shard = reg.all.find((entry) => entry.id === shardId) as PresentShard;
+  const find = (id: string) => reg.all.find((entry) => entry.id === id) as PresentShard;
+  const shard = find(shardId);
+  const settings = settingsFor(config, project, shardId);
   const resolved = resolveIssue(issue, shard, reg);
   if (resolved.failing.length > 0) {
     const lines = resolved.failing.map(refLine).join("\n");
@@ -477,8 +506,8 @@ async function prepare(
     return null;
   }
 
-  const companionShards = config.shards.companion.map((id) => reg.all.find((entry) => entry.id === id) as PresentShard);
-  for (const entry of [shard, ...companionShards]) {
+  const otherShards = othersOf(project, shardId, reg.all).map(find);
+  for (const entry of [shard, ...otherShards]) {
     if (!fetchShard(entry)) {
       await release(
         deps,
@@ -489,24 +518,28 @@ async function prepare(
     }
   }
 
-  const branch = `${config.git.branchPrefix}${issue.key}-${slug(issue.summary)}`;
+  const branch = `${settings.git.branchPrefix}${issue.key}-${slug(issue.summary)}`;
   record.branch = branch;
   const target = addWorktree(shard, path.join(dir, "tree"), branch);
   worktrees.push(target);
-  const companions = companionShards.map((companion) => {
-    const id = companion.id;
-    const worktree = addWorktree(companion, path.join(dir, "companions", id), branch);
-    worktrees.push(worktree);
-    return { id, tree: worktree.tree };
-  });
+  for (const other of otherShards) {
+    worktrees.push(addWorktree(other, path.join(dir, "companions", other.id), branch));
+  }
   record.worktrees = storedWorktrees(worktrees);
   persist(deps, dir, record);
-  const failedSetup = await runSetup(deps, record, worktrees);
+  const setupIn = setupShards(
+    project,
+    shardId,
+    otherShards.map((other) => other.id)
+  );
+  const prepared = worktrees.filter((worktree) => setupIn.includes(worktree.shard.id));
+  const failedSetup = await runSetup(deps, record, prepared, settings);
   if (failedSetup !== null) {
     await release(deps, record, failedSetup);
     return null;
   }
 
+  const hadSetup = (id: string) => setupIn.includes(id) && (settings.setup[id] ?? []).length > 0;
   const briefFile = path.join(dir, "brief.md");
   const handbackFile = path.join(dir, "handback.md");
   fs.writeFileSync(
@@ -517,24 +550,25 @@ async function prepare(
       shard: shardId,
       tree: target.tree,
       branch,
-      companions,
+      setup: hadSetup(shardId),
+      others: worktrees.slice(1).map(({ shard: other, tree }) => ({ id: other.id, tree, setup: hadSetup(other.id) })),
       refs: resolved.gating.map((result) => inRunTree(result, worktrees)),
       informational: resolved.informational.map((result) => inRunTree(result, worktrees)),
       blockers: blockers(deps, issue, loadRuns(deps.home)),
-      allowedTools: config.claude.allowedTools,
+      allowedTools: settings.claude.allowedTools,
       handbackFile,
-      followUps: config.jira.followUps !== undefined
+      followUps: settings.followUps !== undefined
     })
   );
   record.state = "prepared";
   persist(deps, dir, record);
-  return { record, dir, worktrees, target, briefFile, handbackFile };
+  return { record, settings, dir, worktrees, target, briefFile, handbackFile };
 }
 
 async function execute(deps: WorkerDeps, prepared: Prepared): Promise<Outcome> {
-  const { record, dir, target, briefFile, handbackFile } = prepared;
-  const prompt = implementPrompt(deps.config.claude.skill, briefFile, handbackFile);
-  return await runClaude(deps, record, dir, target.tree, prompt);
+  const { record, settings, dir, target, briefFile, handbackFile } = prepared;
+  const prompt = implementPrompt(settings.claude.skill, briefFile, handbackFile);
+  return await runClaude(deps, record, dir, target.tree, prompt, settings);
 }
 
 async function runClaude(
@@ -542,9 +576,10 @@ async function runClaude(
   record: RunRecord,
   dir: string,
   cwd: string,
-  prompt: string
+  prompt: string,
+  settings: Settings
 ): Promise<Outcome> {
-  const { config } = deps;
+  const { claude } = settings;
   const streamFile = path.join(dir, "claude.jsonl");
   fs.writeFileSync(streamFile, "");
   record.state = "running";
@@ -555,7 +590,7 @@ async function runClaude(
   writeLaunchers(bin, process.execPath, WORKER_SCRIPT, platform);
   const env = {
     ...scrubbedEnv(deps.env),
-    ...authorEnv(config),
+    ...authorEnv(settings.git),
     GLOBU_HOME: deps.home,
     CLAUDE_CONFIG_DIR: deps.claudeConfigDir
   };
@@ -564,16 +599,16 @@ async function runClaude(
     claudeArgs({
       prompt,
       runDir: dir,
-      maxTurns: config.claude.maxTurns,
-      maxBudgetUsd: config.claude.maxBudgetUsd,
-      allowedTools: config.claude.allowedTools,
-      model: config.claude.model,
-      pluginDir: config.claude.pluginDir
+      maxTurns: claude.maxTurns,
+      maxBudgetUsd: claude.maxBudgetUsd,
+      allowedTools: claude.allowedTools,
+      model: claude.model,
+      pluginDir: claude.pluginDir
     }),
     {
       cwd,
       env: withDirOnPath(env, bin, platform),
-      timeoutMs: config.limits.timeout,
+      timeoutMs: settings.timeout,
       stdoutFile: streamFile
     }
   );
@@ -597,16 +632,17 @@ async function runClaude(
 
 async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome | null): Promise<RunRecord> {
   const { config, jira } = deps;
-  const { record, dir, worktrees, target, handbackFile } = prepared;
+  const { record, settings, dir, worktrees, target, handbackFile } = prepared;
+  const project = requireProject(config, record.key);
   const commits = commitsOn(target);
   const unstarted = outcome === null ? null : machineFailure("claude", outcome);
   if (unstarted !== null) return await release(deps, record, environmentProblem(record, unstarted));
   const written = readHandback(handbackFile);
   if (outcome?.timedOut) {
-    return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`, written);
+    return await release(deps, record, `timed out after ${minutes(settings.timeout)}`, written);
   }
   if (outcome?.summary.subtype === "error_max_turns") {
-    return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`, written);
+    return await release(deps, record, `stopped at the turn cap of ${settings.claude.maxTurns}`, written);
   }
   if (commits === 0) {
     const failed = outcome !== null && outcome.code !== 0;
@@ -627,9 +663,10 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     if (commitsOn(worktree) === 0) continue;
     const bodyFile = path.join(dir, `pull-request-${worktree.shard.id}.md`);
     fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
-    record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token));
+    const { github } = worktree === target ? settings : settingsFor(config, project, worktree.shard.id);
+    record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token, github));
   }
-  const filed = await fileFollowUps(jira, config, deps.home, issue.key, record.id, handback);
+  const filed = await fileFollowUps(jira, settings.followUps, deps.home, issue.key, record.id, handback);
   const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
@@ -653,7 +690,7 @@ function discard(dir: string, worktrees: Worktree[]): void {
   fs.rmSync(path.join(dir, "companions"), { recursive: true, force: true });
 }
 
-async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord, dir: string): Promise<RunRecord> {
+async function runOne(deps: WorkerDeps, candidate: Claimed, record: RunRecord, dir: string): Promise<RunRecord> {
   const worktrees: Worktree[] = [];
   try {
     const prepared = await prepare(deps, candidate, record, dir, worktrees);
@@ -687,13 +724,16 @@ export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimRe
   const me = await jira.myself();
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: await githubLogin(deps) };
   const issue = await jira.issue(key);
+  const candidate = candidateOf(deps, issue);
+  const { project } = candidate;
+  if (project === null) throw new Error(`no project this worker serves has the Jira key ${projectOf(key)}`);
   if (!(await claim(deps, issue, me))) throw new Error(`${key} is claimed by someone else`);
   const record = newRun(key, deps.now(), identity, "session");
   const dir = path.join(runsDir(home), record.id);
   const worktrees: Worktree[] = [];
   let prepared: Prepared | null = null;
   try {
-    prepared = await prepare(deps, { issue, shardId: markerShard(issue, config) }, record, dir, worktrees);
+    prepared = await prepare(deps, { ...candidate, project }, record, dir, worktrees);
   } catch (err) {
     await release(deps, record, failureOf(record, err));
   } finally {
@@ -716,8 +756,10 @@ function preparedRun(deps: WorkerDeps, id: string): Prepared {
   const { dir, record } = loadRun(deps.home, id);
   if (record.state !== "prepared") throw new Error(`run ${id} is ${record.state}, only a prepared run can be finished`);
   const worktrees = restoreWorktrees(record);
+  const project = requireProject(deps.config, record.key);
   return {
     record,
+    settings: settingsFor(deps.config, project, record.shard as string),
     dir,
     worktrees,
     target: worktrees[0],
@@ -761,11 +803,13 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     removeTree(path.join(dir, "companions"));
     const issue = await jira.issue(record.key);
     const restarted = (what: string) => (record.reason === null ? what : `${record.reason} (then ${what})`);
+    const project = projectFor(config, record.key);
+    const claimed = project === null ? null : settingsFor(config, project).statuses.claimed;
     if (record.repairOf !== undefined) {
       record.state = "released";
       record.reason = restarted("the worker restarted during this repair");
       endRun(record, deps.now());
-    } else if (issue.assignee === me.accountId && sameStatus(issue, statusOf(config, "claimedStatus", record.key))) {
+    } else if (claimed !== null && issue.assignee === me.accountId && sameStatus(issue, claimed)) {
       await release(deps, record, restarted("the worker restarted while this issue was claimed"));
     } else {
       record.state = "released";
@@ -775,7 +819,7 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     persist(deps, dir, record);
   }
   const { shards } = resolveAll();
-  for (const id of [...config.shards.deliverable, ...config.shards.companion]) {
+  for (const id of deliveryShards(config, shards)) {
     const shard = shards.find((candidate) => candidate.id === id) as PresentShard;
     git(["worktree", "prune"], shard.path);
   }
@@ -822,7 +866,8 @@ async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[],
   const merged = pulls.some((pull) => pull.state === "MERGED");
   const urls = pulls.map((pull) => pull.url).join(" ");
   record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
-  const done = statusFor(deps.config.jira.doneStatus, record.key);
+  const project = projectFor(deps.config, record.key);
+  const done = project === null ? undefined : settingsFor(deps.config, project).statuses.done;
   if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
   await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
   log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
@@ -839,11 +884,13 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
     const { record } = stored;
     const repairs = record.followUp?.repairs ?? 0;
     const needsHuman = record.followUp?.state === "needs-human";
+    const project = projectFor(deps.config, record.key);
+    const limit = project === null ? 0 : settingsFor(deps.config, project).repairs;
     const pulls: PullRequest[] = [];
     for (const url of record.pullRequests) pulls.push(await readPullRequest(deps, url, token));
     for (const pull of pulls) {
       const state = followUpState(pull, needsHuman);
-      const repairable = (state === "conflict" || state === "checks failing") && repairs < deps.config.limits.repairs;
+      const repairable = (state === "conflict" || state === "checks failing") && repairs < limit;
       const summary = pull.title.replace(`${record.key}: `, "");
       rows.push({ run: record.id, key: record.key, url: pull.url, number: pull.number, summary, state, repairable });
     }
@@ -853,8 +900,7 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
   return rows;
 }
 
-function authorArgs(config: WorkerConfig): string[] {
-  const { author } = config.git;
+function authorArgs({ author }: Settings["git"]): string[] {
   return author === undefined ? [] : ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`];
 }
 
@@ -898,7 +944,8 @@ async function attemptRepair(
   pull: PullRequest,
   original: string,
   worktrees: Worktree[],
-  token: string
+  token: string,
+  settings: Settings
 ): Promise<string | null> {
   fetchShard(shard);
   const tree = path.join(dir, "tree");
@@ -907,19 +954,19 @@ async function attemptRepair(
   record.worktrees = storedWorktrees(worktrees);
   persist(deps, dir, record);
   try {
-    git([...authorArgs(deps.config), "merge", "--no-edit", `${ORIGIN}${pull.base}`], tree);
+    git([...authorArgs(settings.git), "merge", "--no-edit", `${ORIGIN}${pull.base}`], tree);
   } catch {}
   const conflicted = conflictedFiles(tree);
   if (conflicted.length > 0 || pull.checks === "failing") {
-    const failedSetup = await runSetup(deps, record, worktrees);
+    const failedSetup = await runSetup(deps, record, worktrees, settings);
     if (failedSetup !== null) return failedSetup;
     const briefFile = path.join(dir, "brief.md");
     const handbackFile = path.join(dir, "handback.md");
     fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
-    const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile));
+    const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile), settings);
     const unstarted = machineFailure("claude", outcome);
     if (unstarted !== null) return environmentProblem(record, unstarted);
-    if (outcome.timedOut) return `timed out after ${minutes(deps.config.limits.timeout)}`;
+    if (outcome.timedOut) return `timed out after ${minutes(settings.timeout)}`;
     if (conflictedFiles(tree).length > 0) return "conflicts are left unresolved";
     if (fs.existsSync(git(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"], tree))) {
       return "the merge was not committed";
@@ -981,6 +1028,7 @@ export async function repairPullRequest(
   if (original === undefined) throw new Error(`no open run of the worker has ${url}`);
   const shard = registry().all.find((entry) => sameRepo(entry.source.repo, repoOf(url))) as PresentShard | undefined;
   if (shard === undefined) throw new Error(`no registered shard has the repository of ${url}`);
+  const settings = settingsFor(deps.config, requireProject(deps.config, original.record.key), shard.id);
   const failures = original.record.followUp?.repairs ?? 0;
   const attempt = loadRuns(deps.home).filter((stored) => stored.record.repairOf === original.record.id).length + 1;
   const record = newRun(original.record.key, deps.now(), identity);
@@ -996,7 +1044,7 @@ export async function repairPullRequest(
   try {
     const pull = await readPullRequest(deps, url, token);
     record.branch = pull.head;
-    problem = await attemptRepair(deps, record, dir, shard, pull, original.dir, worktrees, token);
+    problem = await attemptRepair(deps, record, dir, shard, pull, original.dir, worktrees, token, settings);
   } catch (err) {
     problem = failureOf(record, err);
   } finally {
@@ -1016,7 +1064,7 @@ export async function repairPullRequest(
     record.state = "released";
     record.reason = problem;
     const repairs = record.environment ? failures : failures + 1;
-    const exhausted = repairs >= deps.config.limits.repairs;
+    const exhausted = repairs >= settings.repairs;
     log().warn("repair failed", { run: record.id, key: record.key, pullRequest: url, reason: problem, exhausted });
     const next = exhausted ? "It needs a person now." : "The worker will try again.";
     const body = `The Globu worker could not repair this pull request: ${problem}. ${next}\n\n${run}`;
@@ -1033,10 +1081,14 @@ export async function repairPullRequest(
   return record;
 }
 
-export function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
-  const { config } = deps;
-  const { issue, shardId } = candidate;
-  if (shardId === null || !config.shards.deliverable.includes(shardId)) return "would release: no deliverable marker";
+export function unserved(key: string): string {
+  return `skipped, ${projectOf(key)} is not a project this worker serves`;
+}
+
+export function dryRunAction(candidate: Candidate): string {
+  const { issue, project, shardId, problem } = candidate;
+  if (project === null) return unserved(issue.key);
+  if (shardId === null) return `would release: ${problem}`;
   const reg = registry();
   const shard = reg.all.find((entry) => entry.id === shardId) as PresentShard;
   const { failing, gating } = resolveIssue(issue, shard, reg);
@@ -1044,20 +1096,47 @@ export function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
   return `would claim and run in ${shardId} (${gating.length} references resolved)`;
 }
 
-export function workerHold(deps: WorkerDeps, holder: string): Hold {
-  return exclusiveHold(deps.config.limits.exclusive, lockDir(), holder, deps.now, deps.env);
+export type ProjectHolds = {
+  take(project: ServedProject): string | null;
+  busy(project: ServedProject): string | null;
+  release(): void;
+};
+
+export function projectHolds(deps: WorkerDeps, holder: string): ProjectHolds {
+  const holds = new Map<string, Hold>();
+  const taken = new Set<string>();
+  const wanted = (project: ServedProject) => settingsFor(deps.config, project).exclusive;
+  const holdOf = (project: ServedProject): Hold => {
+    const known = holds.get(project.name);
+    if (known !== undefined) return known;
+    const names = wanted(project).filter((name) => !taken.has(name));
+    const hold = exclusiveHold(names, lockDir(), holder, deps.now, deps.env);
+    holds.set(project.name, hold);
+    return hold;
+  };
+  return {
+    take(project) {
+      const held = holdOf(project).take();
+      if (held === null) for (const name of wanted(project)) taken.add(name);
+      return held;
+    },
+    busy: (project) => holdOf(project).busy(),
+    release() {
+      for (const hold of holds.values()) hold.release();
+    }
+  };
 }
 
 export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise<OnceResult> {
-  const hold = workerHold(deps, "globu-worker");
+  const holds = projectHolds(deps, "globu-worker");
   try {
-    return await cycle(deps, options, hold);
+    return await cycle(deps, options, holds);
   } finally {
-    hold.release();
+    holds.release();
   }
 }
 
-async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promise<OnceResult> {
+async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds): Promise<OnceResult> {
   const { config, jira, io, home } = deps;
   checkShards(config, home);
   const me = await jira.myself();
@@ -1084,12 +1163,15 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
     return { runs: [], plan: [] };
   }
   if (options.repair !== undefined) {
-    const held = hold.take();
+    const url = options.repair;
+    const original = openRuns(home).find(({ record }) => record.pullRequests.includes(url));
+    const project = original === undefined ? null : projectFor(config, original.record.key);
+    const held = project === null ? null : holds.take(project);
     if (held !== null) {
       io.out(`repair waiting on ${held}`);
       return { runs: [], plan: [] };
     }
-    const record = await repairPullRequest(deps, options.repair, identity);
+    const record = await repairPullRequest(deps, url, identity);
     io.out(describe(record));
     return { runs: [record], plan: [] };
   }
@@ -1097,7 +1179,7 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   if (!dryRun && options.issue === undefined) {
     const rows = await followUps(deps, true);
     for (const row of rows.filter((entry) => entry.repairable).slice(0, config.limits.concurrent)) {
-      const held = hold.take();
+      const held = holds.take(requireProject(config, row.key));
       if (held !== null) {
         io.out(`repairs waiting on ${held}`);
         break;
@@ -1116,20 +1198,24 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   const slots = config.limits.concurrent - repaired.length;
   const keys =
     options.issue === undefined
-      ? prioritized(await jira.search(config.jira.jql, SEARCH_LIMIT), config.jira.priorityLabel)
+      ? prioritized(await jira.search(searchJql(config), SEARCH_LIMIT), config.jira.priorityLabel)
       : [options.issue];
   log().info("cycle", { dryRun, eligible: keys });
-  const picked: Candidate[] = [];
+  const picked: Claimed[] = [];
   const plan: PlanEntry[] = [];
   const stored = loadRuns(home);
   for (const key of keys) {
     if (picked.length >= slots) break;
     const issue = await jira.issue(key);
-    const candidate = { issue, shardId: markerShard(issue, config) };
+    const candidate = candidateOf(deps, issue);
+    const { project } = candidate;
     const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
     plan.push(entry);
     const waiting = waitingOn(deps, issue, stored);
-    if (options.issue === undefined && issue.assignee !== null) {
+    if (project === null) {
+      entry.action = unserved(key);
+      log().info("skipped", { key, reason: "its project is not served" });
+    } else if (options.issue === undefined && issue.assignee !== null) {
       entry.action = "skipped, already assigned";
     } else if (options.issue === undefined && waiting.length > 0) {
       entry.action = `waiting on ${waiting.map((blocker) => `${blocker.key} (${blocker.status})`).join(", ")}`;
@@ -1137,16 +1223,16 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
     } else if (picked.filter((other) => other.shardId === candidate.shardId).length >= config.limits.perShard) {
       entry.action = `skipped, ${candidate.shardId} has a run already`;
     } else {
-      const held = dryRun ? hold.busy() : hold.take();
+      const held = dryRun ? holds.busy(project) : holds.take(project);
       if (held !== null) {
         entry.action = `waiting on ${held}`;
         log().info("waiting", { key, on: held });
       } else if (dryRun) {
-        entry.action = dryRunAction(deps, candidate);
+        entry.action = dryRunAction(candidate);
       } else if (await claim(deps, issue, me)) {
         entry.action = "claimed";
         log().info("claimed", { key });
-        picked.push(candidate);
+        picked.push({ ...candidate, project });
       } else {
         entry.action = "skipped, claimed by someone else";
       }
@@ -1171,7 +1257,6 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   return { runs: [...repaired, ...runs], plan };
 }
 
-/** Which issues of a dry run's plan an automatic cycle would take, within limits.concurrent and limits.perShard. */
 export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
   const { concurrent, perShard } = config.limits;
   const taken: PlanEntry[] = [];
@@ -1187,7 +1272,6 @@ export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
 
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
-/** Runs cycles until stopped; true when it stopped for a problem of the machine. */
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
   for (;;) {
     try {

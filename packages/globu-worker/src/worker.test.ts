@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { register, updateShard } from "../../globu-core/src/index.js";
+import { loadManifest, register, saveManifest, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { MachineProblem, type Runner } from "./exec.js";
@@ -39,7 +39,50 @@ type World = {
   config: WorkerConfig;
 };
 
-function setup(overrides: Partial<WorkerConfig["shards"]> = {}): World {
+type LegacyShards = { deliverable: string[]; companion: string[] };
+
+function useShards(config: WorkerConfig, shards: Partial<LegacyShards>): void {
+  for (const project of config.projects) {
+    const legacy = { ...(project.legacy as LegacyShards), ...shards };
+    project.legacy = legacy;
+    project.shards = [...new Set([...legacy.deliverable, ...legacy.companion])];
+  }
+}
+
+function legacyFile(root: string, jira: string): string {
+  return write(
+    root,
+    "worker.yaml",
+    `
+jira:
+  site: https://acme.atlassian.net
+  jql: project = MR
+${jira}
+  repository:
+    labelPrefix: "repo:"
+shards:
+  deliverable: [backend]
+limits:
+  concurrent: 2
+  timeout: 1s
+git:
+  author:
+    name: Acme Agent
+    email: agent@acme.example
+github:
+  draft: true
+  labels: [agent]
+`
+  );
+}
+
+function useStatuses(world: World, jira: string): void {
+  const { legacy } = world.config.projects[0];
+  Object.assign(world.config, loadWorkerConfig(legacyFile(world.root, jira)));
+  useShards(world.config, legacy as LegacyShards);
+}
+
+function setup(overrides: Partial<LegacyShards> = {}): World {
   const root = tempDir();
   const home = process.env.GLOBU_HOME as string;
   const remotes = {
@@ -61,33 +104,9 @@ function setup(overrides: Partial<WorkerConfig["shards"]> = {}): World {
   register({ locator: `file://${remotes.backend}`, cwd: root, dest: clones.backend });
   register({ locator: `file://${remotes.product}`, cwd: root, dest: clones.product });
   register({ locator: `file://${remotes.notes}`, cwd: root });
-  const file = write(
-    root,
-    "worker.yaml",
-    `
-jira:
-  site: https://acme.atlassian.net
-  jql: project = MR
-  claimedStatus: Delivery
-  releasedStatus: Ready for delivery
-  repository:
-    labelPrefix: "repo:"
-shards:
-  deliverable: [backend]
-limits:
-  concurrent: 2
-  timeout: 1s
-git:
-  author:
-    name: Acme Agent
-    email: agent@acme.example
-github:
-  draft: true
-  labels: [agent]
-`
-  );
+  const file = legacyFile(root, "  claimedStatus: Delivery\n  releasedStatus: Ready for delivery");
   const config = loadWorkerConfig(file);
-  config.shards = { ...config.shards, ...overrides };
+  useShards(config, overrides);
   return { root, home, remotes, clones, config };
 }
 
@@ -310,25 +329,19 @@ function expectReleased(jira: FakeJira, record: RunRecord, reason: string): void
 describe("checkShards", () => {
   it("demands registered, editable, writable shards", () => {
     const world = setup();
-    expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["ghost"], companion: [], repos: {} } }, world.home)
-    ).toThrow(`shard "ghost" is not registered in ${world.home}`);
-    expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["notes"], companion: [], repos: {} } }, world.home)
-    ).toThrow('shard "notes" needs an editable clone');
+    const withShards = (deliverable: string[], companion: string[] = []) => {
+      useShards(world.config, { deliverable, companion });
+      return () => checkShards(world.config, world.home);
+    };
+    expect(withShards(["ghost"])).toThrow(`shard "ghost" is not registered in ${world.home}`);
+    expect(withShards(["notes"])).toThrow('shard "notes" needs an editable clone');
     fs.rmSync(world.clones.product, { recursive: true });
-    expect(() =>
-      checkShards({ ...world.config, shards: { deliverable: ["product"], companion: [], repos: {} } }, world.home)
-    ).toThrow('shard "product" needs an editable clone');
+    expect(withShards(["product"])).toThrow('shard "product" needs an editable clone');
     updateShard("backend", { mode: "read" });
-    expect(() => checkShards(world.config, world.home)).toThrow('shard "backend" is read-only on this machine');
+    expect(withShards(["backend"])).toThrow('shard "backend" is read-only on this machine');
     updateShard("backend", { mode: "ask" });
-    expect(() =>
-      checkShards(
-        { ...world.config, shards: { deliverable: ["backend"], companion: ["backend"], repos: {} } },
-        world.home
-      )
-    ).toThrow('companion shard "backend" must be in write mode');
+    expect(withShards(["backend"], ["backend"])).toThrow('companion shard "backend" must be in write mode');
+    useShards(world.config, { deliverable: ["backend"], companion: [] });
     updateShard("backend", { mode: "write" });
     expect(() => checkShards(world.config, world.home)).not.toThrow();
   });
@@ -356,7 +369,7 @@ describe("nextCycle", () => {
       entry("MR-1", "backend", "skipped, already assigned"),
       entry("MR-2", "backend", "would claim and run in backend (0 references resolved)"),
       entry("MR-3", "backend", "would claim and run in backend (0 references resolved)"),
-      entry("MR-4", "frontend", "would release: no deliverable marker"),
+      entry("MR-4", "frontend", "would release: no deliverable repository marker, the worker delivers to backend"),
       entry("MR-5", "frontend", "would claim and run in frontend (0 references resolved)")
     ];
     const limits = (concurrent: number) => ({ ...config, limits: { ...config.limits, concurrent, perShard: 1 } });
@@ -383,7 +396,7 @@ describe("once", () => {
     expect(runs).toEqual([]);
     expect(plan.map((entry) => entry.action)).toEqual([
       "would claim and run in backend (1 references resolved)",
-      "would release: no deliverable marker",
+      "would release: no deliverable repository marker, the worker delivers to backend",
       "would release: 1 of 1 references missing",
       "skipped, already assigned"
     ]);
@@ -595,7 +608,7 @@ describe("once", () => {
 
   it("runs the setup commands of each shard in its fresh worktree before Claude", async () => {
     const world = setup({ companion: ["product"] });
-    world.config.setup = { backend: ["npm ci", "npm run build"] };
+    world.config.defaults.setup = { backend: ["npm ci", "npm run build"] };
     const jira = fakeJira([issue("MR-7")]);
     const calls: Calls = { gh: [], claude: [], setup: [] };
     const { worker } = deps(world, jira, fakeRunner({ commit: true }, calls));
@@ -612,7 +625,7 @@ describe("once", () => {
 
   it("releases the issue when a setup command fails or times out, before Claude runs", async () => {
     const world = setup();
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const failed = await runWith(world, [issue("MR-1")], {
       setup: { code: 1, stdout: "added 0 packages\n", stderr: "npm ERR! missing lockfile\n" }
     });
@@ -625,7 +638,7 @@ describe("once", () => {
 
   it("finds Git's sh for the setup commands on Windows", async () => {
     const world = setup();
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const git = path.join(world.root, "Git");
     write(git, "cmd/git.exe", "");
     const sh = write(git, "bin/sh.exe", "");
@@ -640,7 +653,7 @@ describe("once", () => {
 
   it("looks the setup shell up for the host platform when none is given", async () => {
     const world = setup();
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const calls: Calls = { gh: [], claude: [], setup: [] };
     const { worker } = deps(world, fakeJira([issue("MR-7")]), fakeRunner({ commit: true }, calls));
     delete worker.platform;
@@ -650,7 +663,7 @@ describe("once", () => {
 
   it("releases without the blocked label when the machine cannot start the setup or Claude, and the loop stops", async () => {
     const world = setup();
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const machine = (jira: FakeJira, record: RunRecord, reason: string) => {
       expect(record.state).toBe("released");
       expect(record.environment).toBe(true);
@@ -685,7 +698,7 @@ describe("once", () => {
     expect(io.stderr).toContain("globu-worker: stopping, the machine needs fixing first: could not find sh");
     expect(io.stderr).toContain("globu-worker: could not send the stopped notification: could not find sh");
 
-    world.config.setup = {};
+    world.config.defaults.setup = {};
     const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
     machine(claudeless.jira, claudeless.record as RunRecord, "could not start claude: not found on PATH");
 
@@ -693,14 +706,14 @@ describe("once", () => {
     machine(ended.jira, ended.record as RunRecord, "Windows ended claude with status 0xC0000142");
     const torn = await runWith(world, [issue("MR-6")], { commit: true, handback: true, ghEnded: true });
     machine(torn.jira, torn.record as RunRecord, "Windows ended gh with status 0xC0000142");
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const setupEnded = await runWith(world, [issue("MR-8")], { setup: { code: 3221225794 } });
     machine(
       setupEnded.jira,
       setupEnded.record as RunRecord,
       'setup command "npm ci" in backend: Windows ended sh with status 0xC0000142'
     );
-    world.config.setup = {};
+    world.config.defaults.setup = {};
 
     const savedPath = process.env.PATH;
     process.env.PATH = "";
@@ -781,8 +794,8 @@ describe("once", () => {
 
   it("opens a plain pull request without labels or a commit author and notes a run without a last message", async () => {
     const world = setup();
-    world.config.git = { branchPrefix: "agent/" };
-    world.config.github = { draft: false, labels: [] };
+    world.config.defaults.git = { branchPrefix: "agent/" };
+    world.config.defaults.github = { draft: false, labels: [] };
     const { jira, calls, record } = await runWith(world, [issue("MR-7")], {
       commit: true,
       stream: JSON.stringify({ type: "result", subtype: "success", total_cost_usd: 0.2, num_turns: 3 })
@@ -928,7 +941,7 @@ describe("once", () => {
     expectReleased(
       unmarked.jira,
       unmarked.record as RunRecord,
-      "no deliverable repository marker, the worker delivers to backend"
+      '"notes" is not a deliverable shard, the worker delivers to backend'
     );
     expect(unmarked.calls.claude).toEqual([]);
 
@@ -947,7 +960,7 @@ describe("once", () => {
 
   it("holds the exclusive resources for the whole run and waits while another process has one", async () => {
     const world = setup();
-    world.config.limits.exclusive = ["gpu"];
+    world.config.defaults.exclusive = ["gpu"];
     const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
     const seen: unknown[] = [];
     const calls: Calls = { gh: [], claude: [], setup: [] };
@@ -956,7 +969,7 @@ describe("once", () => {
       if (command === "sh" || command === "claude") seen.push(JSON.parse(fs.readFileSync(lock, "utf8")).holder);
       return await run(command, args, options);
     };
-    world.config.setup = { backend: ["npm ci"] };
+    world.config.defaults.setup = { backend: ["npm ci"] };
     const jira = fakeJira([issue("MR-7")]);
     const { worker } = deps(world, jira, watching);
     expect((await once(worker)).runs[0].state).toBe("handed-back");
@@ -979,7 +992,7 @@ describe("once", () => {
 
   it("runs inside a hold of a process above it without waiting on that process or deleting its lock", async () => {
     const world = setup();
-    world.config.limits.exclusive = ["gpu"];
+    world.config.defaults.exclusive = ["gpu"];
     const dir = process.env.GLOBU_LOCK_DIR as string;
     fs.mkdirSync(dir, { recursive: true });
     const above = { pid: process.ppid, host: os.hostname(), holder: "globu-worker hold (npm run render)" };
@@ -997,7 +1010,7 @@ describe("once", () => {
 
   it("files the two follow-ups of a handback as linked issues and lists their keys on the issue", async () => {
     const world = setup();
-    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    world.config.projects[0].worker.followUps = { issueType: "Task" };
     const handback = [
       "## Summary",
       "",
@@ -1029,7 +1042,7 @@ describe("once", () => {
 
   it("hands back when a follow-up cannot be created and says so in the comment", async () => {
     const world = setup();
-    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    world.config.projects[0].worker.followUps = { issueType: "Task" };
     const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Rename the flag\n";
     const { jira, record } = await runWith(
       world,
@@ -1046,7 +1059,7 @@ describe("once", () => {
 
   it("does not file the follow-ups again when the comment failed and a later run hands back", async () => {
     const world = setup();
-    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    world.config.projects[0].worker.followUps = { issueType: "Task" };
     const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Add retries to the client\n- Rename the flag\n";
     const failed = await runWith(world, [issue("MR-7")], { commit: true, handback }, { jira: { failHandback: true } });
     expect(failed.record?.state).toBe("released");
@@ -1075,7 +1088,7 @@ describe("once", () => {
 
   it("claims by status id when the configuration gives one", async () => {
     const world = setup();
-    world.config.jira = { ...world.config.jira, claimedStatus: "10023" };
+    useStatuses(world, '  claimedStatus: "10023"\n  releasedStatus: Ready for delivery');
     const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true });
     expect(record?.state).toBe("handed-back");
     expect(jira.transitions).toEqual(["MR-7 -> 10023"]);
@@ -1084,11 +1097,17 @@ describe("once", () => {
 
   it("picks the status of the issue's project and falls back to the default entry", async () => {
     const world = setup();
-    world.config.jira = {
-      ...world.config.jira,
-      claimedStatus: { SB: "10023", default: "Doing" },
-      releasedStatus: { SB: "Ready for delivery", MR: "Ready for delivery" }
-    };
+    useStatuses(
+      world,
+      [
+        '  claimedStatus: { SB: "10023", default: Doing }',
+        "  releasedStatus: { SB: Ready for delivery, MR: Ready for delivery }"
+      ].join("\n")
+    );
+    expect(world.config.projects.map((project) => [project.name, project.jira])).toEqual([
+      ["SB", "SB"],
+      ["MR", "MR"]
+    ]);
     const { jira, record } = await runWith(world, [issue("SB-2")], { commit: true, handback: true });
     expect(record?.state).toBe("handed-back");
     expect(jira.transitions).toEqual(["SB-2 -> 10023"]);
@@ -1097,19 +1116,24 @@ describe("once", () => {
     expect(fallback.jira.transitions[0]).toBe("MR-7 -> Doing");
   });
 
-  it("refuses to claim an issue whose project has no claimed or released status", async () => {
+  it("skips an issue whose project the worker does not serve, without claiming it", async () => {
     const world = setup();
-    world.config.jira = { ...world.config.jira, claimedStatus: { SB: "Delivery" } };
-    const unclaimed = fakeJira([issue("MR-7")]);
-    await expect(once(deps(world, unclaimed, fakeRunner({}, { gh: [], claude: [] })).worker)).rejects.toThrow(
-      "jira.claimedStatus names no status for MR and has no default"
-    );
-    world.config.jira = { ...world.config.jira, claimedStatus: "Delivery", releasedStatus: { SB: "Open" } };
-    const unreleasable = fakeJira([issue("MR-7")]);
-    await expect(once(deps(world, unreleasable, fakeRunner({}, { gh: [], claude: [] })).worker)).rejects.toThrow(
-      "jira.releasedStatus names no status for MR and has no default"
-    );
-    expect(unreleasable.store.get("MR-7")?.assignee).toBeNull();
+    useStatuses(world, "  claimedStatus: { SB: Delivery }\n  releasedStatus: { SB: Open, MR: Open }");
+    const jira = fakeJira([issue("MR-7"), issue("SB-2")]);
+    const { worker, io } = deps(world, jira, fakeRunner({}, { gh: [], claude: [] }));
+    const result = await once(worker, { dryRun: true });
+    expect(result.plan.map((entry) => entry.action)).toEqual([
+      "skipped, MR is not a project this worker serves",
+      "would claim and run in backend (1 references resolved)"
+    ]);
+    expect(io.stdout).toContain("MR-7\tskipped, MR is not a project this worker serves\n");
+    await once(worker, { issue: "MR-7" });
+    expect(jira.store.get("MR-7")?.assignee).toBeNull();
+    expect(jira.transitions).toEqual([]);
+    await expect(claimIssue(worker, "MR-7")).rejects.toThrow("no project this worker serves has the Jira key MR");
+    expect(() =>
+      loadWorkerConfig(legacyFile(world.root, "  claimedStatus: { SB: Delivery }\n  releasedStatus: { MR: Open }"))
+    ).toThrow("jira.claimedStatus and jira.releasedStatus name no project they both cover");
   });
 
   it("takes issues with the priority label first and keeps the JQL order otherwise", async () => {
@@ -1130,7 +1154,7 @@ describe("once", () => {
     fs.mkdirSync(empty, { recursive: true });
     git(empty, "init", "-q", "--bare", "-b", "main");
     register({ locator: `file://${empty}`, cwd: world.root, dest: path.join(world.home, "work/sandbox") });
-    world.config.shards = { deliverable: ["backend", "sandbox"], companion: [], repos: {} };
+    useShards(world.config, { deliverable: ["backend", "sandbox"] });
     const { jira, record } = await runWith(world, [issue("MR-9", { labels: ["repo:sandbox"] })], { commit: true });
     expectReleased(
       jira,
@@ -1322,10 +1346,165 @@ describe("cleanup", () => {
   });
 });
 
+function setupProjects(): World {
+  const world = setup();
+  const sandbox = initRepo(path.join(world.root, "remotes/sandbox"), { "README.md": "sandbox\n" });
+  register({ locator: `file://${sandbox}`, cwd: world.root, dest: path.join(world.home, "work/sandbox") });
+  updateShard("notes", { access: "read" });
+  saveManifest({
+    ...loadManifest(),
+    projects: {
+      mercastra: {
+        shards: ["backend", "product", "notes"],
+        jira: "MR",
+        worker: {
+          statuses: { ready: "Ready for delivery", claimed: "Delivery", released: "Ready for delivery", done: "Done" },
+          exclusive: ["gpu"],
+          claude: { maxBudgetUsd: 8, allowedTools: ["Read", "Bash(npm run *)"] },
+          setup: { backend: ["npm ci"], product: ["npm ci"] },
+          shards: { product: { github: { labels: ["docs"] } } }
+        }
+      },
+      sandbox: {
+        shards: ["sandbox"],
+        jira: "SB",
+        worker: { statuses: { claimed: "Doing", released: "Open" }, git: { branchPrefix: "sb/" } }
+      }
+    }
+  });
+  const file = write(
+    world.root,
+    "worker.yaml",
+    `
+version: 2
+jira:
+  site: https://acme.atlassian.net
+defaults:
+  timeout: 1s
+  git:
+    author: { name: Acme Agent, email: agent@acme.example }
+  github: { draft: true, labels: [agent] }
+limits:
+  concurrent: 2
+`
+  );
+  return { ...world, config: loadWorkerConfig(file) };
+}
+
+const UNMARKED = { labels: ["agent-eligible"], description: "Do it." };
+
+describe("a worker that serves two projects", () => {
+  it("runs each issue with its project's flags and statuses, in worktrees of the project's shards", async () => {
+    const world = setupProjects();
+    const jira = fakeJira([issue("MR-7")]);
+    const searches: string[] = [];
+    const search = jira.search;
+    jira.search = async (jql, max) => {
+      searches.push(jql);
+      return await search(jql, max);
+    };
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker } = deps(world, jira, fakeRunner({ commit: true, companionCommit: true, handback: true }, calls));
+    const [record] = (await once(worker)).runs;
+    expect(searches).toEqual([
+      '((project = "MR" AND status = "Ready for delivery") OR (project = "SB" AND statusCategory != Done)) AND labels = "agent-eligible" AND labels != "agent-blocked" AND assignee is EMPTY ORDER BY created ASC'
+    ]);
+    expect(record).toMatchObject({
+      key: "MR-7",
+      shard: "backend",
+      state: "handed-back",
+      pullRequests: ["https://github.com/acme/pr/2", "https://github.com/acme/pr/3"]
+    });
+    expect(jira.transitions).toEqual(["MR-7 -> Delivery"]);
+    const dir = path.join(runsDir(world.home), record.id);
+    expect(calls.setup?.map((call) => [call.command, call.cwd])).toEqual([["npm ci", path.join(dir, "tree")]]);
+    const args = calls.claude[0].args.join(" ");
+    expect(args).toContain("--max-budget-usd 8");
+    expect(args).toContain("--allowedTools Read Bash(npm run *) ");
+    expect(calls.gh[1]).toEqual(expect.arrayContaining(["--draft", "--label", "agent"]));
+    expect(calls.gh[2]).toEqual(expect.arrayContaining(["--draft", "--label", "docs"]));
+    expect(calls.gh[2]).not.toContain("agent");
+    const brief = fs.readFileSync(path.join(dir, "brief.md"), "utf8");
+    expect(brief).toContain(
+      `Other shards this run may change, each on a worktree of its own with the same branch name. Commits there become a pull request of their own:\n- \`product\`: ${path.join(dir, "companions/product")}\n`
+    );
+    expect(brief).toContain(
+      "The worker ran the setup commands in `backend`. It ran none in `product`, so the tests there may not run: name every shard you changed without setup in the handback."
+    );
+    expect(brief).not.toContain("companions/notes");
+
+    const single = await runWith(world, [issue("SB-1", UNMARKED)], { commit: true, handback: true }, { issue: "SB-1" });
+    expect(single.record).toMatchObject({ shard: "sandbox", branch: "sb/SB-1-add-the-thing", state: "handed-back" });
+    expect(single.jira.transitions).toEqual(["SB-1 -> Doing"]);
+    expect(single.calls.claude[0].args.join(" ")).toContain("--max-budget-usd 5");
+    expect(single.calls.gh[1]).toEqual(expect.arrayContaining(["--label", "agent"]));
+    expect(fs.readFileSync(path.join(runsDir(world.home), single.record?.id as string, "brief.md"), "utf8")).toContain(
+      "\nThe worker ran no setup commands.\n"
+    );
+  });
+
+  it("takes a project's exclusive resources only for that project's issues", async () => {
+    const world = setupProjects();
+    const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: "render-box", holder: "klayboy render" }));
+    const held = await runWith(world, [issue("MR-7"), issue("SB-1", UNMARKED)], {});
+    expect(held.result.plan.map((entry) => [entry.key, entry.shard, entry.action])).toEqual([
+      ["MR-7", "backend", `waiting on gpu (held by klayboy render, pid ${process.pid} on render-box)`],
+      ["SB-1", "sandbox", "claimed"]
+    ]);
+    expect(held.jira.store.get("MR-7")?.assignee).toBeNull();
+    expect(fs.existsSync(lock)).toBe(true);
+
+    fs.rmSync(lock);
+    world.config.projects[1].worker.exclusive = ["gpu"];
+    const shared = await runWith(world, [issue("MR-8"), issue("SB-2", UNMARKED)], {});
+    expect(shared.result.plan.map((entry) => entry.action)).toEqual(["claimed", "claimed"]);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("releases an issue whose marker is missing, reference only or outside its project", async () => {
+    const world = setupProjects();
+    const issues = [
+      issue("MR-1", UNMARKED),
+      issue("MR-2", { labels: ["repo:notes"] }),
+      issue("MR-3", { labels: ["repo:sandbox"] })
+    ];
+    const dry = fakeJira(issues);
+    const plan = await once(deps(world, dry, fakeRunner({}, { gh: [], claude: [] })).worker, { dryRun: true });
+    expect(plan.plan.map((entry) => [entry.shard, entry.action])).toEqual([
+      [
+        null,
+        "would release: no repository marker, and project mercastra has 2 shards a run can land in: backend, product"
+      ],
+      [
+        null,
+        'would release: the repository marker names "notes", which is reference only in project mercastra (access: read), whose runs land in backend, product'
+      ],
+      [
+        null,
+        'would release: the repository marker names "sandbox", which is not in project mercastra, whose runs land in backend, product'
+      ]
+    ]);
+    const { jira, record, calls } = await runWith(world, [issues[1]], {}, { issue: "MR-2" });
+    expectReleased(jira, record as RunRecord, 'the repository marker names "notes", which is reference only');
+    expect(calls.claude).toEqual([]);
+  });
+
+  it("wants every shard of a project with several in write mode", () => {
+    const world = setupProjects();
+    expect(() => checkShards(world.config, world.home)).not.toThrow();
+    updateShard("product", { mode: "ask" });
+    expect(() => checkShards(world.config, world.home)).toThrow(
+      'shard "product" of project mercastra must be in write mode, run `globu set product --mode write`'
+    );
+  });
+});
+
 describe("loop", () => {
   it("reports a failing cycle, sleeps and stops when told", async () => {
     const world = setup();
-    world.config.shards = { deliverable: ["ghost"], companion: [], repos: {} };
+    useShards(world.config, { deliverable: ["ghost"] });
     const { worker, io } = deps(world, fakeJira([]), fakeRunner({}, { gh: [], claude: [] }));
     const slept: number[] = [];
     let stopped = false;
@@ -1340,7 +1519,7 @@ describe("loop", () => {
     expect(slept).toEqual([60_000]);
 
     let cycles = 0;
-    world.config.shards = { deliverable: ["backend"], companion: [], repos: {} };
+    useShards(world.config, { deliverable: ["backend"] });
     await loop(worker, {
       sleep: async () => {
         cycles += 1;

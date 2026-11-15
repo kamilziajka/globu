@@ -502,6 +502,28 @@ describe("following pull requests", () => {
     expect(closed.jira.transitions).toEqual([]);
   });
 
+  it("leaves the pull requests and stale runs of a project it no longer serves to people", async () => {
+    const setup = world();
+    const stale = newRun("MR-7", NOW, { jira: "Bot", github: null });
+    stale.state = "running";
+    saveRun(path.join(setup.home, "runs", stale.id), stale);
+    const open = deps(setup, { pulls: { [setup.url]: pull(setup.url) } });
+    open.worker.config.projects[0].jira = "SB";
+    expect((await once(open.worker)).runs).toEqual([]);
+    expect(open.rows[0]).toMatchObject([{ state: "conflict", repairable: false }]);
+    expect(loadRun(setup.home, stale.id).record).toMatchObject({
+      state: "released",
+      reason: "the worker restarted and the issue was no longer claimed"
+    });
+    expect(open.jira.transitions).toEqual([]);
+
+    const merged = deps(setup, { pulls: { [setup.url]: pull(setup.url, { state: "MERGED" }) } });
+    merged.worker.config.projects[0].jira = "SB";
+    await followUps(merged.worker, true);
+    expect(merged.jira.transitions).toEqual([]);
+    expect(merged.jira.comments).toEqual([`Merged: ${setup.url}`]);
+  });
+
   it("closes a repair left behind by a restart without giving the issue back", async () => {
     const setup = world();
     const stale = newRun("MR-7", NOW, { jira: "Bot", github: null });

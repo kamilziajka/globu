@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { register } from "../../globu-core/src/index.js";
+import { loadManifest, register, saveManifest } from "../../globu-core/src/index.js";
 import { captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { workerMain } from "./cli.js";
 import { type Runner, spawnRunner } from "./exec.js";
@@ -183,6 +183,36 @@ describe("globu-worker", () => {
     expect(io.stderr).toContain('globu-worker: shard "ghost" is not registered');
   });
 
+  it("serves the projects of the home's manifest with a version 2 worker.yaml, without a warning", async () => {
+    const root = prepare();
+    const home = process.env.GLOBU_HOME as string;
+    saveManifest({
+      ...loadManifest(),
+      projects: {
+        acme: { shards: ["backend"], jira: "MR", worker: { statuses: { claimed: "Delivery", released: "To Do" } } }
+      }
+    });
+    write(home, "worker.yaml", "version: 2\njira: { site: https://acme.atlassian.net }\n");
+    const searched: string[] = [];
+    const jira = {
+      ...idleJira(),
+      search: async (jql: string) => {
+        searched.push(jql);
+        return [];
+      }
+    };
+    const io = captureIo(root);
+    expect(await workerMain(["once", "--dry-run"], io, env(), { ...quiet(), jira })).toBe(0);
+    expect(io).toMatchObject({ stdout: "nothing eligible\n", stderr: "" });
+    expect(searched).toEqual([
+      '((project = "MR" AND statusCategory != Done)) AND labels = "agent-eligible" AND labels != "agent-blocked" AND assignee is EMPTY ORDER BY created ASC'
+    ]);
+    write(home, "worker.yaml", "version: 2\njira: { site: https://acme.atlassian.net }\nprojects: [ghost]\n");
+    const bad = captureIo(root);
+    expect(await workerMain(["once", "--dry-run"], bad, env(), { ...quiet(), jira })).toBe(1);
+    expect(bad.stderr).toContain('serves the project "ghost", which manifest.yaml does not define');
+  });
+
   it("runs one cycle and prints the result as JSON on request", async () => {
     const root = prepare();
     const io = captureIo(root);
@@ -298,10 +328,18 @@ describe("globu-worker", () => {
     expect(await workerMain(["once", "--dry-run"], captureIo(root), env(), { ...quiet(), jira: idleJira(), now })).toBe(
       0
     );
-    expect(JSON.parse(read().trim())).toMatchObject({ level: "info", msg: "cycle", dryRun: true, eligible: [] });
+    const lines = () =>
+      read()
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+    expect(lines()).toMatchObject([
+      { level: "warn", msg: expect.stringContaining("is a version 1 worker.yaml") },
+      { level: "info", msg: "cycle", dryRun: true, eligible: [] }
+    ]);
     const args = ["--log-level", "warn", "once", "--dry-run"];
     expect(await workerMain(args, captureIo(root), env(), { ...quiet(), jira: idleJira(), now })).toBe(0);
-    expect(read().trim().split("\n")).toHaveLength(1);
+    expect(lines().map((line) => line.level)).toEqual(["warn", "info", "warn"]);
     const bad = captureIo(root);
     expect(await workerMain(["--log-level", "loud", "once"], bad, env(), quiet())).toBe(1);
     expect(bad.stderr).toContain('globu-worker: invalid log level "loud"');
@@ -331,7 +369,12 @@ describe("globu-worker", () => {
     const args = ["--log-level", "debug", "once", "--issue", "MR-1"];
     expect(await workerMain(args, io, given, { ...quiet(), jira: sessionJira(), run })).toBe(0);
     const modes = process.platform !== "win32";
-    expect(io.stderr).toBe(modes ? `globu-worker: ${file} is readable by others, run chmod 600 on it\n` : "");
+    const legacy = `globu-worker: ${path.join(home, "worker.yaml")} is a version 1 worker.yaml: `;
+    expect(io.stderr.split("\n").map((line) => line.slice(0, legacy.length))).toEqual([
+      ...(modes ? [`globu-worker: ${file} is readable by others, run chmod 600 on it`.slice(0, legacy.length)] : []),
+      legacy,
+      ""
+    ]);
     expect(seen).toHaveLength(1);
     expect(seen[0].ANTHROPIC_API_KEY).toBe("sk-file-key");
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();

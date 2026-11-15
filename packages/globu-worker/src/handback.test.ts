@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
-import { loadWorkerConfig, type WorkerConfig } from "./config.js";
+import { type FollowUpSettings, loadWorkerConfig, requireProject, settingsFor } from "./config.js";
 import { FILED_FILE, filedFor, saveFiled } from "./filed.js";
 import { fileFollowUps, followUpSection, parseFollowUps, parseOutcome, SUMMARY_LIMIT } from "./handback.js";
 import type { JiraClient, NewIssue } from "./jira.js";
@@ -10,8 +10,8 @@ import { type Logger, setLogger, silentLogger } from "./logger.js";
 
 afterEach(() => setLogger(silentLogger));
 
-function config(followUps = ""): WorkerConfig {
-  return loadWorkerConfig(
+function config(followUps = "", key = "MR-7"): FollowUpSettings | undefined {
+  const loaded = loadWorkerConfig(
     write(
       tempDir(),
       "worker.yaml",
@@ -29,6 +29,7 @@ shards:
 `
     )
   );
+  return settingsFor(loaded, requireProject(loaded, key)).followUps;
 }
 
 type Fake = JiraClient & { created: NewIssue[]; linked: string[] };
@@ -188,8 +189,15 @@ describe("fileFollowUps", () => {
     ]);
     expect(fake.created.map((issue) => issue.issueType)).toEqual(["Story"]);
     expect(entries.filter((entry) => entry.startsWith("warn follow-up failed"))).toHaveLength(3);
-    const other = await fileFollowUps(fake, config(settings), tempDir(), "SB-2", "run-2", "## Follow-ups\n- One\n");
-    expect(other).toEqual([{ summary: "One", key: null, problem: "no jira.followUps.issueType for project SB" }]);
+    const other = await fileFollowUps(
+      fake,
+      config(settings, "SB-2"),
+      tempDir(),
+      "SB-2",
+      "run-2",
+      "## Follow-ups\n- One\n"
+    );
+    expect(other).toEqual([]);
   });
 });
 

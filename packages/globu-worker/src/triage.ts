@@ -1,6 +1,11 @@
+import { resolveAll } from "../../globu-core/src/index.js";
+import { projectFor, projectOf, requireProject, type ServedProject, settingsFor } from "./config.js";
+import { type JiraIssue, matchesStatus } from "./jira.js";
+import { searchFilter, searchJql, targetOf } from "./projects.js";
 import { loadRuns, type StoredRun, spentOn } from "./runs.js";
 import { currentUsage, holdReason, overLimit } from "./subscription.js";
 import {
+  candidateOf,
   checkShards,
   dryRunAction,
   followUps,
@@ -9,10 +14,10 @@ import {
   OPEN_FOLLOW_UPS,
   once,
   prioritized,
+  projectHolds,
   SEARCH_LIMIT,
   type WorkerDeps,
-  waitingOn,
-  workerHold
+  waitingOn
 } from "./worker.js";
 
 export type Hold = {
@@ -23,8 +28,10 @@ export type WhyReport = {
   key: string;
   summary: string;
   matches: boolean;
+  reasons: string[];
   blocked: boolean;
   shard: string | null;
+  target: string | null;
   deliverable: boolean;
   assignee: string | null;
   waiting: { key: string; status: string }[];
@@ -34,10 +41,14 @@ export type WhyReport = {
 };
 export type DelegateResult = { key: string; shard: string; matches: boolean };
 
+function searchName(deps: WorkerDeps): string {
+  return deps.config.jira.jql === undefined ? "the worker's search" : "jira.jql";
+}
+
 type Ahead = { key: string; shard: string | null };
 
 export async function matchesJql(deps: WorkerDeps, key: string): Promise<boolean> {
-  const filter = deps.config.jira.jql.replace(/\border\s+by\b[\s\S]*$/i, "").trim();
+  const filter = searchFilter(deps.config);
   const jql = filter === "" ? `key = ${key}` : `key = ${key} AND (${filter})`;
   return (await deps.jira.search(jql, 1)).length > 0;
 }
@@ -45,11 +56,12 @@ export async function matchesJql(deps: WorkerDeps, key: string): Promise<boolean
 async function ahead(deps: WorkerDeps, key: string, slots: number, stored: StoredRun[]): Promise<Ahead[]> {
   const { config, jira } = deps;
   const taken: Ahead[] = [];
-  for (const other of prioritized(await jira.search(config.jira.jql, SEARCH_LIMIT), config.jira.priorityLabel)) {
+  for (const other of prioritized(await jira.search(searchJql(config), SEARCH_LIMIT), config.jira.priorityLabel)) {
     if (other === key || taken.length >= slots) break;
     const issue = await jira.issue(other);
     if (issue.assignee !== null || waitingOn(deps, issue, stored).length > 0) continue;
-    const shard = markerShard(issue, config);
+    const { project, shardId: shard } = candidateOf(deps, issue);
+    if (project === null) continue;
     if (taken.filter((entry) => entry.shard === shard).length >= config.limits.perShard) continue;
     taken.push({ key: other, shard });
   }
@@ -74,7 +86,8 @@ async function holds(deps: WorkerDeps, key: string, shard: string | null, queued
   }
   const usage = overLimit(currentUsage(deps.home, deps.env, deps.now()), limits.subscription);
   if (usage !== null) found.push({ limit: "subscription", detail: holdReason(usage, limits.subscription) });
-  const busy = workerHold(deps, "globu-worker why").busy();
+  const project = projectFor(deps.config, key);
+  const busy = project === null ? null : projectHolds(deps, "globu-worker why").busy(project);
   if (busy !== null) found.push({ limit: "exclusive", detail: `waiting on ${busy}` });
   const rows = await followUps(deps, false);
   const open = rows.filter((row) => OPEN_FOLLOW_UPS.has(row.state)).length;
@@ -104,20 +117,47 @@ async function holds(deps: WorkerDeps, key: string, shard: string | null, queued
   return found;
 }
 
-function leftBecause(report: WhyReport, waiting: string): string {
-  if (!report.matches) return "it does not match jira.jql";
+function leftBecause(report: WhyReport, waiting: string, search: string): string {
+  if (!report.matches) return `it does not match ${search}`;
   if (report.assignee !== null) return "it is assigned";
   if (waiting !== "") return `it waits on ${waiting}`;
   return report.holds.length > 0 ? report.holds[0].detail : report.action;
 }
 
-function whyLines(report: WhyReport, blockedLabel: string): string[] {
-  const { key, shard } = report;
-  const marker = shard === null ? "none" : report.deliverable ? shard : `${shard}, not a deliverable shard`;
+async function searchReasons(deps: WorkerDeps, issue: JiraIssue, project: ServedProject | null): Promise<string[]> {
+  const { config, jira } = deps;
+  if (config.jira.jql !== undefined) return [];
+  if (project === null) return [`${projectOf(issue.key)} is not a project this worker serves`];
+  const { statuses, filter } = settingsFor(config, project);
+  const { eligibleLabel, blockedLabel } = config.jira;
+  const ready = statuses.ready;
+  const offStatus = ready !== undefined && !matchesStatus({ id: issue.statusId, name: issue.status }, ready);
+  const offFilter = filter !== undefined && (await jira.search(`key = ${issue.key} AND (${filter})`, 1)).length === 0;
+  return [
+    ...(offStatus ? [`the status is ${issue.status}, not ${ready}`] : []),
+    ...(issue.labels.includes(eligibleLabel) ? [] : [`the label ${eligibleLabel} is missing`]),
+    ...(issue.labels.includes(blockedLabel) ? [`the label ${blockedLabel} is set`] : []),
+    ...(issue.assignee === null ? [] : ["it is assigned"]),
+    ...(offFilter ? [`the project's filter does not match (${filter})`] : [])
+  ];
+}
+
+function whyLines(report: WhyReport, blockedLabel: string, search: string): string[] {
+  const { key, shard, target } = report;
+  const named = shard ?? "none";
+  const marker =
+    target === null
+      ? shard === null
+        ? named
+        : `${named}, not a shard a run can land in`
+      : target === shard
+        ? named
+        : `${named}, the run lands in ${target}`;
+  const reasons = report.reasons.length === 0 ? "" : `: ${report.reasons.join(", ")}`;
   const waiting = report.waiting.map((blocker) => `${blocker.key} (${blocker.status})`).join(", ");
   return [
     `${key}\t${report.summary}`,
-    `jql\t${report.matches ? "matches jira.jql" : "does not match jira.jql"}`,
+    `jql\t${report.matches ? `matches ${search}` : `does not match ${search}${reasons}`}`,
     ...(report.blocked
       ? [`blocked\t${blockedLabel} is set, \`globu-worker retry ${key}\` removes it and runs it`]
       : []),
@@ -126,7 +166,7 @@ function whyLines(report: WhyReport, blockedLabel: string): string[] {
     `blockers\t${waiting === "" ? "none open" : `waiting on ${waiting}`}`,
     `limits\t${report.holds.length === 0 ? "none hold it" : report.holds.map((hold) => hold.detail).join("; ")}`,
     `outcome\t${report.action}`,
-    `verdict\t${report.picked ? "the next cycle claims it" : `the next cycle leaves it: ${leftBecause(report, waiting)}`}`
+    `verdict\t${report.picked ? "the next cycle claims it" : `the next cycle leaves it: ${leftBecause(report, waiting, search)}`}`
   ];
 }
 
@@ -135,20 +175,25 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
   checkShards(config, home);
   const issue = await jira.issue(key);
   const matches = await matchesJql(deps, issue.key);
+  const candidate = candidateOf(deps, issue);
   const shard = markerShard(issue, config);
+  const target = candidate.project === null ? null : candidate.shardId;
+  const reasons = matches ? [] : await searchReasons(deps, issue, candidate.project);
   const waiting = waitingOn(deps, issue, loadRuns(home)).map((blocker) => ({
     key: blocker.key,
     status: blocker.status
   }));
-  const held = await holds(deps, issue.key, shard, matches && waiting.length === 0);
-  const action = dryRunAction(deps, { issue, shardId: shard });
+  const held = await holds(deps, issue.key, target, matches && waiting.length === 0);
+  const action = dryRunAction(candidate);
   const report: WhyReport = {
     key: issue.key,
     summary: issue.summary,
     matches,
+    reasons,
     blocked: issue.labels.includes(config.jira.blockedLabel),
     shard,
-    deliverable: shard !== null && config.shards.deliverable.includes(shard),
+    target,
+    deliverable: target !== null,
     assignee: issue.assignee,
     waiting,
     holds: held,
@@ -160,7 +205,7 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
       held.length === 0 &&
       action.startsWith("would claim")
   };
-  for (const line of whyLines(report, config.jira.blockedLabel)) deps.io.out(line);
+  for (const line of whyLines(report, config.jira.blockedLabel, searchName(deps))) deps.io.out(line);
   return report;
 }
 
@@ -192,18 +237,19 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export async function delegate(
   deps: WorkerDeps,
   key: string,
-  shard: string,
+  shard: string | undefined,
   wait: (ms: number) => Promise<void> = pause
 ): Promise<DelegateResult> {
   const { config, jira, io } = deps;
-  if (!config.shards.deliverable.includes(shard)) {
-    throw new Error(
-      `"${shard}" is not a deliverable shard, the worker delivers to ${config.shards.deliverable.join(", ")}`
-    );
-  }
   const issue = await jira.issue(key);
+  const target = targetOf(requireProject(config, issue.key), shard ?? null, resolveAll().shards);
+  if (target.shard === null) {
+    throw new Error(shard === undefined ? `${target.problem}, pass --repo <shard>` : target.problem);
+  }
   const marker = config.jira.repository;
-  if ("labelPrefix" in marker) {
+  if (shard === undefined) {
+    io.out(`${issue.key}\tneeds no repository marker, its project has one shard`);
+  } else if ("labelPrefix" in marker) {
     const wanted = `${marker.labelPrefix}${shard}`;
     for (const label of issue.labels.filter((entry) => entry.startsWith(marker.labelPrefix) && entry !== wanted)) {
       await jira.removeLabel(issue.key, label);
@@ -214,9 +260,10 @@ export async function delegate(
   }
   await jira.addLabel(issue.key, config.jira.eligibleLabel);
   const matches = await matchesSoon(deps, issue.key, wait);
+  const search = searchName(deps);
   const next = matches
-    ? "matches jira.jql"
-    : `does not match jira.jql after ${SEARCH_LAG_MS / 1000} s, \`globu-worker why ${issue.key}\` says why`;
-  io.out(`${issue.key}\tdelegated to ${shard}, ${next}`);
-  return { key: issue.key, shard, matches };
+    ? `matches ${search}`
+    : `does not match ${search} after ${SEARCH_LAG_MS / 1000} s, \`globu-worker why ${issue.key}\` says why`;
+  io.out(`${issue.key}\tdelegated to ${target.shard}, ${next}`);
+  return { key: issue.key, shard: target.shard, matches };
 }

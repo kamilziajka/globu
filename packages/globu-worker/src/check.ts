@@ -4,17 +4,17 @@ import { z } from "zod";
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import {
-  DEFAULT_PROJECT,
+  defaultClaude,
   type FollowUpSettings,
   projectOf,
-  type StatusSetting,
   scrubbedEnv,
-  settingFor,
+  settingsFor,
   type WorkerConfig
 } from "./config.js";
 import { notStarted } from "./exec.js";
 import { isStatusId, type JiraIssueType } from "./jira.js";
 import { log } from "./logger.js";
+import { deliveryShards, overrideNotes, searchJql } from "./projects.js";
 import { isTerminal, loadRuns } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
 import { checkShards, type WorkerDeps } from "./worker.js";
@@ -47,9 +47,12 @@ export function formatCheck(check: Check): string {
 
 async function jiraProbe(deps: WorkerDeps): Promise<Found> {
   const me = await deps.jira.myself();
-  const found = await deps.jira.search(deps.config.jira.jql, 1);
+  const { config } = deps;
+  const found = await deps.jira.search(searchJql(config), 1);
+  const search = config.jira.jql === undefined ? "the generated search" : "the JQL";
   const matches = found.length === 0 ? "matches nothing now" : "matches issues";
-  return { detail: `${deps.config.jira.site} as ${me.displayName}, the JQL ${matches}`, short: me.displayName };
+  const detail = [`${config.jira.site} as ${me.displayName}, ${search} ${matches}`, ...overrideNotes(config)];
+  return { detail: detail.join(", "), short: me.displayName };
 }
 
 async function githubProbe(deps: WorkerDeps): Promise<Found> {
@@ -57,7 +60,9 @@ async function githubProbe(deps: WorkerDeps): Promise<Found> {
   if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
   const login = await deps.run("gh", ["api", "user", "--jq", ".login"], { env: { ...deps.env, GH_TOKEN: token } });
   if (login.code !== 0) throw new Error(`gh api user failed: ${login.stderr.trim()}`);
-  const targets = resolveAll().shards.filter((shard) => deps.config.shards.deliverable.includes(shard.id));
+  const { shards } = resolveAll();
+  const ids = deliveryShards(deps.config, shards);
+  const targets = shards.filter((shard) => ids.includes(shard.id));
   for (const shard of targets) {
     const repo = shard.source.repo;
     if (repo === null) throw new Error(`shard "${shard.id}" has no repository URL, the worker cannot push to it`);
@@ -67,7 +72,7 @@ async function githubProbe(deps: WorkerDeps): Promise<Found> {
     if (remote.code !== 0) throw new Error(`cannot read ${repo} with GH_TOKEN: ${remote.stderr.trim()}`);
   }
   const name = login.stdout.trim();
-  return { detail: `as ${name}, ${targets.length} deliverable repositories readable`, short: name };
+  return { detail: `as ${name}, ${targets.length} repositories the worker delivers to readable`, short: name };
 }
 
 type LoadedPlugin = { name: string; version?: string; source?: string };
@@ -97,7 +102,7 @@ function claudeSettings(dir: string): z.infer<typeof ClaudeSettings> {
 }
 
 function outdatedPlugin(deps: WorkerDeps, plugin: LoadedPlugin): string {
-  const { pluginDir } = deps.config.claude;
+  const { pluginDir } = defaultClaude(deps.config);
   const fix =
     pluginDir === undefined
       ? `update it with \`claude plugin marketplace update\` and \`claude plugin update ${plugin.source ?? plugin.name}\`, both with CLAUDE_CONFIG_DIR=${deps.claudeConfigDir}`
@@ -124,7 +129,7 @@ function loadedWith(deps: WorkerDeps, init: InitEvent): string {
 }
 
 async function claudeProbe(deps: WorkerDeps): Promise<Found> {
-  const { claude } = deps.config;
+  const claude = defaultClaude(deps.config);
   const args = [
     "-p",
     "Reply with OK.",
@@ -180,7 +185,7 @@ function leftoverTrees(home: string): string[] {
 
 function shardsProbe(deps: WorkerDeps): Found {
   checkShards(deps.config, deps.home);
-  const ids = [...deps.config.shards.deliverable, ...deps.config.shards.companion].join(", ");
+  const ids = deliveryShards(deps.config, resolveAll().shards).join(", ");
   return { detail: [ids, ...leftoverTrees(deps.home)].join(", "), short: ids };
 }
 
@@ -189,8 +194,8 @@ const PLAIN_NAME_RE = /^[\w.+-]+$/;
 const LONG_PATHS = "core.longpaths is off, deep node_modules paths can fail: git config --global core.longpaths true";
 
 function setupPrograms(config: WorkerConfig): string[] {
-  const words = Object.values(config.setup)
-    .flat()
+  const words = config.projects
+    .flatMap((project) => Object.values(settingsFor(config, project).setup).flat())
     .map(
       (command) =>
         command
@@ -231,16 +236,30 @@ async function setupProbe(deps: WorkerDeps): Promise<Found> {
 const FOLLOW_UP_PERMISSIONS: Record<string, string> = { CREATE_ISSUES: "Create issues", LINK_ISSUES: "Link issues" };
 const PROJECT_SAMPLE = 50;
 
-async function followUpProjects(deps: WorkerDeps, setting: StatusSetting): Promise<string[]> {
-  const named = typeof setting === "string" ? [] : Object.keys(setting).filter((key) => key !== DEFAULT_PROJECT);
-  const hits = await deps.jira.search(deps.config.jira.jql, PROJECT_SAMPLE);
-  return [...new Set([...named, ...hits.map((hit) => projectOf(hit.key))])].sort();
+type FollowUpTarget = { key: string; settings: FollowUpSettings };
+
+function followUpSettings(config: WorkerConfig): { jira: string | null; settings: FollowUpSettings }[] {
+  return config.projects.flatMap((project) => {
+    const settings = settingsFor(config, project).followUps;
+    return settings === undefined ? [] : [{ jira: project.jira, settings }];
+  });
 }
 
-async function followUpProject(deps: WorkerDeps, setting: StatusSetting, project: string): Promise<JiraIssueType> {
-  const wanted = settingFor(setting, project);
-  if (wanted === undefined)
-    throw new Error(`no jira.followUps.issueType for project ${project}, which the JQL matches`);
+async function followUpTargets(deps: WorkerDeps): Promise<FollowUpTarget[]> {
+  const { config } = deps;
+  const entries = followUpSettings(config);
+  const named = entries.flatMap(({ jira, settings }) => (jira === null ? [] : [{ key: jira, settings }]));
+  const rest = entries.find((entry) => entry.jira === null);
+  if (rest === undefined) return named;
+  const hits = await deps.jira.search(searchJql(config), PROJECT_SAMPLE);
+  const served = new Set(config.projects.map((project) => project.jira));
+  const found = [...new Set(hits.map((hit) => projectOf(hit.key)))].filter((key) => !served.has(key));
+  const sampled = found.map((key) => ({ key, settings: rest.settings }));
+  return [...named, ...sampled].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+async function followUpProject(deps: WorkerDeps, { key: project, settings }: FollowUpTarget): Promise<JiraIssueType> {
+  const wanted = settings.issueType;
   const [types, granted] = await Promise.all([
     deps.jira.issueTypes(project),
     deps.jira.permissions(project, Object.keys(FOLLOW_UP_PERMISSIONS))
@@ -259,25 +278,28 @@ async function followUpProject(deps: WorkerDeps, setting: StatusSetting, project
   return type;
 }
 
-async function linkTypeProbe(deps: WorkerDeps, linkType: string): Promise<string> {
+async function linkTypesProbe(deps: WorkerDeps, linkTypes: string[]): Promise<void> {
   const names = await deps.jira.linkTypes();
-  if (!names.includes(linkType)) {
-    throw new Error(`Jira has no link type "${linkType}", available: ${names.join(", ") || "none"}`);
+  const missing = linkTypes.filter((linkType) => !names.includes(linkType));
+  if (missing.length > 0) {
+    const quoted = missing.map((linkType) => `"${linkType}"`).join(", ");
+    throw new Error(`Jira has no link type ${quoted}, available: ${names.join(", ") || "none"}`);
   }
-  return linkType;
 }
 
-async function followUpsProbe(deps: WorkerDeps, settings: FollowUpSettings): Promise<Found> {
-  const projects = await followUpProjects(deps, settings.issueType);
+async function followUpsProbe(deps: WorkerDeps): Promise<Found> {
+  const targets = await followUpTargets(deps);
+  const linkTypes = [...new Set(followUpSettings(deps.config).map(({ settings }) => settings.linkType))];
   const [link, ...types] = await Promise.allSettled([
-    linkTypeProbe(deps, settings.linkType),
-    ...projects.map((project) => followUpProject(deps, settings.issueType, project))
+    linkTypesProbe(deps, linkTypes),
+    ...targets.map((target) => followUpProject(deps, target))
   ]);
   const failed = [link, ...types].flatMap((result) =>
     result.status === "rejected" ? [(result.reason as Error).message] : []
   );
   if (failed.length > 0) throw new Error(failed.join("; "));
   const found = (types as PromiseFulfilledResult<JiraIssueType>[]).map((result) => result.value);
+  const projects = targets.map((target) => target.key);
   const resolved = found.map((type, index) => `${type.name} (${type.id}) in ${projects[index]}`);
   const parts =
     projects.length === 0
@@ -285,15 +307,15 @@ async function followUpsProbe(deps: WorkerDeps, settings: FollowUpSettings): Pro
       : [`issue type ${resolved.join(", ")}`, `Create issues and Link issues granted in ${projects.join(", ")}`];
   const names = [...new Set(found.map((type) => type.name))];
   return {
-    detail: [...parts, `link type ${settings.linkType}`].join(", "),
-    short: [...names, settings.linkType].join(", ")
+    detail: [...parts, `link type ${linkTypes.join(", ")}`].join(", "),
+    short: [...names, ...linkTypes].join(", ")
   };
 }
 
 export const CHECK_NAMES = ["shards", "setup", "jira", "follow-ups", "github", "claude"];
 
 export function checkNames(config: WorkerConfig): string[] {
-  return config.jira.followUps === undefined ? CHECK_NAMES.filter((name) => name !== "follow-ups") : CHECK_NAMES;
+  return followUpSettings(config).length === 0 ? CHECK_NAMES.filter((name) => name !== "follow-ups") : CHECK_NAMES;
 }
 
 export async function checkAccess(deps: WorkerDeps, onCheck: (check: Check) => void = () => {}): Promise<Check[]> {
@@ -301,7 +323,7 @@ export async function checkAccess(deps: WorkerDeps, onCheck: (check: Check) => v
     shards: () => shardsProbe(deps),
     setup: () => setupProbe(deps),
     jira: () => jiraProbe(deps),
-    "follow-ups": () => followUpsProbe(deps, deps.config.jira.followUps as FollowUpSettings),
+    "follow-ups": () => followUpsProbe(deps),
     github: () => githubProbe(deps),
     claude: () => claudeProbe(deps)
   };

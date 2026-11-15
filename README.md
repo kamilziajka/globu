@@ -56,7 +56,7 @@ globu-worker check --smoke
 globu-worker start
 ```
 
-`check` and `start` read `worker.yaml` and `secrets.env` from the worker's home; [the worker docs](docs/worker.md) list what goes in them. `--smoke` adds a real pass through setup, a commit, a push and a draft pull request on a throwaway branch, so the first real run is not also the first test of a new machine.
+`check` and `start` read `worker.yaml` and `secrets.env` from the worker's home and the projects from its `manifest.yaml`; [the worker docs](docs/worker.md) list what goes in them. `--smoke` adds a real pass through setup, a commit, a push and a draft pull request on a throwaway branch, so the first real run is not also the first test of a new machine.
 
 ## Try it locally
 

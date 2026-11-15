@@ -155,6 +155,12 @@ describe("smokeTest", () => {
     );
   });
 
+  it("tests a shard that two projects share once", () => {
+    const { worker } = deps(world());
+    worker.config.projects.push({ ...worker.config.projects[0], name: "twin", jira: "TW" });
+    expect(smokeNames(worker)).toEqual(["smoke backend"]);
+  });
+
   it("holds the exclusive resources and waits on one another process has", async () => {
     const setup = world(`${CONFIG}limits:\n  exclusive: [gpu]\n`);
     const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");

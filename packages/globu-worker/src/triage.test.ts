@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { register } from "../../globu-core/src/index.js";
+import { loadManifest, register, saveManifest } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
@@ -37,6 +37,26 @@ limits:
   concurrent: 2
 `
   );
+  return { root, config: loadWorkerConfig(file) };
+}
+
+function setupProjects(): { root: string; config: WorkerConfig } {
+  const { root } = setup();
+  saveManifest({
+    ...loadManifest(),
+    projects: {
+      mercastra: {
+        shards: ["backend", "frontend"],
+        jira: "MR",
+        worker: {
+          statuses: { ready: "Ready for delivery", claimed: "Delivery", released: "To Do" },
+          filter: "type != Epic"
+        }
+      },
+      sandbox: { shards: ["frontend"], jira: "SB", worker: { statuses: { claimed: "Doing", released: "Open" } } }
+    }
+  });
+  const file = write(root, "worker.yaml", "version: 2\njira: { site: https://acme.atlassian.net }\n");
   return { root, config: loadWorkerConfig(file) };
 }
 
@@ -167,8 +187,10 @@ describe("why", () => {
       key: "MR-1",
       summary: "Change MR-1",
       matches: true,
+      reasons: [],
       blocked: false,
       shard: "backend",
+      target: "backend",
       deliverable: true,
       assignee: null,
       waiting: [],
@@ -191,7 +213,7 @@ describe("why", () => {
     );
     expect(jira.searches[0]).toBe("key = MR-1 AND (project = MR AND labels != agent-blocked)");
     expect(jira.edits).toEqual([]);
-    config.limits.exclusive = ["gpu"];
+    config.defaults.exclusive = ["gpu"];
     const lock = path.join(process.env.GLOBU_LOCK_DIR as string, "gpu.lock");
     fs.mkdirSync(path.dirname(lock), { recursive: true });
     fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: "render-box", holder: "klayboy render" }));
@@ -218,12 +240,12 @@ describe("why", () => {
       deliverable: false,
       assignee: "someone",
       waiting: [{ key: "MR-0", status: "In Review" }],
-      action: "would release: no deliverable marker",
+      action: 'would release: "notes" is not a deliverable shard, the worker delivers to backend, frontend',
       picked: false
     });
     expect(io.stdout).toContain("jql\tdoes not match jira.jql\n");
     expect(io.stdout).toContain("blocked\tagent-blocked is set, `globu-worker retry MR-1` removes it and runs it\n");
-    expect(io.stdout).toContain("marker\tnotes, not a deliverable shard\n");
+    expect(io.stdout).toContain("marker\tnotes, not a shard a run can land in\n");
     expect(io.stdout).toContain("assignee\tsomeone\n");
     expect(io.stdout).toContain("blockers\twaiting on MR-0 (In Review)\n");
     expect(io.stdout).toContain("verdict\tthe next cycle leaves it: it does not match jira.jql\n");
@@ -231,7 +253,9 @@ describe("why", () => {
     const unmarked = await why(worker, "MR-2");
     expect(unmarked).toMatchObject({ matches: true, shard: null, deliverable: false, holds: [], picked: false });
     expect(io.stdout).toContain("marker\tnone\n");
-    expect(io.stdout).toContain("verdict\tthe next cycle leaves it: would release: no deliverable marker\n");
+    expect(io.stdout).toContain(
+      "verdict\tthe next cycle leaves it: would release: no deliverable repository marker, the worker delivers to backend, frontend\n"
+    );
   });
 
   it("names the day cap, the subscription limit, the open pull request cap and repairs that take the slots", async () => {
@@ -305,6 +329,75 @@ describe("why", () => {
     expect((await why(worker, "MR-6")).holds).toEqual([
       { limit: "concurrent", detail: "limits.concurrent is 2 and MR-7, MR-5 come first" }
     ]);
+  });
+});
+
+describe("why and delegate with projects", () => {
+  it("says which part of the generated search keeps an issue out", async () => {
+    const { root, config } = setupProjects();
+    const jira = fakeJira([
+      issue("MR-1", { status: "To Do", statusId: "3", labels: ["agent-blocked", "repo:backend"], assignee: "someone" }),
+      issue("ZZ-1"),
+      issue("SB-1", { labels: ["agent-eligible"], status: "Open" })
+    ]);
+    const { worker, io } = deps(root, config, jira);
+    const out = await why(worker, "MR-1");
+    expect(out.reasons).toEqual([
+      "the status is To Do, not Ready for delivery",
+      "the label agent-eligible is missing",
+      "the label agent-blocked is set",
+      "it is assigned",
+      "the project's filter does not match (type != Epic)"
+    ]);
+    expect(io.stdout).toContain(
+      "jql\tdoes not match the worker's search: the status is To Do, not Ready for delivery, the label agent-eligible is missing, the label agent-blocked is set, it is assigned, the project's filter does not match (type != Epic)\n"
+    );
+    expect(jira.searches.slice(0, 2)).toEqual([
+      'key = MR-1 AND (((project = "MR" AND status = "Ready for delivery" AND (type != Epic)) OR (project = "SB" AND statusCategory != Done)) AND labels = "agent-eligible" AND labels != "agent-blocked" AND assignee is EMPTY)',
+      "key = MR-1 AND (type != Epic)"
+    ]);
+
+    const single = await why(worker, "SB-1");
+    expect(single).toMatchObject({ matches: true, reasons: [], shard: null, target: "frontend", picked: true });
+    expect(io.stdout).toContain(
+      "SB-1\tChange SB-1\njql\tmatches the worker's search\nmarker\tnone, the run lands in frontend\n"
+    );
+
+    const foreign = await why(worker, "ZZ-1");
+    expect(foreign).toMatchObject({
+      matches: true,
+      target: null,
+      deliverable: false,
+      action: "skipped, ZZ is not a project this worker serves",
+      picked: false
+    });
+    jira.search = async () => [];
+    expect((await why(worker, "ZZ-1")).reasons).toEqual(["ZZ is not a project this worker serves"]);
+    expect((await why(worker, "SB-1")).reasons).toEqual([]);
+  });
+
+  it("delegates without a repository when the project has one shard", async () => {
+    const { root, config } = setupProjects();
+    const jira = fakeJira([issue("SB-1", { labels: [] }), issue("MR-1", { labels: [] }), issue("ZZ-1")]);
+    const { worker, io } = deps(root, config, jira);
+    expect(await delegate(worker, "SB-1", undefined, async () => {})).toEqual({
+      key: "SB-1",
+      shard: "frontend",
+      matches: true
+    });
+    expect(jira.edits).toEqual(["SB-1 +agent-eligible"]);
+    expect(io.stdout).toBe(
+      "SB-1\tneeds no repository marker, its project has one shard\nSB-1\tdelegated to frontend, matches the worker's search\n"
+    );
+    await expect(delegate(worker, "MR-1", undefined)).rejects.toThrow(
+      "no repository marker, and project mercastra has 2 shards a run can land in: backend, frontend, pass --repo <shard>"
+    );
+    await expect(delegate(worker, "MR-1", "ghost")).rejects.toThrow(
+      'the repository marker names "ghost", which is not in project mercastra'
+    );
+    await expect(delegate(worker, "ZZ-1", "backend")).rejects.toThrow(
+      "no project this worker serves has the Jira key ZZ"
+    );
   });
 });
 

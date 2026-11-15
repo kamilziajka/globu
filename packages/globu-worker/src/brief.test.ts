@@ -55,7 +55,8 @@ describe("renderBrief", () => {
       shard: "backend",
       tree: "/runs/r1/tree",
       branch: "agent/MR-7-add-the-thing",
-      companions: [{ id: "product", tree: "/runs/r1/companions/product" }],
+      setup: true,
+      others: [{ id: "product", tree: "/runs/r1/companions/product", setup: false }],
       refs: [ok],
       informational: [missing],
       blockers: [
@@ -75,7 +76,7 @@ describe("renderBrief", () => {
     expect(brief).toContain("# MR-7: Add the thing\n\nIssue: https://acme.atlassian.net/browse/MR-7");
     expect(brief).toContain("Target shard: `backend`, worktree /runs/r1/tree on branch `agent/MR-7-add-the-thing`.");
     expect(brief).toContain(
-      "Companion shards, each on a worktree of its own with the same branch name:\n- `product`: /runs/r1/companions/product"
+      "Other shards this run may change, each on a worktree of its own with the same branch name. Commits there become a pull request of their own:\n- `product`: /runs/r1/companions/product\n\nThe worker ran the setup commands in `backend`. It ran none in `product`, so the tests there may not run: name every shard you changed without setup in the handback."
     );
     expect(brief).toContain("Write the handback to /runs/r1/handback.md when done.");
     expect(brief).toContain("Do not move the issue, comment on it or create issues");
@@ -121,7 +122,8 @@ describe("renderBrief", () => {
       shard: "backend",
       tree: "/t",
       branch: "b",
-      companions: [],
+      setup: false,
+      others: [],
       refs: [],
       informational: [],
       blockers: [],
@@ -161,7 +163,8 @@ describe("renderBrief", () => {
       shard: "backend",
       tree: "/t",
       branch: "b",
-      companions: [],
+      setup: false,
+      others: [],
       refs: [],
       informational: [],
       blockers: [],
@@ -189,7 +192,8 @@ describe("renderBrief", () => {
       shard: "backend",
       tree: "/t",
       branch: "b",
-      companions: [],
+      setup: false,
+      others: [{ id: "product", tree: "/p", setup: true }],
       refs: [{ ...missing, candidates: [] }],
       informational: [],
       blockers: [],
@@ -197,5 +201,6 @@ describe("renderBrief", () => {
       handbackFile: "/h.md"
     });
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main)\n");
+    expect(brief).toContain("\nThe worker ran the setup commands in `product`.\n");
   });
 });

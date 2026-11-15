@@ -8,7 +8,7 @@ function matches(pattern: string, id: string): boolean {
   return new RegExp(`^${escaped}$`).test(id);
 }
 
-function matchesAny(patterns: string[], id: string): boolean {
+export function matchesAny(patterns: string[], id: string): boolean {
   return patterns.some((pattern) => matches(pattern, id));
 }
 

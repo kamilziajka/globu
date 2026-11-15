@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { register } from "../../globu-core/src/index.js";
+import { loadManifest, register, saveManifest } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import { captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { checkAccess, checkNames, checksLine, formatCheck } from "./check.js";
@@ -115,8 +115,10 @@ describe("checkAccess", () => {
       ["claude", true]
     ]);
     expect(detail(checks, "shards")).toBe("backend");
-    expect(detail(checks, "jira")).toBe("https://acme.atlassian.net as Bot, the JQL matches issues");
-    expect(detail(checks, "github")).toBe("as octocat, 1 deliverable repositories readable");
+    expect(detail(checks, "jira")).toBe(
+      "https://acme.atlassian.net as Bot, the JQL matches issues, jira.jql does not mention agent-blocked, so a released issue is found again, jira.jql has no `assignee is EMPTY`, so claimed issues are found"
+    );
+    expect(detail(checks, "github")).toBe("as octocat, 1 repositories the worker delivers to readable");
     expect(detail(checks, "claude")).toBe(
       "claude-test (the default, set claude.model to choose) answers in /claude with the issue-deliver skill (0.08 USD)"
     );
@@ -135,6 +137,29 @@ describe("checkAccess", () => {
       "✔ shards backend   ✔ setup none   ✔ jira Bot   ✔ github octocat   ✔ claude claude-test"
     );
     expect(checksLine([{ name: "configuration", ok: false, detail: "missing" }])).toBe("✖ configuration");
+  });
+
+  it("runs the generated search of a version 2 file", async () => {
+    const setup = world();
+    saveManifest({
+      ...loadManifest(),
+      projects: {
+        acme: { shards: ["backend"], jira: "MR", worker: { statuses: { claimed: "Doing", released: "Open" } } }
+      }
+    });
+    const config = configOf("version: 2\njira: { site: https://acme.atlassian.net }\n");
+    const searched: string[] = [];
+    const fake = jira({
+      search: async (jql) => {
+        searched.push(jql);
+        return [];
+      }
+    });
+    const checks = await checkAccess(deps({ ...setup, config }, { jira: fake }).worker);
+    expect(detail(checks, "jira")).toBe("https://acme.atlassian.net as Bot, the generated search matches nothing now");
+    expect(searched).toEqual([
+      '((project = "MR" AND statusCategory != Done)) AND labels = "agent-eligible" AND labels != "agent-blocked" AND assignee is EMPTY ORDER BY created ASC'
+    ]);
   });
 
   it("names what fails in each check", async () => {
@@ -409,9 +434,8 @@ describe("checkAccess", () => {
     expect(detail(checks, "follow-ups")).toBe(
       [
         'Jira has no link type "Relates to", available: Relates',
-        "the worker's Jira user lacks the Link issues permission in KB",
         'MR has no issue type "Bug", available: Task (10001)',
-        "no jira.followUps.issueType for project SB, which the JQL matches"
+        "the worker's Jira user lacks the Link issues permission in KB"
       ].join("; ")
     );
 

@@ -9,7 +9,8 @@ export type BriefInput = {
   shard: string;
   tree: string;
   branch: string;
-  companions: { id: string; tree: string }[];
+  setup: boolean;
+  others: { id: string; tree: string; setup: boolean }[];
   refs: RefResult[];
   informational: RefResult[];
   blockers: Blocker[];
@@ -71,16 +72,34 @@ export function renderBrief(input: BriefInput): string {
       blocker.pullRequests.length > 0 ? `, the worker's pull requests: ${blocker.pullRequests.join(" ")}` : "";
     return `- ${blocker.key}: ${blocker.summary} (${blocker.status}${blocker.resolved ? "" : ", not resolved yet"})${pulls}`;
   });
-  const companions = input.companions.map((companion) => `- \`${companion.id}\`: ${companion.tree}`);
+  const others = input.others.map((other) => `- \`${other.id}\`: ${other.tree}`);
+  const bare = input.others.filter((other) => !other.setup).map((other) => `\`${other.id}\``);
+  const ran = [input.shard, ...input.others.filter((other) => other.setup).map((other) => other.id)]
+    .slice(input.setup ? 0 : 1)
+    .map((id) => `\`${id}\``);
+  const setup = [
+    ran.length > 0 ? `The worker ran the setup commands in ${ran.join(", ")}.` : "The worker ran no setup commands.",
+    ...(bare.length > 0
+      ? [
+          `It ran none in ${bare.join(", ")}, so the tests there may not run: name every shard you changed without setup in the handback.`
+        ]
+      : [])
+  ].join(" ");
   return [
     `# ${issue.key}: ${issue.summary}`,
     "",
     `Issue: ${input.site}/browse/${issue.key}`,
     `Status: ${issue.status}. Labels: ${issue.labels.length === 0 ? "none" : issue.labels.join(", ")}.`,
     `Target shard: \`${input.shard}\`, worktree ${input.tree} on branch \`${input.branch}\`.`,
-    ...(companions.length > 0
-      ? ["", "Companion shards, each on a worktree of its own with the same branch name:", ...companions]
+    ...(others.length > 0
+      ? [
+          "",
+          "Other shards this run may change, each on a worktree of its own with the same branch name. Commits there become a pull request of their own:",
+          ...others
+        ]
       : []),
+    "",
+    setup,
     "",
     `Write the handback to ${input.handbackFile} when done. Do not push, do not open pull requests and do not call Jira or GitHub; the worker does that after you finish.`,
     "",

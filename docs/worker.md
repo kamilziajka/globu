@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "globu-worker"
-description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: setup, worker.yaml, its commands, limits, locks, follow-ups and a run"
+description: "The worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: projects, worker.yaml, its commands, limits, locks, follow-ups and a run"
 ---
 
 # globu-worker
@@ -21,7 +21,7 @@ By default the worker never uses the `~/.globu` and `~/.claude` of the person on
 | `manifest.yaml`, `state.yaml`, `clones` | An ordinary Globu home, filled with `globu import`, `register` and `sync` |
 | `worker.yaml` | The configuration below |
 | `secrets.env` | Optional secrets as `KEY=value` lines, see [secrets](#secrets) |
-| `work/<id>` | Editable clones of the shards the worker delivers to, by convention, and where `shards.repos` clones them |
+| `work/<id>` | Editable clones of the shards the worker delivers to, by convention, and where the worker clones a project's shard that has none |
 | `worker.lock` | Held by the command that cycles on this home, see [one process per home](#one-process-per-home) |
 | `subscription.json` | The latest subscription figures from the runs' streams, see [the subscription limit](#the-subscription-limit) |
 | `merged.json` | Every issue whose run had its pull requests merged, with those pull requests and the merge time, so a pruned run still resolves the issues it [blocks](#issues-that-wait) |
@@ -30,7 +30,7 @@ By default the worker never uses the `~/.globu` and `~/.claude` of the person on
 | `logs` | One log file per day, see [logs and diagnostics](#logs-and-diagnostics) |
 | `runs/<run-id>` | One directory per run: `run.json`, `brief.md`, `handback.md`, `claude.jsonl` and the pull request bodies. The worktree lives here while the run lasts. Only the newest `limits.keepRuns` runs and the ones still in use are kept, see [a run](#a-run) |
 
-The shortest setup needs no `globu` commands: list each shard's repository under `shards.repos` in `worker.yaml` and the worker registers the missing ones as editable clones in `work/<id>`, in `write` mode, and writes their directories into its Claude settings, at the start of `once`, `run`, `start` and `check`. A shard that is already registered is left alone.
+The shortest setup is a manifest with the projects and their shards, imported from a team manifest or copied from another machine. At the start of `once`, `run`, `start` and `check` the worker clones every shard of a served project that has no clone yet from the manifest's `source.repo` into `work/<id>`, as an editable clone in `write` mode, and writes their directories into its Claude settings. A shard that already has a clone is left alone, and a shard with `access: read` is not cloned by the worker: `globu sync` clones it read-only.
 
 The longer setup is the bootstrap from [unattended runs](./unattended-runs.md) with one more step, the editable clones, and it is the one to use when the shards come from a team manifest. The `globu` and `claude` commands below default to the interactive homes, so the two variables are exported for them even when the worker itself runs on its defaults:
 
@@ -54,7 +54,7 @@ globu sync
 globu claude sync
 ```
 
-Repeat the `register --path` step for every shard under `deliverable` and `companion` in `worker.yaml`. The other shards are cloned read-only by `sync`. Install the plugin into the worker's Claude config dir with `claude plugin marketplace add` and `claude plugin install`, or point `claude.pluginDir` in `worker.yaml` at the plugin in a checkout of this repo, which the unattended runs guide describes as `--plugin-dir`. `globu-worker once` checks before every cycle that each deliverable shard has an editable clone that is not read-only and each companion is in `write` mode, and refuses to poll otherwise.
+Repeat the `register --path` step for every shard of a served project that the worker should not clone itself. The other shards are cloned read-only by `sync`. Install the plugin into the worker's Claude config dir with `claude plugin marketplace add` and `claude plugin install`, or point `claude.pluginDir` in `worker.yaml` at the plugin in a checkout of this repo, which the unattended runs guide describes as `--plugin-dir`. `globu-worker once` checks before every cycle that each shard of a served project without the read cap has an editable clone that is not read-only, in `write` mode when its project has more than one such shard, and refuses to poll otherwise.
 
 Keeping the homes apart costs a second clone of each repository on a laptop. In return the worker's modes are its own policy, the person's checkouts and worktrees are never touched by a run, and a laptop and a container run the same way. A home nested inside `~/.globu` is still a separate home: nothing in Globu reads a parent directory.
 
@@ -75,142 +75,190 @@ The worker writes into that home too: the directories of its shards go into `per
 
 ## Configuration
 
-`worker.yaml` in `GLOBU_HOME`:
+The configuration is in two files, by the rule that separates the manifest from the state: what is true on every machine is in `manifest.yaml`, what is true only here is in `worker.yaml`.
+
+### Projects, in the manifest
+
+A project in `manifest.yaml` groups shards. For the worker it also carries a Jira project key and a `worker` block. The registry, the resolver and the hooks read only `shards`; `jira` and `worker` are parsed by the worker alone, so the sessions on a laptop, the worker on a desktop and a sandbox home can share one definition.
 
 ```yaml
-version: 1
+projects:
+  mercastra:
+    shards: [mercastra-*]
+    jira: MR
+    worker:
+      statuses: { ready: Ready for delivery, claimed: Delivery, released: To Do, done: Done }
+      filter: component = API AND type != Epic
+      followUps: { issueType: Task }
+      setup:
+        mercastra-app-backend: [npm ci]
+      shards:
+        mercastra-product: { github: { labels: [docs] } }
+  klayboy:
+    shards: [klayboy, klayboy-website]
+    jira: KLAYBOY
+    worker:
+      statuses: { ready: To Do, claimed: In Progress, released: To Do, done: Done }
+      exclusive: [gpu]
+      claude: { maxBudgetUsd: 8 }
+      setup:
+        klayboy: [npm ci]
+always: [handbook]
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `shards` | Shard ids and patterns, `*` is a wildcard. They are the repositories a run of this project may land in and write to, see [targets and other shards](#targets-and-other-shards) | required |
+| `jira` | The Jira project key. The part of an issue key before the hyphen picks the project, and with it every setting below | required for a project the worker serves |
+| `worker.statuses.ready` | The status an eligible issue is in, by name or by id: an all-digit value is an id. It goes into the [search](#the-search). Without it the project's clause is `statusCategory != Done` | none |
+| `worker.statuses.claimed` | The status a claimed issue is moved to, by name or by id. Names match without regard to case. Transitions are looked up per issue | required |
+| `worker.statuses.released` | Where a released issue goes back to | required |
+| `worker.statuses.done` | Where an issue goes once all its pull requests are merged. Without it the issue stays in `claimed` and only gets a comment | none |
+| `worker.filter` | JQL that is ANDed into this project's clause of the search, such as `component = API AND type != Epic` | none |
+| `worker.followUps.issueType` | Turns on [follow-up issues](#follow-up-issues): the issue type, by name or by id, of the issues the worker files from a handback's `## Follow-ups` section | none, off |
+| `worker.followUps.linkType`, `max` | The issue link type that links each follow-up to the original issue, and the most follow-ups filed from one handback | `Relates`, 10 |
+| `worker.exclusive` | Machine-wide resources a run of this project needs to itself, by name: letters, digits, dots, dashes and underscores. See [exclusive resources](#exclusive-resources) | none |
+| `worker.setup.<shard>` | Commands run with `sh -c`, in order, in the fresh worktree of the run's target before Claude starts, such as `npm ci`. See [setup](#setup) | none |
+| `worker.timeout` | The worker kills the run and releases the issue when it lasts longer, as `30s`, `45m` or `1h` | `45m` |
+| `worker.repairs` | Failed repairs of a pull request before it is handed to a person | 2 |
+| `worker.claude.skill` | The skill the run is told to use, the one key under `claude` that is not a flag | `issue-deliver` |
+| `worker.claude.model` | Passed as `--model` when set | Claude Code's default |
+| `worker.claude.pluginDir` | Passed as `--plugin-dir` when set: the plugin from a checkout of this repo, for a test of an unreleased plugin or a machine without a marketplace | the plugins installed in `CLAUDE_CONFIG_DIR` |
+| `worker.claude.maxTurns` | Passed as `--max-turns`. A run that ends on it is released. Claude Code counts it per segment, see [segments](#segments), so `timeout` and `claude.maxBudgetUsd` are what bound a whole run | 80 |
+| `worker.claude.maxBudgetUsd` | Passed as `--max-budget-usd`. Claude stops at its own estimate, which counts subagents and can overshoot; a run that stopped with commits is still handed back | 5 |
+| `worker.claude.allowedTools` | Passed as `--allowedTools`. Everything else is denied, since nobody can answer a prompt. Claude Code checks every part of a Bash command joined with `;`, `&&`, `\|\|` or `\|` on its own, so one part outside the list denies the whole command; the brief lists the Bash patterns and asks for one command per call. `Bash(globu base stamp *)` lets the `issue-deliver` skill stamp `generated` on the knowledge it writes, through the `globu` launcher the worker puts on the run's `PATH`; a list of your own that leaves it out gets the unstamped docs named in the handback instead | `Read`, `Edit`, `Write`, `Glob`, `Grep`, and through Bash `npm run`, `npx vitest`, `git status`, `git diff`, `git log`, `git show`, `git add`, `git commit`, `globu base stamp` and the read-only `ls`, `cat`, `head`, `tail` and `wc` |
+| `worker.git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
+| `worker.git.author` | Author and committer of the run's commits, as `{ name, email }`. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
+| `worker.github.draft`, `worker.github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
+| `worker.shards.<shard>` | Overrides for runs and pull requests in that one shard: `claude`, `timeout`, `git` and `github`, with the keys above | none |
+
+A key the worker does not know inside `worker` is an error that names it, so a typo does not pass as a default.
+
+### The machine, in worker.yaml
+
+`worker.yaml` in `GLOBU_HOME` keeps what is true only on this machine:
+
+```yaml
+version: 2
 jira:
   site: https://acme.atlassian.net
-  jql: project = MR AND status = "Ready for delivery" AND labels = agent-eligible AND labels != agent-blocked AND assignee is EMPTY ORDER BY created ASC
-  claimedStatus: Delivery
-  releasedStatus: 10001
-  doneStatus: Done
   priorityLabel: agent-next
-  eligibleLabel: agent-eligible
-  blockedLabel: agent-blocked
-  blockingLinks: [Blocks]
-  repository:
-    labelPrefix: "repo:"
-  followUps:
-    issueType: Task
-shards:
-  deliverable: [backend, frontend]
-  companion: [product]
-  repos:
-    backend: https://github.com/acme/backend.git
-    frontend: https://github.com/acme/frontend.git
-    product: https://github.com/acme/product.git
-setup:
-  backend: [npm ci]
-  frontend: [npm ci, npm run build]
+projects: [klayboy, mercastra]
+order: created ASC
+defaults:
+  claude: { model: claude-sonnet-5-5, maxTurns: 80, maxBudgetUsd: 5 }
+  git:
+    branchPrefix: agent/
+    author: { name: Acme Agent, email: agent@acme.example }
+  github: { draft: false, labels: [agent] }
 poll:
   every: 60s
 limits:
   concurrent: 2
   perShard: 1
-  timeout: 45m
   dayUsd: 40
   openPullRequests: 5
-  repairs: 2
   keepRuns: 100
   subscription: 70
-  exclusive: [gpu]
 claude:
   configDir: own
-  skill: issue-deliver
-  model: claude-sonnet-5-5
-  maxTurns: 80
-  maxBudgetUsd: 5
-  allowedTools:
-    - Read
-    - Edit
-    - Write
-    - Glob
-    - Grep
-    - Bash(npm run *)
-    - Bash(git add *)
-    - Bash(git commit *)
-git:
-  branchPrefix: agent/
-  author:
-    name: Acme Agent
-    email: agent@acme.example
-github:
-  draft: false
-  labels: [agent]
 notify:
-  command: >-
-    curl -s -H "Title: $GLOBU_ISSUE $GLOBU_EVENT" -H "Click: $GLOBU_URL"
-    -d "$GLOBU_MESSAGE" https://ntfy.sh/acme-agent
+  command: ./notify.sh "$@"
   timeout: 30s
 ```
 
 | Key | Meaning | Default |
 |---|---|---|
+| `version` | `2`. A file without it, or with `1`, is read as [version 1](#moving-a-version-1-workeryaml) with a warning. Any other value is an error | required |
 | `jira.site` | The Jira Cloud site | required |
-| `jira.jql` | What is eligible. The worker runs it as written and adds nothing, so the team owns the gate and the order | required |
-| `jira.claimedStatus` | The status a claimed issue is moved to, by name or by id: an all-digit value is an id. Names match without regard to case. Transitions are looked up per issue, so a same-named status in another project is never picked. Either one value or a [map by project](#several-projects) | required |
-| `jira.releasedStatus` | Where a released issue goes back to, by name or by id, one value or a map by project | required |
-| `jira.doneStatus` | Where an issue goes once all its pull requests are merged, by name or by id, one value or a map by project. Without it, or without an entry for the issue's project, the issue stays in `claimedStatus` and only gets a comment | none |
-| `jira.priorityLabel` | Issues carrying this label are taken before the rest, in the order the JQL returns them; the rest follow in the same order. See [Pointing the queue](#pointing-the-queue) | none |
-| `jira.eligibleLabel` | The label `delegate` adds to mark an issue for the worker. It should be the eligibility label the JQL asks for, since the worker never reads it anywhere else | `agent-eligible` |
-| `jira.blockedLabel` | Added when the worker gives an issue back, so the JQL above excludes it until a person removes it | `agent-blocked` |
+| `projects` | The names of the manifest's projects this worker serves | every project in the manifest that has a `jira` key |
+| `order` | The `ORDER BY` of the generated [search](#the-search) | `created ASC` |
+| `jira.jql` | A search of your own, run as written in place of the generated one, see [the search](#the-search) | none |
+| `jira.priorityLabel` | Issues carrying this label are taken before the rest, in the order the search returns them; the rest follow in the same order. See [Pointing the queue](#pointing-the-queue) | none |
+| `jira.eligibleLabel` | The label that marks an issue for the worker. The generated search asks for it and `delegate` adds it | `agent-eligible` |
+| `jira.blockedLabel` | Added when the worker gives an issue back. The generated search excludes it until a person removes it | `agent-blocked` |
 | `jira.blockingLinks` | Issue link types, by name, that make an issue wait for the issue on their "is blocked by" side, see [Issues that wait](#issues-that-wait). An empty list turns waiting off | `[Blocks]` |
-| `jira.followUps.issueType` | Turns on [follow-up issues](#follow-up-issues): the issue type, by name or by id, of the issues the worker files from a handback's `## Follow-ups` section. One value or a [map by project](#several-projects). Without it the section only reaches the issue in the handback comment | none, off |
-| `jira.followUps.linkType` | The issue link type, by name, that links each follow-up to the original issue | `Relates` |
-| `jira.followUps.max` | The most follow-ups filed from one handback; the bullets past it are listed in the comment as not created | 10 |
-| `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | required |
-| `shards.deliverable` | Shards the worker may run in. The repository marker of an issue must name one; anything else is released, so the list is the team's whitelist of repositories the agent delivers to | required |
-| `shards.companion` | Shards a run may also write to, each on a worktree of its own with the same branch name, whether or not the issue names them. Commits there become a second pull request. A run never consists of companion changes alone: the deliverable is where it lives and where the per-shard limit counts | none |
-| `shards.repos` | Repository URL per shard id. A deliverable or companion shard that is not registered yet is cloned from it into `work/<id>` at start; see [its own homes](#its-own-homes) | none |
-| `setup.<shard>` | Commands run with `sh -c`, in order, in each fresh worktree of that shard before Claude starts, such as `npm ci`. On Windows `sh` is the one from Git for Windows, found on `PATH` or next to `git`, see [On Windows](#on-windows). They run outside Claude's tool allowlist, with the worker's environment minus the secrets and with `limits.timeout`. One that fails or times out releases the issue with the command and the end of its output; one whose shell cannot start is a [problem of the machine](#a-run) | none |
+| `jira.repository` | How an issue names its target: `labelPrefix` for a label such as `repo:backend`, or `field: customfield_NNNNN` for a text or option field. The value is a shard id | `labelPrefix: "repo:"` |
+| `defaults` | The settings of every project that does not set them itself: any key of a project's `worker` block except `filter` and `shards` | none |
 | `poll.every` | The interval of `run`, as `30s`, `5m` or `1h` | `60s` |
 | `limits.concurrent`, `limits.perShard` | Runs per cycle and runs per shard per cycle | 1 and 1 |
-| `limits.timeout` | The worker kills the run and releases the issue when it lasts longer | `45m` |
 | `limits.dayUsd` | When the runs started today have cost this much, the worker keeps polling but claims nothing | 40 |
 | `limits.openPullRequests` | With this many of the worker's pull requests open, an automatic cycle claims no new issue; see [following its pull requests](#following-its-pull-requests) | 5 |
-| `limits.repairs` | Failed repairs of a pull request before it is handed to a person | 2 |
 | `limits.keepRuns` | How many run directories to keep, newest first by start time. At the start of every cycle the worker deletes the older ones that are settled. A run that is not in a final state, a handed-back run whose pull requests are still followed, its repairs and every run started today are always kept, the last so that the day cap still counts them. Pruning never touches `merged.json` or `followups.json`, so a merged run that is pruned still resolves the issues it [blocks](#issues-that-wait) | 100 |
 | `limits.subscription` | A percentage: when a window of the Claude subscription is used this much, the worker keeps polling but claims and repairs nothing until that window resets. See [the subscription limit](#the-subscription-limit) | 70 |
-| `limits.exclusive` | Machine-wide resources a run needs to itself, by name: letters, digits, dots, dashes and underscores. The worker takes a lock file for each before it claims or repairs and holds them until the cycle's runs end; see [exclusive resources](#exclusive-resources) | none |
-| `claude.configDir` | `own` or `user`: whether Claude runs in a home of the worker's own or in the person's `~/.claude`, see [the user's Claude home](#the-users-claude-home). Not a flag either | `own` |
-| `claude.skill` | The skill the run is told to use, the one key under `claude` that is not a flag | `issue-deliver` |
-| `claude.model` | Passed as `--model` when set | Claude Code's default |
-| `claude.pluginDir` | Passed as `--plugin-dir` when set: the plugin from a checkout of this repo, for a test of an unreleased plugin or a machine without a marketplace | the plugins installed in `CLAUDE_CONFIG_DIR` |
-| `claude.maxTurns` | Passed as `--max-turns`. A run that ends on it is released. Claude Code counts it per segment, see [segments](#segments), so `limits.timeout` and `claude.maxBudgetUsd` are what bound a whole run | 80 |
-| `claude.maxBudgetUsd` | Passed as `--max-budget-usd`. Claude stops at its own estimate, which counts subagents and can overshoot; a run that stopped with commits is still handed back | 5 |
-| `claude.allowedTools` | Passed as `--allowedTools`. Everything else is denied, since nobody can answer a prompt. Claude Code checks every part of a Bash command joined with `;`, `&&`, `\|\|` or `\|` on its own, so one part outside the list denies the whole command; the brief lists the Bash patterns and asks for one command per call. `Bash(globu base stamp *)` lets the `issue-deliver` skill stamp `generated` on the knowledge it writes, through the `globu` launcher the worker puts on the run's `PATH`; a list of your own that leaves it out gets the unstamped docs named in the handback instead | `Read`, `Edit`, `Write`, `Glob`, `Grep`, and through Bash `npm run`, `npx vitest`, `git status`, `git diff`, `git log`, `git show`, `git add`, `git commit`, `globu base stamp` and the read-only `ls`, `cat`, `head`, `tail` and `wc` |
-| `git.branchPrefix` | The branch is `<prefix><KEY>-<slug of the summary>` | `agent/` |
-| `git.author` | Author and committer of the run's commits. Whether that is a bot or the token holder is the team's attribution call | the clone's git config |
+| `claude.configDir` | `own` or `user`: whether Claude runs in a home of the worker's own or in the person's `~/.claude`, see [the user's Claude home](#the-users-claude-home) | `own` |
 | `notify.command` | A command run on a hand back, a release, a pull request that needs a person and a stop for a machine problem, see [notifications](#notifications) | none |
 | `notify.timeout` | The notification command is killed when it lasts longer | `30s` |
-| `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
 
-Every key under `claude` except `configDir` and `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
+A key that is not in this table is an error, so a version 1 key left in a version 2 file is named instead of ignored.
 
-### Several projects
+### How a run's settings are resolved
 
-One JQL can span several projects whose workflows name their statuses differently. Each of the three status keys then takes a map keyed by Jira project key, with an optional `default` entry for every project the map does not name:
+One function gives a run its settings, from four layers where a later one wins:
 
-```yaml
-jira:
-  jql: project in (KLAYBOY, SANDBOX) AND labels = agent-eligible AND assignee is EMPTY ORDER BY created ASC
-  claimedStatus:
-    KLAYBOY: In Progress
-    SANDBOX: Doing
-  releasedStatus:
-    default: To Do
-  doneStatus:
-    KLAYBOY: Done
+1. the built-in default in the tables above,
+2. `defaults` in `worker.yaml`,
+3. the `worker` block of the issue's project,
+4. that block's `shards.<shard>` entry for the shard the run, the repair or the pull request is in.
+
+`statuses`, `followUps`, `claude`, `git`, `github` and `setup` are merged key by key, so a project that sets `claude: { maxBudgetUsd: 8 }` keeps the model of `defaults`. A list, such as `allowedTools`, `exclusive` or `github.labels`, replaces the one below it. `followUps` is on only where an `issueType` resolves, so `defaults: { followUps: { linkType: Blocks } }` alone files nothing.
+
+Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file. Budget and open pull request caps stay per machine: `limits` holds what the worker enforces on its own.
+
+`check` uses the `claude` settings of `defaults` for its one-turn probe, so a model or plugin directory that only one project sets is first seen in that project's run.
+
+### The search
+
+The worker generates the search from the projects it serves and the labels it knows:
+
+```
+((project = "MR" AND status = "Ready for delivery" AND (component = API AND type != Epic))
+  OR (project = "KLAYBOY" AND status = "To Do"))
+AND labels = "agent-eligible" AND labels != "agent-blocked"
+AND assignee is EMPTY
+ORDER BY created ASC
 ```
 
-`jira.followUps.issueType` takes the same kind of map, since issue type names differ between projects too.
+Each project contributes one clause: its key, its `statuses.ready` or `statusCategory != Done` without one, and its `filter`. Adding a project to the manifest and to `projects` makes its issues eligible with no JQL written. The generated search is always bounded, which Jira's search endpoint requires.
 
-The project is the part of the issue key before the hyphen. An issue whose project has neither an entry nor a default for `claimedStatus` or `releasedStatus` is not claimed: the cycle stops with an error that names the key and the project, before the issue is assigned.
+`jira.jql` replaces all of it and is run as written. The team then owns the gate and the order: `check` notes when the text does not mention `jira.blockedLabel` or has no `assignee is EMPTY`, and fails with Jira's 400 when the query is unbounded. An issue such a search returns from a project the worker does not serve is skipped with `skipped, <KEY> is not a project this worker serves`: it is not claimed and it is not an error of the cycle.
+
+### Targets and other shards
+
+- **Target.** The issue's repository marker names a shard, which must be one of its project's shards. A project with one shard a run can land in needs no marker, and `delegate` then needs no `--repo`. An issue whose marker is missing in a project with several shards, or names a shard outside the project, is released with a comment that says which shards the project has.
+- **Other shards of the project.** Each gets a worktree on the same branch name and may be written to. Commits there become additional pull requests. An issue may therefore target a docs repository as well as a code repository.
+- **`access: read`.** A shard with the manifest's read cap gets no worktree and stays reference only, also when a project lists it. It is the one switch that keeps a repository out of a run's reach.
+- **Outside the project.** Every other registered shard stays a read-only clone and the [guard](#what-the-guard-does-in-a-run) blocks writes to it. A shard that is in no served project cannot be a target.
+
+A shard can be in two projects. A run then takes the settings of the project its issue's Jira key names.
+
+### Setup
+
+Setup commands are explicit, under `worker.setup.<shard>` of the project. The worker runs them with `sh -c` before Claude starts, outside Claude's tool allowlist, with the worker's environment minus the secrets and with the run's `timeout`. On Windows `sh` is the one from Git for Windows, found on `PATH` or next to `git`, see [On Windows](#on-windows). One that fails or times out releases the issue with the command and the end of its output; one whose shell cannot start is a [problem of the machine](#a-run).
+
+They run only in the target's worktree. The other worktrees of a run get no setup, the brief says which worktrees had it, and the `issue-deliver` skill names in the handback every shard it changed without one, since the run could not run that shard's tests. A repair runs the setup of the shard its pull request is in, whichever shard the original run targeted, because the repair's job is to make that shard's checks pass.
+
+### Moving a version 1 worker.yaml
+
+A `worker.yaml` without `version: 2` still starts the worker. It is read as follows, and the worker says so in a warning at every start:
+
+- Its global settings (`claude`, `git`, `github`, `setup`, `limits.timeout`, `limits.repairs`, `limits.exclusive`) become the `defaults`.
+- Its status keys become projects: one per Jira project key that a `claimedStatus`, `releasedStatus`, `doneStatus` or `followUps.issueType` map names and that has both a claimed and a released status, and one more for every other Jira project when those two have a single value or a `default` entry.
+- `shards.deliverable` and `shards.companion` keep their meaning inside those projects: an issue must name a deliverable shard, each run gets a worktree of every companion, setup runs in all of them and `shards.repos` still clones what is not registered.
+- `jira.jql` stays the search.
+
+Two things differ from before. An issue of a Jira project that no status key covers is skipped, where a version 1 worker stopped the cycle with an error. A project with no `followUps.issueType` entry files nothing, where it listed each bullet as not created.
+
+To move the file:
+
+1. In `manifest.yaml` of the worker's home, write a project per Jira project: its `shards` (the former deliverable and companion shards), `jira: <KEY>` and under `worker` the `statuses` (`claimedStatus` becomes `claimed`, `releasedStatus` becomes `released`, `doneStatus` becomes `done`), the `setup` entries of its shards and, where they differed, `followUps`, `exclusive`, `timeout` and `repairs`. Add `statuses.ready` with the status your JQL asked for.
+2. In `worker.yaml`, set `version: 2`, move `claude` (except `configDir`), `git` and `github` under `defaults`, and delete `shards`, `setup`, the three status keys, `jira.followUps`, `limits.timeout`, `limits.repairs` and `limits.exclusive`. Delete `jira.jql` to use the generated search, or keep it as the override.
+3. Give a shard that must stay reference only `access: read` with `globu set <id> --access read`: under version 2 every other shard of a project gets a worktree and may be written to.
+4. Run `globu-worker check`, then `globu-worker once --dry-run` and compare the plan with what the old file produced.
 
 ### Pointing the queue
 
-Auto mode takes issues in the order the JQL returns them, so with `limits.concurrent` at 1 the first eligible issue always wins, the oldest one under `ORDER BY created ASC`. Adding the `priorityLabel` label to an issue in Jira moves it to the front on the next poll, without touching the JQL or `worker.yaml`. Several labelled issues keep their JQL order among themselves. Pick mode lists the issues in the same order.
+Auto mode takes issues in the order the search returns them, so with `limits.concurrent` at 1 the first eligible issue always wins, the oldest one under `created ASC`. Adding the `priorityLabel` label to an issue in Jira moves it to the front on the next poll, without touching the search or `worker.yaml`. Several labelled issues keep their order among themselves. Pick mode lists the issues in the same order.
 
 A label was chosen over a weight per project: it points at the issue a person wants next, it is set from Jira by whoever triages, it works the same within one project and across several, and it costs nothing extra since the search already returns the labels.
 
@@ -224,13 +272,13 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 
 | Command | Purpose |
 |---|---|
-| `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue, or repairs the selected pull request, and polls again, `r` polls Jira and GitHub again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. Pick mode also polls in the background every `poll.every` and redraws; it never claims or repairs without Enter, but it does move merged issues to `doneStatus`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
-| `check [--smoke]` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; the setup shell is found and finds the first program of each `setup` command (`command -v`), with a note on Windows when `core.longpaths` is off; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill, naming the model and, when `claude.model` is unset, that it is the config dir's default. That check fails when the `globu` plugin it loaded is not the worker's version, and says which commands update it: `npm install -g` upgrades the worker and leaves the plugin of its Claude home where it was. Its line also names what a run loads from that home: the plugins with their versions, the MCP servers, the hook events and the allow rules of its `settings.json`. With `jira.followUps` set, one more line checks [follow-up issues](#follow-up-issues): the link type exists, and in each project that an `issueType` map names or that the JQL matches now (up to 50 issues), the project's issue type exists, by name or by all-digit id, and the worker's account holds the Create issues and Link issues permissions (Jira's `mypermissions`); it names the issue type and id it resolved in each project, and says when no project is known yet. Jira, the follow-ups, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache. `--smoke` then runs the [smoke test](#the-smoke-test) when every check passed, one more line per deliverable shard, and says it skipped it otherwise |
+| `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue, or repairs the selected pull request, and polls again, `r` polls Jira and GitHub again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. Pick mode also polls in the background every `poll.every` and redraws; it never claims or repairs without Enter, but it does move merged issues to `statuses.done`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
+| `check [--smoke]` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml`, the projects it serves and the secrets load; every shard of a served project without the read cap has an editable clone; the setup shell is found and finds the first program of each `setup` command (`command -v`), with a note on Windows when `core.longpaths` is off; Jira answers for the account and runs the [search](#the-search), with a note when a `jira.jql` of your own leaves out the blocked label or `assignee is EMPTY`; `gh api user` answers with `GH_TOKEN` and the repository of every such shard can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill, naming the model and, when `defaults.claude.model` is unset, that it is the config dir's default. That check fails when the `globu` plugin it loaded is not the worker's version, and says which commands update it: `npm install -g` upgrades the worker and leaves the plugin of its Claude home where it was. Its line also names what a run loads from that home: the plugins with their versions, the MCP servers, the hook events and the allow rules of its `settings.json`. When a served project has `followUps`, one more line checks [follow-up issues](#follow-up-issues): the link types exist, and in each such project the issue type exists, by name or by all-digit id, and the worker's account holds the Create issues and Link issues permissions (Jira's `mypermissions`); it names the issue type and id it resolved in each project. Jira, the follow-ups, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache. `--smoke` then runs the [smoke test](#the-smoke-test) when every check passed, one more line per shard a run can land in, and says it skipped it otherwise |
 | `diagnostics [--out <file>]` | A `.tar.gz` with the log files, the `run.json` of the 20 runs started last, `worker.yaml`, `merged.json`, `subscription.json` and `followups.json`, each when it exists, and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
-| `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
+| `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `repairs`. `--json` adds the run records and the plan |
 | `retry <key> [--json]` | Removes `jira.blockedLabel` from the issue when it carries it, then does what `once --issue <key>` does. The way to try a released issue again once its problem is fixed |
-| `why <key> [--session] [--json]` | Says why the next cycle would or would not claim the issue, touching nothing: whether it matches `jira.jql` (searched as `key = <key> AND (<jql>)` without the `ORDER BY`) and carries `blockedLabel`, its repository marker, its assignee, the blockers it [waits](#issues-that-wait) on, which limit holds it (`limits.dayUsd`, `limits.subscription`, a held [exclusive resource](#exclusive-resources), `limits.openPullRequests`, or `limits.concurrent` and `limits.perShard` with the repairs and the issues ahead of it in the JQL order, left out for an issue that waits on a blocker, since its place in the queue is not what holds it) and whether its references resolve. The last line is the verdict, and when the next cycle leaves the issue it names the first reason: `the next cycle leaves it: it waits on MR-5 (In Review)`. `--session` reads the session's home instead of the worker's. `--json` prints the same as one object |
-| `delegate <key> --repo <shard> [--session] [--json]` | Marks the issue for the worker without the Jira UI: adds `jira.eligibleLabel` and the repository marker for a deliverable shard, a `labelPrefix` label that replaces any other marker label, or the custom field, set as text or as an option by its type. Then says whether the issue now matches `jira.jql`, since a status in the JQL still takes a transition. Jira's search can take about 20 s to see a label change, so it searches again every 5 s for up to 30 s before it says the issue does not match. `--session` reads the session's `worker.yaml` |
+| `why <key> [--session] [--json]` | Says why the next cycle would or would not claim the issue, touching nothing: whether it matches the [search](#the-search) (searched as `key = <key> AND (<search>)` without the `ORDER BY`) and, for the generated search, which part keeps it out: the status, a label, the assignee or the project's `filter`. Then whether it carries `blockedLabel`, its repository marker and the shard the run would land in, its assignee, the blockers it [waits](#issues-that-wait) on, which limit holds it (`limits.dayUsd`, `limits.subscription`, a held [exclusive resource](#exclusive-resources) of its project, `limits.openPullRequests`, or `limits.concurrent` and `limits.perShard` with the repairs and the issues ahead of it in the search's order, left out for an issue that waits on a blocker, since its place in the queue is not what holds it) and whether its references resolve. The last line is the verdict, and when the next cycle leaves the issue it names the first reason: `the next cycle leaves it: it waits on MR-5 (In Review)`. `--session` reads the session's home instead of the worker's. `--json` prints the same as one object |
+| `delegate <key> [--repo <shard>] [--session] [--json]` | Marks the issue for the worker without the Jira UI: adds `jira.eligibleLabel` and the repository marker for a shard of the issue's project, a `labelPrefix` label that replaces any other marker label, or the custom field, set as text or as an option by its type. `--repo` can be left out when the project has one shard a run can land in, and no marker is set then. Then says whether the issue now matches the search, since a status in it still takes a transition. Jira's search can take about 20 s to see a label change, so it searches again every 5 s for up to 30 s before it says the issue does not match. `--session` reads the session's `worker.yaml` |
 | `run` | Shard bootstrap and `check`, then `once` on the configured interval until `SIGINT` or `SIGTERM`. A failed check stops it before the first cycle. A signal during a cycle lets the cycle finish |
 | `poll [--json]` | The dry run of `once`, for a session: what could be claimed now and why, touching nothing |
 | `claim <key> [--json]` | Steps 3 to 7 of a run for a session: claim the issue, resolve its references, add the worktrees and write the brief, then stop with the run `prepared` and the worktrees in place. Prints the run directory; `--json` adds the record and the paths of the brief, the tree, the handback and the companions |
@@ -242,7 +290,7 @@ Every command takes `--log-level` before its name, as in `globu-worker --log-lev
 
 `start` shows no Claude output. On a terminal it redraws a table after every change: under the title a gray line keeps the checks in view with what each resolved to (the Jira user, the GitHub login, the Claude model, the shards), then key, summary, state and detail per issue, where the state is `available`, `not ready` (a reference is missing), `waiting` (with the blockers it waits on), `skipped`, `preparing`, `running` (with its start time), `pushing`, `handed back` (with the pull requests) or `released` (with the reason), and below it today's spend against `limits.dayUsd`, the subscription's windows against `limits.subscription` when the runs reported them (`subscription five-hour 15 %, seven-day 60 % of 70 %`, or `subscription five-hour at 72 %, holding until 2026-11-14 18:00 UTC` while the limit holds) and the keys. In pick mode the selected issue has a green ● and green text, the other available ones a gray ○, and the rest are gray. Without a terminal it has no table and prints what `run` prints, see [the service log](#the-service-log). The worker's open pull requests are listed first, as `<KEY> #<number>`, with `conflict`, `checks failing` and `needs human` in red; the first two are pickable while repairs are left. The footer counts the open pull requests against `limits.openPullRequests` and how many need a fix.
 
-`once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `waiting on gpu (held by klayboy render, pid 4242 on desk since 2026-11-14T10:00:00.000Z)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. A repair reads `repaired` or `repair failed` with its reason in place of `handed-back` and `released`, so the two kinds of run can be told apart. When repairs took every slot of the cycle, the issues that would have been next read `waiting on a slot, taken by the repair of #7` and are claimed by the next cycle; `nothing eligible` is printed only when the JQL found nothing. A dry run gives a verdict for every issue, the same one pick mode shows, so several can read `would claim`; its last line says which issues an automatic cycle would take within `limits.concurrent` and `limits.perShard`, as in `next cycle takes MR-7 (limits.concurrent 1, limits.perShard 1)`. An issue that reads `would release` counts too, because a cycle claims it before it finds the missing marker or references and releases it, and it holds a slot of that cycle. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
+`once` prints one line per issue it looked at (`claimed`, `waiting on MR-5 (In Review)`, `waiting on gpu (held by klayboy render, pid 4242 on desk since 2026-11-14T10:00:00.000Z)`, `skipped, already assigned`, `skipped, backend has a run already`, `skipped, claimed by someone else`, `skipped, ZZ is not a project this worker serves`, or in a dry run `would claim and run in backend (2 references resolved)` and `would release: ...`) and one line per run with its final state, its reason when released and its pull requests when handed back. A repair reads `repaired` or `repair failed` with its reason in place of `handed-back` and `released`, so the two kinds of run can be told apart. When repairs took every slot of the cycle, the issues that would have been next read `waiting on a slot, taken by the repair of #7` and are claimed by the next cycle; `nothing eligible` is printed only when the JQL found nothing. A dry run gives a verdict for every issue, the same one pick mode shows, so several can read `would claim`; its last line says which issues an automatic cycle would take within `limits.concurrent` and `limits.perShard`, as in `next cycle takes MR-7 (limits.concurrent 1, limits.perShard 1)`. An issue that reads `would release` counts too, because a cycle claims it before it finds the missing marker or references and releases it, and it holds a slot of that cycle. The exit code is 0 whenever the cycle ran; a released issue is not an error of the worker.
 
 ### The service log
 
@@ -259,20 +307,20 @@ The time is UTC in ISO 8601, then a space, then the line: a key, a tab and what 
 
 ## The smoke test
 
-`check` proves each piece answers, not that they work together: a machine can pass it and fail its first run a second after the claim, on a setup command, a commit hook, the push or `gh pr create`. `check --smoke` walks that path without an issue, for each deliverable shard in turn:
+`check` proves each piece answers, not that they work together: a machine can pass it and fail its first run a second after the claim, on a setup command, a commit hook, the push or `gh pr create`. `check --smoke` walks that path without an issue, for each shard a run can land in, in turn, with the settings of its project and its shard entry. A shard in two projects is tested once, as the first of them:
 
-1. Take the [exclusive resources](#exclusive-resources), as `globu-worker smoke test`. One held by another process fails every shard's line with `waiting on <resource> (...)` and nothing else runs.
+1. Take the project's [exclusive resources](#exclusive-resources), as `globu-worker smoke test`. One held by another process fails the line of each of that project's shards with `waiting on <resource> (...)`.
 2. Fetch the clone and add a worktree under `smoke/<shard>-<time>` in the worker's home, on a throwaway branch `<git.branchPrefix>smoke-<time>` from the default branch.
 3. Run the shard's `setup` commands there, as a run does.
 4. Make an empty commit, `globu-worker smoke test`, with the environment Claude's commits get: `git.author`, the secrets stripped, the worker's `GLOBU_HOME` and `CLAUDE_CONFIG_DIR`. The repository's commit hooks run as they would in a run.
 5. Push the branch with `GH_TOKEN` and open a pull request with `gh pr create`, always as a draft and with `github.labels`, so a missing label fails here.
 6. Close the pull request with a comment and delete the remote branch, then remove the worktree, the local branch and the directory.
 
-A failure names the step and the end of its output, and the cleanup still runs: a pull request that was opened is closed and a branch that was pushed is deleted. The smoke test never reads or writes Jira and spends nothing on Claude, but it costs one setup per deliverable shard and leaves a closed draft pull request in each repository's history. Run it once on a new machine, and again after changing `setup`, the hooks or the token.
+A failure names the step and the end of its output, and the cleanup still runs: a pull request that was opened is closed and a branch that was pushed is deleted. The smoke test never reads or writes Jira and spends nothing on Claude, but it costs one setup per shard and leaves a closed draft pull request in each repository's history. Run it once on a new machine, and again after changing `setup`, the hooks or the token.
 
 ## Exclusive resources
 
-Some runs cannot share the machine with other work. On a desktop that renders on its GPU, a run's setup or commit hook can start a render while a render job already has the whole GPU. `limits.exclusive: [gpu]` makes the worker take the machine-wide lock `gpu` before it claims or repairs, hold it through setup, Claude and the push until the cycle's runs end, and claim nothing while another process holds it: the issue stays unclaimed with `waiting on gpu (...)` and the next cycle tries again. A dry run, `poll` and pick mode report the same without taking the lock. Polling, follow-ups and the day cap do not need it. `claim`, `finish` and `release` from a session never take it, since no process lives through a session's run to hold it.
+Some runs cannot share the machine with other work. On a desktop that renders on its GPU, a run's setup or commit hook can start a render while a render job already has the whole GPU. `exclusive: [gpu]` in a project's `worker` block makes the worker take the machine-wide lock `gpu` before it claims or repairs an issue of that project, hold it through setup, Claude and the push until the cycle's runs end, and claim nothing of that project while another process holds it: the issue stays unclaimed with `waiting on gpu (...)` and the next cycle tries again. An issue of a project without the resource is claimed in the same cycle, so with `exclusive: [gpu]` on klayboy alone a sandbox issue does not wait on a render. `exclusive` under `defaults` applies to every project that does not set its own. A dry run, `poll` and pick mode report the same without taking the lock. Polling, follow-ups and the day cap do not need it. `claim`, `finish` and `release` from a session never take it, since no process lives through a session's run to hold it.
 
 The locks live in `~/.globu/locks`, one file per resource named `<resource>.lock`, outside every worker's own home so that every tool on the machine finds the same file. `GLOBU_LOCK_DIR` moves the directory for every tool that honours it. A lock file is one JSON object:
 
@@ -290,7 +338,7 @@ The worker follows the same rules, so a holder that crashed, the worker included
 
 ### hold
 
-`globu-worker hold` takes those steps for a script, so a render job or a commit hook honours `limits.exclusive` without its own lock code:
+`globu-worker hold` takes those steps for a script, so a render job or a commit hook honours `exclusive` without its own lock code:
 
 ```bash
 globu-worker hold gpu -- npm run render
@@ -303,7 +351,7 @@ It takes every named lock, in order, then starts the command with the terminal's
 - **A command that cannot start** fails with exit code 127, `could not start <command>: not found on PATH`, and the locks are given back. On Windows a command named without a path is looked up on `PATH` first and fails before any lock is taken, since `cmd.exe` would otherwise print its own "is not recognized" before that line.
 - **Signals.** `SIGTERM` and `SIGHUP` are passed on to the command and `hold` waits for it to end before it deletes the locks, so the resource stays taken while the command shuts down. `SIGINT` is not passed on, since Ctrl+C in a terminal already reaches the whole foreground process group, the command included; a second copy would make some programs quit without cleaning up. A signal while waiting for a lock stops the wait without running the command. On Windows nothing is passed on: the console sends Ctrl+C to every process attached to it, and Node can only kill a process there, which would end the `cmd.exe` of a `.cmd` shim and leave the program it started running.
 - **A crash.** A `hold` that is killed outright leaves its lock files behind, and they go stale by pid and host as above, so the next taker deletes them. The command may outlive it, and is then no longer covered by a lock.
-- **Nested holds.** Every command the worker starts, and every command `hold` starts, gets `GLOBU_LOCK_PIDS` with the pids of the processes above it. A lock whose pid is in that list and whose host is this machine counts as already held, so a commit hook wrapped in `hold gpu` runs inside a worker run that holds `gpu`, or inside another `hold gpu`, instead of waiting on its own parent. A worker started inside `hold` applies the same rule to its own `limits.exclusive`, so `globu-worker hold gpu -- globu-worker once` runs its cycle under the lock of the `hold` around it. Such a lock belongs to the process that took it: it is left alone at the end and never deleted by a process below. A process never counts its own pid as one above it, and the commands it starts get the list with its own pid added.
+- **Nested holds.** Every command the worker starts, and every command `hold` starts, gets `GLOBU_LOCK_PIDS` with the pids of the processes above it. A lock whose pid is in that list and whose host is this machine counts as already held, so a commit hook wrapped in `hold gpu` runs inside a worker run that holds `gpu`, or inside another `hold gpu`, instead of waiting on its own parent. A worker started inside `hold` applies the same rule to its own `exclusive` resources, so `globu-worker hold gpu -- globu-worker once` runs its cycle under the lock of the `hold` around it. Such a lock belongs to the process that took it: it is left alone at the end and never deleted by a process below. A process never counts its own pid as one above it, and the commands it starts get the list with its own pid added.
 - **Windows.** The command starts through the same cross-spawn helper as the worker's own commands, so `npm` and other `.cmd` shims start as they do in a shell.
 
 ## The subscription limit
@@ -357,20 +405,20 @@ The four session commands use the session's own Globu home, `~/.globu` unless `G
 ## A run
 
 1. **Reconcile.** Runs left in a non-final state by a crash or a restart are closed: their worktrees are removed and, when the issue is still assigned to the worker in the claimed status, it is released with a comment saying so. A run that already had a reason keeps it, with the restart added in brackets. Comments an earlier repair could not post are posted now. Then settled runs beyond `limits.keepRuns` are deleted, each `claude.jsonl` with them, once the merges among them are in `merged.json`.
-2. **Poll.** The JQL, in the order the team wrote it, with issues that carry `jira.priorityLabel` moved to the front. Up to `limits.concurrent` issues are taken, skipping an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
-3. **Claim.** Take the [exclusive resources](#exclusive-resources) before the first claim of the cycle; while another process holds one, claim nothing and say `waiting on <resource> (...)`. Then assign to the worker's own account, transition to the `claimedStatus` of the issue's project, read the issue back. If someone else got there first, drop it without a word.
-4. **Find the target.** The repository marker names a shard. Not a deliverable shard: release.
+2. **Poll.** The [search](#the-search), in its order, with issues that carry `jira.priorityLabel` moved to the front. Up to `limits.concurrent` issues are taken, skipping an issue of a project the worker does not serve, an issue already assigned, an issue that [waits](#issues-that-wait) on a blocker and an issue whose shard already has `limits.perShard` runs this cycle.
+3. **Claim.** Take the [exclusive resources](#exclusive-resources) of the issue's project before its first claim of the cycle; while another process holds one, leave the issue and say `waiting on <resource> (...)`. Then assign to the worker's own account, transition to the `statuses.claimed` of the issue's project, read the issue back. If someone else got there first, drop it without a word.
+4. **Find the target.** The repository marker names a shard of the issue's project, or the project has one shard a run can land in. Anything else: release, see [targets and other shards](#targets-and-other-shards).
 5. **Resolve.** Shard-qualified refs such as `product/docs/decisions/012-pricing.md` and code host links to files in a shard's repo are checked with the same code as `globu resolve`, after a fetch. One missing: release, with the resolver's report and its candidates in the comment, before a token is spent. Bare paths in backticks are resolved too but only reported in the brief, since they may be files the change creates.
-6. **Prepare.** A fetch of the target clone and the companions; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch, one more for each companion shard. The worktrees sit under `runs/<run-id>`, outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the `setup` commands of each worktree's shard; a failing one releases the issue.
-7. **Brief.** `brief.md` holds the issue under a heading that says it is untrusted input. Its description and comments are read from Jira's v3 API as Atlassian Document Format and converted to Markdown (headings, lists, code, links, mentions, emphasis and tables; anything else as its text), so a path written as code in Jira reaches the brief in backticks and step 5 finds it. Then come the resolved references with their locations on this machine: a file of the target shard or of a companion is given inside the run's worktree, so a run that follows the path reads its own branch and edits there and not in the clone every run of the shard shares, while a file of any other shard is given in that shard's checkout, for reading. After them come the issue's status and labels, the issues it is blocked by with their status and the worker's pull requests for them, its other linked issues with the relation and their status, the worktrees and the handback path. The worker's own release comments are left out of the comments and summed up as "Earlier attempts", with the count and the last reason. The Bash rules come next: the allowed patterns and one command per call. They say that `git stash` is denied because the stash is shared with every other worktree of the clone, so a work-in-progress commit is the way to set work aside, and that `globu base stamp --verified` is denied because a verification needs a person. It says that the worker owns the tracker and the pull requests: the run must not move the issue, comment on it or create issues, even when the target repository's own instructions ask for that, since it has no tracker access. Work that should become an issue of its own goes into a `## Follow-ups` section of the handback, one bullet per follow-up with its summary on the first line, which reaches the issue with the handback comment and, with `jira.followUps` set, becomes [issues](#follow-up-issues) of their own.
-8. **Run.** From the worktree root: `claude -p "Implement the issue described in <brief> with the issue-deliver skill. Write the handback to <handback>." --permission-mode dontAsk --allowedTools <claude.allowedTools> --disallowedTools "Bash(git push*)" "Bash(git stash*)" "Bash(gh *)" "Bash(curl *)" "Bash(wget *)" "Bash(globu base stamp *--verified*)" --add-dir <run dir> --max-turns N --max-budget-usd X --output-format stream-json --verbose`, plus `--model` and `--plugin-dir` when configured. The disallowed six are not configurable: four keep the run from acting as the courier, `git stash` keeps parallel runs of one clone out of each other's stash and `base stamp --verified` keeps a run with nobody present from recording a person's verification. The skill stamps `generated` with `globu base stamp` on each concept doc it created or changed in substance, in the target and in the companion worktrees, before it commits, so the knowledge a run writes reaches review marked as written by an agent. The `globu` it runs is the worker's own: before every run and repair the worker writes `bin/globu`, a `sh` script, and `bin/globu.cmd` into its home, each running `node <the worker's bundle> globu <arguments>`, and puts `bin` first on the run's `PATH`, so it wins over a `globu` installed on the machine. Git Bash, which Claude Code's Bash tool uses on Windows, runs the `sh` script; `cmd` and PowerShell run the `.cmd`. The command accepts only `globu base stamp <files...>`, refuses `--verified` and any other option and stamps with the worker's version, so the stamp needs no plugin path and no second package. `bin` sits outside the worktrees and the run directory, which `--add-dir` opens to the run's edits, and the launchers are rewritten only when the path of Node or of the bundle changed. The stream goes to `claude.jsonl`. `--add-dir` is what lets the run write the handback outside the repository.
+6. **Prepare.** A fetch of the target clone and of the project's other shards; a repository with no commits on its default branch releases the issue, since there is nothing to branch from and no base for a pull request. Then a worktree of the target clone on a fresh branch from the default branch at `runs/<run-id>/tree`, and one more for each other shard of the project without the read cap at `runs/<run-id>/companions/<shard>`. The worktrees sit outside every repository; the session view still maps them to their shards through the git common directory, so the guard treats the target as the run's home and every other shard as foreign. Then the [setup](#setup) commands of the target; a failing one releases the issue.
+7. **Brief.** `brief.md` holds the issue under a heading that says it is untrusted input. Its description and comments are read from Jira's v3 API as Atlassian Document Format and converted to Markdown (headings, lists, code, links, mentions, emphasis and tables; anything else as its text), so a path written as code in Jira reaches the brief in backticks and step 5 finds it. Then come the resolved references with their locations on this machine: a file of the target shard or of another shard the run has a worktree of is given inside that worktree, so a run that follows the path reads its own branch and edits there and not in the clone every run of the shard shares, while a file of any other shard is given in that shard's checkout, for reading. After them come the issue's status and labels, the issues it is blocked by with their status and the worker's pull requests for them, its other linked issues with the relation and their status, the worktrees, which of them had setup and the handback path. The worker's own release comments are left out of the comments and summed up as "Earlier attempts", with the count and the last reason. The Bash rules come next: the allowed patterns and one command per call. They say that `git stash` is denied because the stash is shared with every other worktree of the clone, so a work-in-progress commit is the way to set work aside, and that `globu base stamp --verified` is denied because a verification needs a person. It says that the worker owns the tracker and the pull requests: the run must not move the issue, comment on it or create issues, even when the target repository's own instructions ask for that, since it has no tracker access. Work that should become an issue of its own goes into a `## Follow-ups` section of the handback, one bullet per follow-up with its summary on the first line, which reaches the issue with the handback comment and, with `followUps` on for the project, becomes [issues](#follow-up-issues) of their own.
+8. **Run.** From the worktree root: `claude -p "Implement the issue described in <brief> with the issue-deliver skill. Write the handback to <handback>." --permission-mode dontAsk --allowedTools <claude.allowedTools> --disallowedTools "Bash(git push*)" "Bash(git stash*)" "Bash(gh *)" "Bash(curl *)" "Bash(wget *)" "Bash(globu base stamp *--verified*)" --add-dir <run dir> --max-turns N --max-budget-usd X --output-format stream-json --verbose`, plus `--model` and `--plugin-dir` when configured. The disallowed six are not configurable: four keep the run from acting as the courier, `git stash` keeps parallel runs of one clone out of each other's stash and `base stamp --verified` keeps a run with nobody present from recording a person's verification. The skill stamps `generated` with `globu base stamp` on each concept doc it created or changed in substance, in the target and in the other worktrees, before it commits, so the knowledge a run writes reaches review marked as written by an agent. The `globu` it runs is the worker's own: before every run and repair the worker writes `bin/globu`, a `sh` script, and `bin/globu.cmd` into its home, each running `node <the worker's bundle> globu <arguments>`, and puts `bin` first on the run's `PATH`, so it wins over a `globu` installed on the machine. Git Bash, which Claude Code's Bash tool uses on Windows, runs the `sh` script; `cmd` and PowerShell run the `.cmd`. The command accepts only `globu base stamp <files...>`, refuses `--verified` and any other option and stamps with the worker's version, so the stamp needs no plugin path and no second package. `bin` sits outside the worktrees and the run directory, which `--add-dir` opens to the run's edits, and the launchers are rewritten only when the path of Node or of the bundle changed. The stream goes to `claude.jsonl`. `--add-dir` is what lets the run write the handback outside the repository.
 9. **Collect.** Cost, turns and the end state from the stream. Every failed tool call that carries the guard's `shard "<id>"` wording is recorded as a blocked write. The result's `permission_denials`, the calls `--allowedTools` refused, go to `denied` in `run.json`, and its `duration_ms` and `duration_api_ms` to `durationMs` and `apiMs`, so the time a commit hook or a test run takes shows next to the model's. A run with several [segments](#segments) is summed. Commits on the branch are counted.
-10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, file the handback's [follow-ups](#follow-up-issues) when `jira.followUps` is set, comment on the issue with the handback, the follow-up keys and the pull request links, add each pull request as a remote link and leave the issue in `claimedStatus` for the reviewer.
+10. **Decide.** Timed out, stopped at the turn cap or no commits: release, with the reason. Otherwise push each branch with commits over https with `GH_TOKEN`, open a pull request with `gh pr create`, a draft when `github.draft` is set, whose body is the handback plus the run footer, file the handback's [follow-ups](#follow-up-issues) when the project has `followUps`, comment on the issue with the handback, the follow-up keys and the pull request links, add each pull request as a remote link and leave the issue in `statuses.claimed` for the reviewer. A pull request in another shard of the project takes the `github` settings of that shard's entry.
 11. **Clean up.** Symbolic links and junctions in each worktree are deleted first, without following them, since npm workspaces on Windows link `node_modules` into the tree as junctions that `git worktree remove --force` leaves behind. Then the worktree is removed, whatever is left of its directory deleted and unpushed branches deleted; the run directory is kept until `limits.keepRuns` prunes it. Once every run of the cycle has ended, the exclusive locks are deleted. `check` warns about a `runs/<run-id>/tree` left behind by a run in a final state.
 
-A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedLabel` and comments with the reason. When Claude ran and wrote a handback but the run ends without a pull request (no commits, the turn cap or the timeout), the comment carries that handback below the reason, so a question the run asked reaches whoever triages the issue. The worker never retries on its own. A person fixes the issue and runs `retry <key>`, which removes the label and takes the issue at once, or removes the label by hand and waits for the next poll. `why <key>` says what still keeps an issue out.
+A release moves the issue back to `statuses.released`, unassigns it, adds `blockedLabel` and comments with the reason. When Claude ran and wrote a handback but the run ends without a pull request (no commits, the turn cap or the timeout), the comment carries that handback below the reason, so a question the run asked reaches whoever triages the issue. The worker never retries on its own. A person fixes the issue and runs `retry <key>`, which removes the label and takes the issue at once, or removes the label by hand and waits for the next poll. `why <key>` says what still keeps an issue out.
 
-A problem of the machine is not the issue's fault. There are two kinds. A program cannot start at all: the setup shell is missing, or a setup command, `claude`, `git` or `gh` is not found. Or Windows ended a program the worker started: it exits with an NTSTATUS error, a code from `0xC0000000` up, such as `0xC0000142` when the console it ran in was taken away or `0xC0000005` when it crashed. No program returns such a code as its own result. Such a release says "could not start `<program>`: not found on PATH" or "Windows ended `<program>` with status 0xC0000142" rather than a plain exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop with exit code 69 (`EX_UNAVAILABLE`), since every next issue would fail the same way, and [notify](#notifications) `stopped`; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `limits.repairs`.
+A problem of the machine is not the issue's fault. There are two kinds. A program cannot start at all: the setup shell is missing, or a setup command, `claude`, `git` or `gh` is not found. Or Windows ended a program the worker started: it exits with an NTSTATUS error, a code from `0xC0000000` up, such as `0xC0000142` when the console it ran in was taken away or `0xC0000005` when it crashed. No program returns such a code as its own result. Such a release says "could not start `<program>`: not found on PATH" or "Windows ended `<program>` with status 0xC0000142" rather than a plain exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop with exit code 69 (`EX_UNAVAILABLE`), since every next issue would fail the same way, and [notify](#notifications) `stopped`; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `repairs`.
 
 Every footer, in the pull request body and in the Jira comment, names the run id, the Jira account and GitHub login the worker acted as, turns, with the number of segments when there is more than one, cost, wall time with the part of it spent in the model API, the blocked writes and the denied tool calls, each listed on a line of its own. A run driven from a session names the session instead of the turns, the cost and the blocked writes, which only the headless stream can count. Until Atlassian ships agent identities a run acts as whoever holds the tokens, and the footer records which identity that was.
 
@@ -405,17 +453,17 @@ The worker reads all of them:
 
 The end state, and with it a release for the turn cap, comes from the last segment.
 
-`--max-turns` counts per segment: a run under `--max-turns 3` that used 2 turns before its background task finished got 3 more after it. So `claude.maxTurns` stops one stretch of work that does not end, not a run that keeps being woken. What bounds the whole run is `limits.timeout`, which kills it, and `claude.maxBudgetUsd`, which Claude Code checks against the running total.
+`--max-turns` counts per segment: a run under `--max-turns 3` that used 2 turns before its background task finished got 3 more after it. So `claude.maxTurns` stops one stretch of work that does not end, not a run that keeps being woken. What bounds the whole run is `timeout`, which kills it, and `claude.maxBudgetUsd`, which Claude Code checks against the running total.
 
 ## Following its pull requests
 
 A handed-back run stays the worker's business until its pull requests are merged or closed. At the start of every automatic cycle, before it looks for new issues, the worker reads each open pull request of its handed-back runs with `gh pr view` and acts on what it finds:
 
-- **Merged**, all of the run's pull requests: the issue moves to `jira.doneStatus` when one is set and gets a comment either way, and its key goes into `merged.json` with the run's pull requests. The branch of each merged pull request is deleted on the remote with `git push origin --delete` and `GH_TOKEN`, unless the repository already deleted it on merge, then in the shard's clone, and the clone is fetched with `--prune`. Only the run's own branch is deleted: a pull request whose head is another branch keeps it. A deletion that fails, for a token that may not delete branches say, is logged as a warning and changes nothing else. **Closed** without a merge: a comment, nothing more, and the branch stays. Either way the run is settled and no longer followed.
-- **Conflicting**, or **failing checks**, with repairs left: a repair run. The worker adds a worktree on the pull request branch, reset to the remote, and merges `origin/<base>` into it. If that merges cleanly and the checks were not failing, it pushes the merge commit with no Claude involved. Otherwise it runs the shard's `setup` commands and `claude -p` with a repair brief, `brief.md` in the repair's run directory, listing the conflicted files, the failing checks with their links and where the original brief and handback are. Claude resolves, runs the tests and commits; the worker checks that nothing is left conflicted and the merge is committed, then pushes. Merge only: the worker never rebases and never force-pushes, so review comments stay attached.
+- **Merged**, all of the run's pull requests: the issue moves to `statuses.done` when its project sets one and gets a comment either way, and its key goes into `merged.json` with the run's pull requests. The branch of each merged pull request is deleted on the remote with `git push origin --delete` and `GH_TOKEN`, unless the repository already deleted it on merge, then in the shard's clone, and the clone is fetched with `--prune`. Only the run's own branch is deleted: a pull request whose head is another branch keeps it. A deletion that fails, for a token that may not delete branches say, is logged as a warning and changes nothing else. **Closed** without a merge: a comment, nothing more, and the branch stays. Either way the run is settled and no longer followed.
+- **Conflicting**, or **failing checks**, with repairs left: a repair run. The worker adds a worktree on the pull request branch, reset to the remote, and merges `origin/<base>` into it. If that merges cleanly and the checks were not failing, it pushes the merge commit with no Claude involved. Otherwise it runs the `setup` commands of the pull request's shard and `claude -p` with a repair brief, `brief.md` in the repair's run directory, listing the conflicted files, the failing checks with their links and where the original brief and handback are. Claude resolves, runs the tests and commits; the worker checks that nothing is left conflicted and the merge is committed, then pushes. Merge only: the worker never rebases and never force-pushes, so review comments stay attached.
 - **Behind** the base branch without a conflict, or still **in review**: nothing. Keeping a branch current is a merge queue's job, or GitHub's update branch.
 
-Each repair is a run of its own, with an id of the form `<KEY>-repair-<attempt>-<time>`, `repairOf` naming the run it repairs, its cost counted against `limits.dayUsd` and its own `repair` and `repaired` or `repair failed` log events. It comments on the pull request and the issue whatever the outcome. The repair's `run.json` is written with its state and reason before either comment is sent, and a comment that cannot be posted, because `gh` or Jira fails at that moment, does not undo the repair: it is kept in `run.json` under `unposted`, reported on the error output and in the log as `comment not posted`, and posted at the start of the next cycle that is not a dry run. Only failed repairs count against `limits.repairs`, since a pull request on a busy base branch may need several good ones. After that many failures the pull request is handed to a person: a comment saying so, the label `needs-human` on the pull request when the repository has it, and no further repair unless `once --repair` asks for one.
+Each repair is a run of its own, with an id of the form `<KEY>-repair-<attempt>-<time>`, `repairOf` naming the run it repairs, its cost counted against `limits.dayUsd` and its own `repair` and `repaired` or `repair failed` log events. It comments on the pull request and the issue whatever the outcome. The repair's `run.json` is written with its state and reason before either comment is sent, and a comment that cannot be posted, because `gh` or Jira fails at that moment, does not undo the repair: it is kept in `run.json` under `unposted`, reported on the error output and in the log as `comment not posted`, and posted at the start of the next cycle that is not a dry run. Only failed repairs count against `repairs`, since a pull request on a busy base branch may need several good ones. After that many failures the pull request is handed to a person: a comment saying so, the label `needs-human` on the pull request when the repository has it, and no further repair unless `once --repair` asks for one. The pull requests of a project the worker no longer serves are still read and settled, but never repaired.
 
 Then the cap: with `limits.openPullRequests` or more pull requests open, conflicted and needing a person included, the cycle claims nothing and says `holding new issues`. The cap bounds how many branches can drift apart at once, so the number of conflicts stays small and review shows up as the bottleneck it is. `once --issue` and Enter in pick mode are deliberate and ignore the cap.
 
@@ -423,27 +471,27 @@ Merging stays with people. A merge queue, or GitHub's auto-merge with required c
 
 ## Follow-up issues
 
-The brief asks the run to put work that should become an issue of its own into a `## Follow-ups` section of the handback, one bullet per follow-up: the first line of a bullet is the summary and its further lines, indented, the description. Without `jira.followUps` the section reaches the issue only inside the handback comment. With `jira.followUps.issueType` set, the worker files each bullet when it hands back, after the pull requests are open:
+The brief asks the run to put work that should become an issue of its own into a `## Follow-ups` section of the handback, one bullet per follow-up: the first line of a bullet is the summary and its further lines, indented, the description. Without `followUps` in the issue's project the section reaches the issue only inside the handback comment. With `followUps.issueType` set, in the project's `worker` block or in `defaults`, the worker files each bullet when it hands back, after the pull requests are open:
 
 - in the original issue's project, the part of its key before the hyphen, with the configured issue type, by name or by id;
 - with the bullet's further lines as the description, followed by a line naming the original issue and the run;
-- linked to the original with `jira.followUps.linkType`, `Relates` by default, which Jira shows as "relates to". The original is the link's inward issue and the follow-up its outward one.
+- linked to the original with `followUps.linkType`, `Relates` by default, which Jira shows as "relates to". The original is the link's inward issue and the follow-up its outward one.
 
 The handback comment lists the new keys under "Follow-up issues", above the pull request links, and `run.json` keeps them as `followUpIssues`. The pull request body stays the handback as the run wrote it. A run driven from a session through `finish` files its follow-ups the same way.
 
 The section is the level-two heading `Follow-ups` (or `Followups` or `Follow ups`, in any case) up to the next heading of level one or two. A bullet is a line that starts with `-`, `*` or `+`; the lines indented under it, nested lists and code blocks included, are its description, and a blank line followed by text that is not indented ends it. Text outside the bullets is ignored, and a bullet that reads only `None`, `Nothing` or `n/a` files nothing. A summary longer than Jira's 255 characters is cut, and the whole line opens the description.
 
-A follow-up is never marked for the worker: it gets no `jira.eligibleLabel`, no repository marker, no assignee and no transition, so a person decides whether and where it is delivered, with `delegate` for one. Keep the eligibility label in `jira.jql`: a JQL without it could match a follow-up in its project's first status, and the worker would then release it for a missing repository marker.
+A follow-up is never marked for the worker: it gets no `jira.eligibleLabel`, no repository marker, no assignee and no transition, so a person decides whether and where it is delivered, with `delegate` for one. The generated search asks for the eligibility label, so it never finds a follow-up. Keep the label in a `jira.jql` of your own: a search without it could match a follow-up in its project's first status, and the worker would then release it for a missing repository marker.
 
-Filing never fails the run. An issue Jira refuses to create, a link it refuses, a project that an `issueType` map has no entry or default for and the bullets past `jira.followUps.max` are each listed in the comment with the reason, such as `- not created: Rename the flag (Jira POST /issue failed: 400 ...)` or `- MR-12: Rename the flag (not linked: ...)`, and logged as `follow-up failed` at `warn`; each one filed is logged as `follow-up filed` at `info`. The issue is handed back either way. The Jira account needs the Create issues and Link issues permissions in the projects the worker serves, which `check` tests along with the issue type and the link type. The issues are created through REST API v2, so the description is plain text, like the worker's comments.
+Filing never fails the run. An issue Jira refuses to create, a link it refuses and the bullets past `followUps.max` are each listed in the comment with the reason, such as `- not created: Rename the flag (Jira POST /issue failed: 400 ...)` or `- MR-12: Rename the flag (not linked: ...)`, and logged as `follow-up failed` at `warn`; each one filed is logged as `follow-up filed` at `info`. The issue is handed back either way. The Jira account needs the Create issues and Link issues permissions in the projects that file follow-ups, which `check` tests along with the issue type and the link type. The issues are created through REST API v2, so the description is plain text, like the worker's comments.
 
 Filing happens once per issue, even when the hand back fails after it. Each follow-up goes into `followups.json` in the worker's home, under the original issue's key, as soon as Jira creates it, and is marked linked as soon as the link is made. Only when the handback comment is posted does the worker drop the issue's entry. A comment that fails, or a crash, releases the run and leaves the entry, so a later run of the same issue that hands back reuses every recorded follow-up whose summary matches a bullet of its own handback, links the ones whose link failed and creates only the rest; reused ones are logged as `follow-up reused`. A recorded follow-up that the new handback no longer has is not lost either: it is listed in the comment as `- MR-12: Rename the flag (filed by an earlier attempt, not in this handback)` and logged as `follow-up kept`. The entry lives in the home rather than in `run.json` because `limits.keepRuns` may prune the failed run before the issue is tried again, the same reason `merged.json` lives there. A session's `finish` uses the home of that session, so it does not see what the worker's home recorded.
 
 ## Issues that wait
 
-An issue linked as "is blocked by" another issue, through a link type in `jira.blockingLinks`, waits until every such blocker is resolved. JQL cannot say "no open blocker" without a Jira app, so the worker reads the links of each issue the JQL returns. A blocker is resolved when its status is in Jira's Done category, or when one of the worker's own runs for it has its pull requests merged; the second keeps a chain moving when `jira.doneStatus` is not set. A waiting issue is listed as `waiting on <key> (<status>)` and takes no slot, so the cycle goes on to the next issue. `once --issue` runs it anyway, and in pick mode it is a gray row that cannot be selected.
+An issue linked as "is blocked by" another issue, through a link type in `jira.blockingLinks`, waits until every such blocker is resolved. JQL cannot say "no open blocker" without a Jira app, so the worker reads the links of each issue the search returns. A blocker is resolved when its status is in Jira's Done category, or when one of the worker's own runs for it has its pull requests merged; the second keeps a chain moving when `statuses.done` is not set. A waiting issue is listed as `waiting on <key> (<status>)` and takes no slot, so the cycle goes on to the next issue. `once --issue` runs it anyway, and in pick mode it is a gray row that cannot be selected.
 
-That makes delivery sequential: with A blocking B and both matching the JQL, a cycle claims A. Once A's pull request is merged the follow-ups above settle it, and the next cycle claims B, built on a default branch that has A, with A and its pull request named in B's brief. How fast the chain moves depends on the merges: with GitHub's auto-merge and required checks it moves without a person.
+That makes delivery sequential: with A blocking B and both matching the search, a cycle claims A. Once A's pull request is merged the follow-ups above settle it, and the next cycle claims B, built on a default branch that has A, with A and its pull request named in B's brief. How fast the chain moves depends on the merges: with GitHub's auto-merge and required checks it moves without a person.
 
 The merges are kept in `merged.json` in the worker's home, one entry per issue key with the pull requests and the time the worker saw the merge, written when the follow-ups settle a merged run. `limits.keepRuns` never prunes it, so a long chain keeps moving after the run of its first issue is deleted. A home from before the index is seeded from its run records the first time the worker writes the index, dated by when each `run.json` was last written, and until then the run records are read directly; nothing is lost on an upgrade. A merged run that is still in `runs` counts as well, so deleting `merged.json` by hand forgets only the issues whose runs are already pruned. The brief names the pull requests from the index too.
 
@@ -451,7 +499,7 @@ A blocker the worker's Jira account cannot see is left out of the links by Jira 
 
 ## What the guard does in a run
 
-Nothing new. The run's working directory is a worktree of the target shard, so writes there are free. Every other shard in the worker's `state.yaml` is a read-only clone, so a certain write is blocked and a possible one raises `ask`, which a run with nobody to answer turns into a denial. Companion shards are in `write` mode in the worker's own state, which is harmless because that state belongs to the worker alone, and their edits land on a branch through the worktree. The limits of reading shell commands in [architecture](./architecture.md#shell-commands-in-the-guard) apply: the guard lowers the odds of an unnoticed write to a sibling repository and the footer reports the ones it caught. It is not a sandbox.
+Nothing new. The run's working directory is a worktree of the target shard, so writes there are free. A shard outside the run's project, and a shard with `access: read` inside it, is a read-only clone in the worker's `state.yaml`, so a certain write is blocked and a possible one raises `ask`, which a run with nobody to answer turns into a denial. The other shards of the project are in `write` mode in the worker's own state, which is harmless because that state belongs to the worker alone, and their edits land on a branch through the worktree. The run's session index lists the shards of its project and the manifest's `always` shards, as in any session started in the target's repository. The limits of reading shell commands in [architecture](./architecture.md#shell-commands-in-the-guard) apply: the guard lowers the odds of an unnoticed write to a sibling repository and the footer reports the ones it caught. It is not a sandbox.
 
 ## Logs and diagnostics
 
@@ -469,7 +517,7 @@ A service manager can tell a stop for a machine problem by its exit code, 69, an
 
 The commands that cycle, `once` (not `--dry-run`), `retry`, `run` and `start` in either mode, take `worker.lock` in the home for as long as they run, pick mode for its whole session, since its background refresh settles merged pull requests. A second such command on the same home exits 1 with `another globu-worker cycles on <home>: worker (held by globu-worker start --mode pick, pid ... on ... since ...)`. Read-only commands, `why`, `poll`, `diagnostics` and a dry run, never take it. The lock follows the rules of the [exclusive resources](#exclusive-resources): one that a crashed process left behind goes stale by its pid. Without it, a pick mode left open beside a `once` settled the same merge twice on 2026-11-15 and a process kept deciding with the `worker.yaml` it had read the day before.
 
-What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label, the blocked label in the JQL and a repository marker per issue. `delegate` sets the label and the marker from a terminal. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).
+What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label and, in a project with more than one shard, a repository marker per issue. `delegate` sets the label and the marker from a terminal. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).
 
 ### On Windows
 
