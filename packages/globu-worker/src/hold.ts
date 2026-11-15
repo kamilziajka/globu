@@ -5,12 +5,11 @@ import spawn from "cross-spawn";
 import type { Io } from "../../globu-cli/src/cli/index.js";
 import { parseDuration } from "./config.js";
 import { notStarted } from "./exec.js";
-import { exclusiveHold, type Hold, lockDir, lockFile, RESOURCE_RE, readLock } from "./lock.js";
+import { exclusiveHold, type Hold, lockDir, RESOURCE_RE, withLockPid } from "./lock.js";
 
 export const HELD_EXIT = 75;
 export const NOT_STARTED_EXIT = 127;
 export const POLL_MS = 1000;
-export const LOCK_PIDS = "GLOBU_LOCK_PIDS";
 
 const HOLDER_CHARS = 60;
 const SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -37,25 +36,10 @@ export function parseResources(text: string): string[] {
   return [...new Set(names)];
 }
 
-export function withLockPid(env: NodeJS.ProcessEnv, pid: number): NodeJS.ProcessEnv {
-  const before = env[LOCK_PIDS];
-  return { ...env, [LOCK_PIDS]: before ? `${before},${pid}` : String(pid) };
-}
-
 export function holderOf(argv: string[]): string {
   const line = argv.join(" ").replace(/\s+/g, " ").trim();
   const shown = line.length > HOLDER_CHARS ? `${line.slice(0, HOLDER_CHARS)}...` : line;
   return `globu-worker hold (${shown})`;
-}
-
-function inherited(names: string[], dir: string, env: NodeJS.ProcessEnv): Set<string> {
-  const pids = (env[LOCK_PIDS] ?? "").split(",");
-  return new Set(
-    names.filter((name) => {
-      const lock = readLock(lockFile(dir, name));
-      return lock !== null && lock.host === os.hostname() && pids.includes(String(lock.pid));
-    })
-  );
 }
 
 function exitCodeOf(code: number | null, signal: NodeJS.Signals | null): number {
@@ -67,8 +51,6 @@ export async function hold(deps: HoldDeps, resources: string, argv: string[], op
   const waitMs = options.wait === undefined ? null : parseDuration(options.wait);
   const [command, ...args] = argv;
   const dir = lockDir(deps.env);
-  const ours = inherited(names, dir, deps.env);
-  const needed = names.filter((name) => !ours.has(name));
   const holder = holderOf(argv);
   let stopped: NodeJS.Signals | null = null;
   let wake = () => {};
@@ -95,7 +77,7 @@ export async function hold(deps: HoldDeps, resources: string, argv: string[], op
     const deadline = deps.now().getTime() + (waitMs ?? 0);
     let announced: string | null = null;
     for (;;) {
-      const attempt = exclusiveHold(needed, dir, holder, deps.now);
+      const attempt = exclusiveHold(names, dir, holder, deps.now, deps.env);
       const problem = attempt.take();
       if (problem === null) {
         taken = attempt;

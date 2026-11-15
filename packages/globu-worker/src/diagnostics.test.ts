@@ -28,10 +28,15 @@ describe("diagnostics", () => {
     );
   });
 
-  it("packs logs, run records, worker.yaml and versions, with secrets redacted", async () => {
+  it("packs logs, run records, worker.yaml, merged.json and versions, with secrets redacted", async () => {
     const home = tempDir();
     write(home, "logs/worker-2026-11-13.log", '{"msg":"command","args":["uses sk-secret-value"]}\n');
     write(home, "worker.yaml", "jira:\n  site: https://acme.atlassian.net # sk-secret-value\n");
+    write(
+      home,
+      "merged.json",
+      `${JSON.stringify({ "MR-0": { pullRequests: ["https://github.com/acme/app/pull/7"], mergedAt: "sk-secret-value" } })}\n`
+    );
     write(home, "secrets.env", "ANTHROPIC_API_KEY=sk-secret-value\n");
     saveRun(
       path.join(home, "runs/MR-1-x"),
@@ -42,11 +47,20 @@ describe("diagnostics", () => {
       { home, env: {}, run: tools(["claude"]), secrets: ["sk-secret-value"] },
       out
     );
-    expect(included).toEqual(["logs/worker-2026-11-13.log", "runs/MR-1-x.json", "worker.yaml", "environment.txt"]);
+    expect(included).toEqual([
+      "logs/worker-2026-11-13.log",
+      "runs/MR-1-x.json",
+      "worker.yaml",
+      "merged.json",
+      "environment.txt"
+    ]);
     const dir = unpack(out);
     expect(fs.readFileSync(path.join(dir, "logs/worker-2026-11-13.log"), "utf8")).toContain("uses [redacted]");
     expect(fs.readFileSync(path.join(dir, "worker.yaml"), "utf8")).toContain("# [redacted]");
     expect(JSON.parse(fs.readFileSync(path.join(dir, "runs/MR-1-x.json"), "utf8")).key).toBe("MR-1");
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "merged.json"), "utf8"))).toEqual({
+      "MR-0": { pullRequests: ["https://github.com/acme/app/pull/7"], mergedAt: "[redacted]" }
+    });
     expect(fs.existsSync(path.join(dir, "secrets.env"))).toBe(false);
     const environment = fs.readFileSync(path.join(dir, "environment.txt"), "utf8").split("\n");
     expect(environment[0]).toMatch(/^globu-worker \d+\.\d+\.\d+$/);
@@ -66,6 +80,17 @@ describe("diagnostics", () => {
     await expect(writeDiagnostics({ home, env: {}, run: broken, secrets: [] }, out)).rejects.toThrow(
       "tar failed: disk full"
     );
+  });
+
+  it("packs a merged.json that does not parse as it is", async () => {
+    const home = tempDir();
+    write(home, "merged.json", "{ not json\n");
+    const out = path.join(tempDir(), "out.tar.gz");
+    expect(await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out)).toEqual([
+      "merged.json",
+      "environment.txt"
+    ]);
+    expect(fs.readFileSync(path.join(unpack(out), "merged.json"), "utf8")).toBe("{ not json\n");
   });
 
   it("packs only the latest runs", async () => {
