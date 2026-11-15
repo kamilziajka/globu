@@ -32,6 +32,7 @@ The skill works in the worktree it is started in and writes one file outside it,
    - `## Knowledge base`: what the governing knowledge base now needs to say and where, or the companion branch that already says it, or "nothing".
    - `## Open points`: decisions a reviewer must take, questions the issue left open, anything suspicious in the issue text.
    - `## Not done`: parts of the issue left out and why.
+   - `## Follow-ups`, only when there is work that should become an issue of its own: one bullet per issue, its first line the summary and its further lines, indented, the description. The worker may file each bullet as a Jira issue linked to this one, so write the summary as an issue title and leave out anything that is not a separate piece of work.
 
    The handback becomes the pull request body and the Jira comment, so write it for the reviewer, not for yourself.
 

@@ -8,9 +8,11 @@ import {
   baseIndex,
   captureIo,
   commitAll,
+  escapeRegExp,
   type GitServer,
   git,
   initRepo,
+  posix,
   read,
   serveGit,
   tempDir,
@@ -126,7 +128,7 @@ describe("globu register, show and list", () => {
       { id: "notes", path: repo, workPath: worktree, here: true }
     ]);
     expect(json(["list"]).shards).toMatchObject([{ path: repo, workPath: repo, here: false }]);
-    expect(run(["index"], "", worktree).out).toContain(`  - Entry: notes: ${worktree}/docs/index.md`);
+    expect(run(["index"], "", worktree).out).toContain(`  - Entry: notes: ${path.join(worktree, "docs/index.md")}`);
     expect(run(["hook", "session-start"], { cwd: worktree }).out).toContain(`  - Location: ${worktree} (this session`);
   });
 
@@ -375,7 +377,9 @@ describe("globu resolve", () => {
     const found = run(["resolve", "notes/docs/a.md"]);
     expect(found.code).toBe(0);
     expect(found.out).toMatch(
-      new RegExp(`^ok\\tnotes/docs/a\\.md\\t${repo}/docs/a\\.md\\n\\n# Globu knowledge shards\\n`)
+      new RegExp(
+        `^ok\\tnotes/docs/a\\.md\\t${escapeRegExp(path.join(repo, "docs/a.md"))}\\n\\n# Globu knowledge shards\\n`
+      )
     );
     expect(found.out).toContain("## Formats\n- **okf**:");
 
@@ -477,55 +481,61 @@ describe("globu hook guard", () => {
 
   it("reads shell commands for a read-only shard", () => {
     const repo = localRepo("notes");
+    const sh = posix(repo);
     const other = localRepo("other");
     run(["register", repo, "--mode", "read"]);
     const bash = (command: string, cwd = other) => run(["hook", "guard"], { cwd, tool_input: { command } });
 
-    const denied = bash(`rm ${repo}/a.md`);
+    const denied = bash(`rm ${sh}/a.md`);
     expect(denied.code).toBe(2);
     expect(denied.err).toContain(
-      `this command writes to ${repo}/a.md, which belongs to shard "notes". That shard is read-only on this machine. Do not edit it.`
+      `this command writes to ${path.join(repo, "a.md")}, which belongs to shard "notes". That shard is read-only on this machine. Do not edit it.`
     );
-    expect(bash(`node tool.js ${repo}/data; echo x > ${repo}/out.txt`).code).toBe(2);
+    expect(bash(`node tool.js ${sh}/data; echo x > ${sh}/out.txt`).code).toBe(2);
     expect(bash("touch a.md", repo).code).toBe(2);
 
-    const asked = bash(`node tool.js ${repo}/data`);
+    const asked = bash(`node tool.js ${sh}/data`);
     expect(asked.code).toBe(0);
     expect(JSON.parse(asked.out).hookSpecificOutput).toMatchObject({
       permissionDecision: "ask",
       permissionDecisionReason: expect.stringContaining(
-        `this command may change ${repo}/data, which belongs to shard "notes". That shard is read-only on this machine. Approve only if the command does not modify it.`
+        `this command may change ${path.join(repo, "data")}, which belongs to shard "notes". That shard is read-only on this machine. Approve only if the command does not modify it.`
       )
     });
 
     const silent = { code: 0, out: "", err: "" };
     expect(bash("npm test", repo)).toEqual(silent);
-    expect(bash(`cat ${repo}/README.md && git -C ${repo} log`)).toEqual(silent);
+    expect(bash(`cat ${sh}/README.md && git -C ${sh} log`)).toEqual(silent);
     expect(bash("rm a.md")).toEqual(silent);
   });
 
   it("reads shell commands for an ask shard", () => {
     const repo = localRepo("notes");
+    const sh = posix(repo);
     const other = localRepo("other");
     run(["register", repo, "--mode", "ask"]);
     const bash = (command: string, cwd = other) => run(["hook", "guard"], { cwd, tool_input: { command } });
 
-    const written = bash(`echo x > ${repo}/out.txt`);
+    const written = bash(`echo x > ${sh}/out.txt`);
     expect(written.code).toBe(0);
     expect(JSON.parse(written.out).hookSpecificOutput.permissionDecisionReason).toContain(
-      `this command writes to ${repo}/out.txt, which belongs to shard "notes". That shard asks before edits from sessions in other repos.`
+      `this command writes to ${path.join(repo, "out.txt")}, which belongs to shard "notes". That shard asks before edits from sessions in other repos.`
     );
-    expect(bash(`cd ${repo} && npm test`).out).toContain(`this command may change ${repo}/test, which`);
+    expect(JSON.parse(bash(`cd ${sh} && npm test`).out).hookSpecificOutput.permissionDecisionReason).toContain(
+      `this command may change ${path.join(repo, "test")}, which`
+    );
     process.env.CLAUDE_PROJECT_DIR = other;
     expect(bash("npm test", repo).out).toContain('"ask"');
 
     const silent = { code: 0, out: "", err: "" };
     process.env.CLAUDE_PROJECT_DIR = repo;
     expect(bash("npm test && rm a.md", repo)).toEqual(silent);
-    expect(bash(`rm ${repo}/a.md`)).toEqual(silent);
+    expect(bash(`rm ${sh}/a.md`)).toEqual(silent);
     delete process.env.CLAUDE_PROJECT_DIR;
-    expect(bash(`ls ${repo}`)).toEqual(silent);
-    expect(bash(`D=${repo}; rm $D/a.md`).out).toContain(`this command writes to ${repo}/a.md`);
+    expect(bash(`ls ${sh}`)).toEqual(silent);
+    expect(JSON.parse(bash(`D=${sh}; rm $D/a.md`).out).hookSpecificOutput.permissionDecisionReason).toContain(
+      `this command writes to ${path.join(repo, "a.md")}`
+    );
   });
 
   it("stays out of the way when it has nothing to check", () => {

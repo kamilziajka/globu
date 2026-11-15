@@ -5,9 +5,10 @@ import { register, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
-import type { JiraClient, JiraIssue } from "./jira.js";
+import type { JiraClient, JiraIssue, NewIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
+import { setupShell } from "./shell.js";
 import { loadSubscription, recordUsage } from "./subscription.js";
 import {
   addWorktree,
@@ -108,13 +109,19 @@ type FakeJira = JiraClient & {
   comments: Record<string, string[]>;
   links: Record<string, string[]>;
   transitions: string[];
+  created: NewIssue[];
+  issueLinks: string[];
 };
 
-function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransition?: boolean } = {}): FakeJira {
+type FakeOptions = { stolen?: string[]; failTransition?: boolean; failCreate?: string };
+
+function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
   const store = new Map(issues.map((entry) => [entry.key, structuredClone(entry)]));
   const comments: Record<string, string[]> = {};
   const links: Record<string, string[]> = {};
   const transitions: string[] = [];
+  const created: NewIssue[] = [];
+  const issueLinks: string[] = [];
   const get = (key: string) => {
     const found = store.get(key);
     if (found === undefined) throw new Error(`no issue ${key}`);
@@ -125,6 +132,8 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
     comments,
     links,
     transitions,
+    created,
+    issueLinks,
     myself: async () => ({ accountId: "bot", displayName: "Bot" }),
     search: async () => [...store.values()].map((entry) => ({ key: entry.key, labels: entry.labels })),
     issue: async (key) => structuredClone(get(key)),
@@ -148,6 +157,16 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
     setField: async () => {},
     remoteLink: async (key, url) => {
       links[key] = [...(links[key] ?? []), url];
+    },
+    createIssue: async (fields) => {
+      if (fields.summary === options.failCreate) throw new Error("Jira POST /issue failed: 400 issuetype is invalid");
+      created.push(fields);
+      const key = `${fields.project}-${100 + created.length}`;
+      store.set(key, { ...issue(key, { summary: fields.summary, description: fields.description }), labels: [] });
+      return key;
+    },
+    linkIssues: async (type, inward, outward) => {
+      issueLinks.push(`${inward} ${type} ${outward}`);
     }
   };
 }
@@ -155,7 +174,7 @@ function fakeJira(issues: JiraIssue[], options: { stolen?: string[]; failTransit
 type Script = {
   commit?: boolean;
   companionCommit?: boolean;
-  handback?: boolean;
+  handback?: boolean | string;
   stream?: string;
   code?: number;
   stderr?: string;
@@ -220,7 +239,10 @@ function fakeRunner(script: Script, calls: Calls): Runner {
     const runDir = args[args.indexOf("--add-dir") + 1];
     if (script.commit) commitIn(cwd, "src/new.ts");
     if (script.companionCommit) commitIn(path.join(runDir, "companions/product"), "docs/new.md");
-    if (script.handback) fs.writeFileSync(path.join(runDir, "handback.md"), "## Summary\n\nDone.\n");
+    if (script.handback) {
+      const text = typeof script.handback === "string" ? script.handback : "## Summary\n\nDone.\n";
+      fs.writeFileSync(path.join(runDir, "handback.md"), text);
+    }
     fs.appendFileSync(options.stdoutFile as string, `${script.stream ?? `${BLOCKED}\n${RESULT}`}\n`);
     const started = script.startError === undefined ? {} : { startError: script.startError };
     return {
@@ -244,6 +266,7 @@ function deps(world: World, jira: JiraClient, run: Runner, githubToken: string |
     run,
     io,
     now: () => NOW,
+    platform: "linux",
     env: { PATH: process.env.PATH, HOME: process.env.HOME, JIRA_API_TOKEN: "jira-secret", GH_TOKEN: "gh-token" }
   };
   return { worker, io };
@@ -469,7 +492,7 @@ describe("once", () => {
     expect(claude.cwd).toBe(path.join(runDir, "tree"));
     expect(claude.args.slice(0, 2)).toEqual([
       "-p",
-      `Implement the issue described in ${runDir}/brief.md with the issue-deliver skill. Write the handback to ${runDir}/handback.md.`
+      `Implement the issue described in ${path.join(runDir, "brief.md")} with the issue-deliver skill. Write the handback to ${path.join(runDir, "handback.md")}.`
     ]);
     expect(claude.args).toContain("--allowedTools");
     expect(claude.args).toContain("Bash(git commit *)");
@@ -492,12 +515,12 @@ describe("once", () => {
     const brief = fs.readFileSync(path.join(runDir, "brief.md"), "utf8");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain(
-      `- \`product/docs/decisions/012-pricing.md\`: ${world.clones.product}/docs/decisions/012-pricing.md`
+      `- \`product/docs/decisions/012-pricing.md\`: ${path.join(world.clones.product, "docs/decisions/012-pricing.md")}`
     );
-    expect(brief).toContain(`- \`src/x.ts\`: ${world.clones.backend}/src/x.ts`);
+    expect(brief).toContain(`- \`src/x.ts\`: ${path.join(world.clones.backend, "src/x.ts")}`);
     expect(brief).toContain("**Kamil, 2026-11-05**\n\n> Also read `docs/index.md`.");
-    expect(brief).toContain(`- \`docs/index.md\`: ${world.clones.backend}/docs/index.md`);
-    expect(brief).toContain(`- \`product\`: ${runDir}/companions/product`);
+    expect(brief).toContain(`- \`docs/index.md\`: ${path.join(world.clones.backend, "docs/index.md")}`);
+    expect(brief).toContain(`- \`product\`: ${path.join(runDir, "companions/product")}`);
     expect(fs.readFileSync(path.join(runDir, "pull-request-backend.md"), "utf8")).toContain(
       "## Summary\n\nDone.\n\n---\n\nRun MR-7"
     );
@@ -565,6 +588,16 @@ describe("once", () => {
     const run = (await once(worker)).runs[0];
     expect([run.state, run.reason]).toEqual(["handed-back", null]);
     expect(calls.setup?.map((call) => [call.shell, call.command])).toEqual([[sh, "npm ci"]]);
+  });
+
+  it("looks the setup shell up for the host platform when none is given", async () => {
+    const world = setup();
+    world.config.setup = { backend: ["npm ci"] };
+    const calls: Calls = { gh: [], claude: [], setup: [] };
+    const { worker } = deps(world, fakeJira([issue("MR-7")]), fakeRunner({ commit: true }, calls));
+    delete worker.platform;
+    expect((await once(worker)).runs[0].state).toBe("handed-back");
+    expect(calls.setup?.map((call) => call.shell)).toEqual([setupShell(worker.env, process.platform)]);
   });
 
   it("releases without the blocked label when the machine cannot start the setup or Claude, and the loop stops", async () => {
@@ -707,6 +740,70 @@ describe("once", () => {
     );
   });
 
+  it("delivers a chain of three without jira.doneStatus after the first run is pruned", async () => {
+    const world = setup();
+    world.config.limits.keepRuns = 1;
+    const link = (key: string) => ({
+      type: { name: "Blocks" },
+      inwardIssue: {
+        key,
+        fields: { summary: `Base ${key}`, status: { name: "Delivery", statusCategory: { key: "indeterminate" } } }
+      }
+    });
+    const jira = fakeJira([
+      issue("MR-1"),
+      issue("MR-2", { fields: { issuelinks: [link("MR-1")] } }),
+      issue("MR-3", { fields: { issuelinks: [link("MR-1"), link("MR-2")] } })
+    ]);
+    const calls: Calls = { gh: [], claude: [] };
+    const merged = new Map<string, string>();
+    const base = fakeRunner({ commit: true, handback: true }, calls);
+    const run: Runner = async (command, args, options) => {
+      if (command !== "gh" || args[1] !== "view") return await base(command, args, options);
+      const url = args[2];
+      const pull = {
+        url,
+        number: Number(url.split("/").at(-1)),
+        title: "MR: Add the thing",
+        state: merged.has(url) ? "MERGED" : "OPEN",
+        mergeable: "MERGEABLE",
+        headRefName: merged.get(url) ?? "other",
+        baseRefName: "main",
+        statusCheckRollup: []
+      };
+      return { code: 0, stdout: JSON.stringify(pull), stderr: "", timedOut: false };
+    };
+    const { worker } = deps(world, jira, run);
+    const day = async (date: string) => {
+      worker.now = () => new Date(`${date}T10:00:00.000Z`);
+      return await once(worker);
+    };
+    const mergeAll = (records: RunRecord[]) => {
+      for (const record of records) for (const url of record.pullRequests) merged.set(url, record.branch as string);
+    };
+
+    const first = await day("2026-11-05");
+    expect(first.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-1 handed-back"]);
+    expect(first.plan.map((entry) => `${entry.key} ${entry.action}`)).toEqual([
+      "MR-1 claimed",
+      "MR-2 waiting on MR-1 (Delivery)",
+      "MR-3 waiting on MR-1 (Delivery), MR-2 (Delivery)"
+    ]);
+    mergeAll(first.runs);
+    const second = await day("2026-11-06");
+    expect(second.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-2 handed-back"]);
+    expect(second.plan.at(-1)?.action).toBe("waiting on MR-2 (Delivery)");
+    mergeAll(second.runs);
+    const third = await day("2026-11-07");
+    expect(loadRuns(world.home).some(({ record }) => record.key === "MR-1")).toBe(false);
+    expect(third.runs.map((record) => `${record.key} ${record.state}`)).toEqual(["MR-3 handed-back"]);
+    expect(jira.transitions).not.toContain("MR-1 -> Done");
+    const brief = fs.readFileSync(path.join(runsDir(world.home), third.runs[0].id, "brief.md"), "utf8");
+    expect(brief).toContain(
+      `- MR-1: Base MR-1 (Delivery), the worker's pull requests: ${first.runs[0].pullRequests[0]}\n`
+    );
+  });
+
   it("holds the per-shard limit and the concurrency limit", async () => {
     const world = setup();
     const { result, jira } = await runWith(world, [issue("MR-7"), issue("MR-8"), issue("MR-9")], {});
@@ -777,6 +874,64 @@ describe("once", () => {
     expect(cycle.io.stdout).toContain(`MR-8\t${held}`);
     expect(blocked.transitions).toEqual([]);
     expect(fs.existsSync(lock)).toBe(true);
+  });
+
+  it("files the two follow-ups of a handback as linked issues and lists their keys on the issue", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    const handback = [
+      "## Summary",
+      "",
+      "Done.",
+      "",
+      "## Follow-ups",
+      "",
+      "- Add retries to the client",
+      "  It gives up after one failure.",
+      "- Rename the flag",
+      ""
+    ].join("\n");
+    const { jira, calls, record } = await runWith(world, [issue("MR-7")], { commit: true, handback });
+    expect(record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
+    expect(jira.created.map((entry) => `${entry.project} ${entry.issueType} ${entry.summary}`)).toEqual([
+      "MR Task Add retries to the client",
+      "MR Task Rename the flag"
+    ]);
+    expect(jira.issueLinks).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102"]);
+    expect(jira.store.get("MR-101")?.labels).toEqual([]);
+    const comment = jira.comments["MR-7"][0];
+    expect(comment).toContain(
+      "---\n\nFollow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
+    );
+    expect(calls.claude).toHaveLength(1);
+    const brief = fs.readFileSync(path.join(world.home, "runs", record?.id as string, "brief.md"), "utf8");
+    expect(brief).toContain("The worker files each bullet as an issue linked to this one");
+  });
+
+  it("hands back when a follow-up cannot be created and says so in the comment", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Rename the flag\n";
+    const { jira, record } = await runWith(
+      world,
+      [issue("MR-7")],
+      { commit: true, handback },
+      { jira: { failCreate: "Rename the flag" } }
+    );
+    expect(record?.state).toBe("handed-back");
+    expect(record?.followUpIssues).toBeUndefined();
+    expect(jira.comments["MR-7"][0]).toContain(
+      "Follow-up issues:\n- not created: Rename the flag (Jira POST /issue failed: 400 issuetype is invalid)"
+    );
+  });
+
+  it("leaves the follow-ups in the comment only when they are not configured", async () => {
+    const world = setup();
+    const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Rename the flag\n";
+    const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback });
+    expect(record?.followUpIssues).toBeUndefined();
+    expect(jira.created).toEqual([]);
+    expect(jira.comments["MR-7"][0]).toContain("## Follow-ups\n\n- Rename the flag\n\n---\n\nPull requests:");
   });
 
   it("claims by status id when the configuration gives one", async () => {

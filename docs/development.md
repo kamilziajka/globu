@@ -64,9 +64,32 @@ These apply to docs, skills, READMEs and commit messages.
 - Vitest. Unit tests sit next to the code as `*.test.ts`.
 - `packages/testing` holds the helpers: temp directories, throwaway git repos, linked worktrees (also of a bare repo) and a captured `Io`.
 - `tests/bundle.test.ts` runs the built bundle as a real executable. It checks the thing users install: the shebang, the bundled dependencies and reading hook input from stdin. It also runs every command in the plugin's `hooks.json` with `CLAUDE_PLUGIN_ROOT` set, so a hook path that does not match the package name or its `bin` fails the build, and checks that the plugin pins exactly that package.
-- `vitest.setup.ts` points `GLOBU_HOME` and `CLAUDE_CONFIG_DIR` at a fresh temp directory before every test, so no test can read or write the developer's real configuration. It also removes every `GIT_*` variable from the environment. A git hook in a linked worktree exports `GIT_DIR`, and with it set the `git init` in a test would act on the real repository instead of the temp one. `CLAUDE_PROJECT_DIR` is cleared before every test as well, because the guard reads it to find the session's home repo and the tests may themselves run inside a Claude Code session.
+- `vitest.setup.ts` points `GLOBU_HOME` and `CLAUDE_CONFIG_DIR` at a fresh temp directory before every test, so no test can read or write the developer's real configuration. It also removes every `GIT_*` variable from the environment. A git hook in a linked worktree exports `GIT_DIR`, and with it set the `git init` in a test would act on the real repository instead of the temp one. It then sets `GIT_CONFIG_NOSYSTEM=1`, so the machine's system git config stays out of the tests: on Windows that file turns on Git Credential Manager, which probes an HTTP remote with requests of its own, and `core.autocrlf`. `CLAUDE_PROJECT_DIR` is cleared before every test as well, because the guard reads it to find the session's home repo and the tests may themselves run inside a Claude Code session.
 - Commander wraps a program or command description past 80 columns, so a test that matches the help text exactly needs a description that fits on one line.
 - Git behaviour is tested against real repositories created in temp directories. Remote repos are `file://` URLs. A test that expects a shard to be matched to a directory needs a real repo for both, because matching asks git. A made-up path only works where no match is expected.
+- The tests run on Linux, macOS and Windows, see [tests on Windows](#tests-on-windows).
+
+### Tests on Windows
+
+CI runs the suite on `windows-latest` as well, so the code paths that exist only on Windows (Git's `sh`, `.cmd` shims, junctions, `Path` and drive letters) are tested there and not only through an injected `platform`. A test that passes on Linux can still fail there, so keep to these rules:
+
+- Build an expected path with `path.join` or `path.resolve`, never as `${dir}/file`. The code prints native paths, with backslashes on Windows. `native()` from `packages/testing` turns a literal such as `"wiki/log.md"` into the native form, and `escapeRegExp()` puts a path into a `RegExp`.
+- A path git prints, such as `--show-toplevel` or `worktree list`, comes with forward slashes on Windows. The code passes it through `path.resolve` before comparing it with a Node path. `tempDir()` resolves the temp directory with `fs.realpathSync.native`, which expands an 8.3 short name such as `RUNNER~1` to the long name git prints.
+- A made-up absolute path such as `/work/home` resolves to the current drive on Windows, so a fixture that goes through `path.resolve` in the code is written as `path.resolve("/work/home")` in the test.
+- A shell command handed to the guard uses forward slashes (`posix(repo)`), as Git Bash does on Windows; a backslash there is an escape.
+- Run a bundle as `node <bundle>` on Windows, which does not read the shebang, and run a hook command with the shell `setupShell` finds, which is Git's `sh` on Windows.
+- A test of the worker that scripts the setup shell as `sh` sets `platform: "linux"` in its deps. The Windows lookup has tests of its own with `platform: "win32"`, and one test leaves the platform out, so the host's shell is looked up for real.
+- Pass `"junction"` to `fs.symlinkSync` for a directory link. Elsewhere the type is ignored; on Windows the test then removes a real junction.
+- Windows starts processes several times slower, so the test timeout there is 30 s instead of 5 s (`vitest.config.ts`).
+
+Two tests are skipped on Windows, because what they check does not exist there:
+
+| Test | Why it cannot run on Windows |
+|---|---|
+| `paths` falls back to the temp directory when the home directory is not writable | it makes the home unwritable with `chmod 500`, and Windows ignores the mode bits of a directory |
+| `findOnPath` looks through a colon separated PATH elsewhere | a Windows path holds a drive colon, so it cannot be written into a `:` separated `PATH` |
+
+The coverage gate is enforced on Linux only. The Windows job runs the tests without it, since the branches for the other platform are not reached there.
 
 ## Design choices that keep the code testable
 
@@ -76,11 +99,11 @@ These apply to docs, skills, READMEs and commit messages.
 
 ## The mod
 
-`mods/globu-status` is a Claude Code mod: a plugin of function hooks, written against the engine's own TypeScript API. It has no build. `claude plugin validate` reads it the way the engine will and `claude plugin test` runs its `tests/*.test.ts` against the engine, so both need the `claude` binary; `npm run verify:mod` runs them, the pre-commit hook runs it after `npm run verify`, and CI installs Claude Code for that step. When a session loads the mod from the working tree, the engine writes `.claude-plugin/types` and a `tsconfig.json` beside it; both are ignored by git, and `tsc -p mods/globu-status` type-checks the mod once they exist. Biome formats and lints the mod like the rest of the repo.
+`mods/globu-status` is a Claude Code mod: a plugin of function hooks, written against the engine's own TypeScript API. It has no build. `claude plugin validate` reads it the way the engine will and `claude plugin test` runs its `tests/*.test.ts` against the engine, so both need the `claude` binary; `npm run verify:mod` runs them and the pre-commit hook runs it after `npm run verify`. CI does not run it. When a session loads the mod from the working tree, the engine writes `.claude-plugin/types` and a `tsconfig.json` beside it; both are ignored by git, and `tsc -p mods/globu-status` type-checks the mod once they exist. Biome formats and lints the mod like the rest of the repo.
 
 ## Continuous integration
 
-`.github/workflows/verify.yml` runs on pull requests and on pushes to `main`: install, `npm run verify`, a check that the committed package versions match the root version, then `npm run verify:mod` with Claude Code installed on the runner.
+`.github/workflows/verify.yml` runs on pull requests and on pushes to `main`, with two jobs. `verify`, on `ubuntu-latest`, installs, runs `npm run verify` and checks that the committed package versions match the root version. `verify-windows`, on `windows-latest`, turns off `core.autocrlf` before the checkout, so Biome sees the line endings as committed, then installs and runs lint, typecheck, build and `npm test`, the suite without the coverage gate. Whether a job is required to merge is a branch protection setting of the repository, which the owner sets on GitHub; the workflow cannot. `npm run verify:mod` needs the `claude` binary and runs in the pre-commit hook, not in CI.
 
 ## Working on the plugin locally
 

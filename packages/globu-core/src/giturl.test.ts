@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { looksLikeRepoUrl, normalizeRepoUrl, repoBasename, sameRepo, splitFileLink } from "./giturl.js";
 
@@ -10,7 +11,7 @@ describe("normalizeRepoUrl", () => {
   });
 
   it("keeps file URLs case sensitive", () => {
-    expect(normalizeRepoUrl("file:///tmp/Repos/Notes.git")).toBe("file:/tmp/Repos/Notes");
+    expect(normalizeRepoUrl("file:///tmp/Repos/Notes.git")).toBe(`file:${path.resolve("/tmp/Repos/Notes")}`);
   });
 
   it("falls back to the trimmed value", () => {

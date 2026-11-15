@@ -5,7 +5,7 @@ const URL_RE = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/i;
 const FILE_PREFIX = "file://";
 
 function stripSuffix(value: string): string {
-  return value.replace(/\/+$/, "").replace(/\.git$/, "");
+  return value.replace(/[/\\]+$/, "").replace(/\.git$/, "");
 }
 
 export function looksLikeRepoUrl(value: string): boolean {
@@ -27,7 +27,9 @@ export function sameRepo(a: string | null, b: string | null): boolean {
 }
 
 export function repoBasename(url: string): string {
-  return stripSuffix(url.trim()).split(/[/:]/).at(-1) as string;
+  return stripSuffix(url.trim())
+    .split(/[/\\:]/)
+    .at(-1) as string;
 }
 
 const FILE_LINK_RE = /^(https?:\/\/[^/]+\/.+?)\/(?:-\/)?(?:blob|raw)\/([^/]+)\/(.+)$/i;

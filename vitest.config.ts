@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     setupFiles: ["vitest.setup.ts"],
+    testTimeout: process.platform === "win32" ? 30_000 : 5_000,
     coverage: {
       provider: "v8",
       include: ["packages/**/*.ts"],
