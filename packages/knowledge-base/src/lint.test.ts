@@ -8,6 +8,12 @@ function doc(description: string, body = ""): string {
   return `---\ntype: "Note"\n${descriptionLine}---\n\n# Doc\n${body}`;
 }
 
+const NOW = Date.UTC(2026, 10, 15);
+
+function lifecycle(fields: string, body = ""): string {
+  return `---\ntype: "Note"\n${fields}---\n\n${body}`;
+}
+
 function summary(docsDir: string, warnings: LintWarning[]): string[] {
   return warnings.map((warning) => {
     const where = warning.line === null ? "" : `:${warning.line}`;
@@ -17,7 +23,7 @@ function summary(docsDir: string, warnings: LintWarning[]): string[] {
 
 function lint(root: string, dir = "docs"): string[] {
   const docsDir = path.join(root, dir);
-  return summary(docsDir, lintBase(docsDir).warnings);
+  return summary(docsDir, lintBase(docsDir, NOW).warnings);
 }
 
 describe("lintBase broken links", () => {
@@ -173,6 +179,58 @@ describe("lintBase index drift", () => {
   });
 });
 
+describe("lintBase lifecycle", () => {
+  it("reports stale docs and links from current docs to deprecated ones", () => {
+    const root = tempDir();
+    write(
+      root,
+      "docs/index.md",
+      `${baseIndex("demo")}\n${[
+        "* [A](./a.md)",
+        "* [Old](./old.md)",
+        "* [Aged](./aged.md)",
+        "* [Both](./both.md)",
+        "* [Fresh](./fresh.md)",
+        "* [Retired](./retired.md)",
+        "* [Sub](./sub/index.md)"
+      ].join("\n")}\n`
+    );
+    write(root, "docs/log.md", "# Log\n\n* [old](./old.md)\n");
+    write(
+      root,
+      "docs/a.md",
+      lifecycle("status: stable\n", "[old](./old.md) [aged](./aged.md)\n[both](/both.md#part) [sub](./sub/index.md)\n")
+    );
+    write(root, "docs/old.md", lifecycle("status: deprecated\n", "[self](./old.md) [retired](./retired.md)\n"));
+    write(root, "docs/aged.md", lifecycle("stale_after: 2026-11-01T00:00:00Z\n"));
+    write(
+      root,
+      "docs/both.md",
+      lifecycle("status: deprecated\nstale_after: 2026-01-01T00:00:00+01:00\n", "[old](./old.md)\n")
+    );
+    write(
+      root,
+      "docs/fresh.md",
+      lifecycle("stale_after: 2999-01-01T00:00:00Z\n", "[not a date](./bare.md) [old](./old.md)\n")
+    );
+    write(root, "docs/bare.md", lifecycle("stale_after: 2020-01-01\n", "[fresh](./fresh.md)\n"));
+    write(root, "docs/retired.md", lifecycle("status: deprecated\n"));
+    write(
+      root,
+      "docs/sub/index.md",
+      "---\nstatus: deprecated\nstale_after: 2020-01-01T00:00:00Z\n---\n# Sub\n\n* [Old](../old.md)\n"
+    );
+    expect(lint(root)).toEqual([
+      "deprecated-link a.md:6 ./old.md is deprecated",
+      "deprecated-link a.md:7 /both.md#part is deprecated",
+      "stale aged.md past stale_after 2026-11-01T00:00:00Z",
+      "stale both.md past stale_after 2026-01-01T00:00:00+01:00",
+      "deprecated-link fresh.md:6 ./old.md is deprecated"
+    ]);
+    expect(lintBase(path.join(root, "docs")).warnings).toHaveLength(5);
+  });
+});
+
 describe("descriptionOverlap", () => {
   it("measures the share of the entry's words found in the description", () => {
     expect(descriptionOverlap("Describing releases", "It describes a release")).toBe(1);
@@ -188,10 +246,13 @@ describe("lintRepo", () => {
     write(root, "docs/index.md", baseIndex("root"));
     write(root, "pkg/docs/index.md", baseIndex("pkg"));
     write(root, "pkg/docs/lonely.md", doc(""));
-    const { results, warnings, errors } = lintRepo(root);
-    expect(results.map((result) => result.warnings.length)).toEqual([0, 1]);
-    expect(warnings).toHaveLength(1);
+    write(root, "pkg/docs/old.md", lifecycle("stale_after: 2026-11-01T00:00:00Z\n", "[lonely](./lonely.md)\n"));
+    const { results, warnings, errors } = lintRepo(root, NOW);
+    expect(results.map((result) => result.warnings.length)).toEqual([0, 2]);
+    expect(warnings.map((warning) => warning.kind)).toEqual(["orphan", "stale"]);
     expect(errors).toEqual([]);
+    expect(lintRepo(root, Date.UTC(2026, 9, 1)).warnings).toHaveLength(1);
+    expect(lintRepo(root).warnings).toHaveLength(2);
   });
 
   it("fails when there is no base", () => {
