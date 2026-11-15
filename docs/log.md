@@ -1,6 +1,8 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [Development](./development.md): CI has a second job, `verify-windows` on `windows-latest`, that runs lint, typecheck, build and the tests without the coverage gate. A new section on tests on Windows gives the rules a test keeps to there (native expected paths, `path.resolve` on git's paths, forward slashes in shell commands, `node <bundle>`, real junctions, a 30 s timeout) and the two tests skipped on Windows with the reason. `vitest.setup.ts` sets `GIT_CONFIG_NOSYSTEM=1`. The CI paragraph and the mod section no longer claim `verify:mod` runs in CI: it runs in the pre-commit hook.
+* [globu-worker](./worker.md) on Windows: `diagnostics` runs `tar` beside the archive, because Git's GNU `tar` reads a drive letter as a remote host. Fixed with the Windows job too: a shard id taken from a Windows path or a `file://C:\...` URL, paths git prints with forward slashes compared with Node's, and `globu resolve` in the current repo, which asked git for a backslash path and wrote candidates with backslashes.
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14

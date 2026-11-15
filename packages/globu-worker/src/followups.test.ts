@@ -162,6 +162,7 @@ function deps(setup: ReturnType<typeof world>, script: Script, token: string | n
     run: runner(script, calls),
     io,
     now: () => NOW,
+    platform: "linux",
     env: { PATH: process.env.PATH, HOME: process.env.HOME, JIRA_API_TOKEN: "t" },
     onFollowUps: (next) => rows.push(next)
   };

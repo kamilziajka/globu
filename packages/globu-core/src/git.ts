@@ -29,7 +29,7 @@ export function checkoutOf(dir: string): Checkout | null {
       ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
       dir
     ).split("\n");
-    return { root, commonDir: fs.realpathSync(commonDir) };
+    return { root: path.resolve(root), commonDir: fs.realpathSync(commonDir) };
   } catch {
     return null;
   }
@@ -37,7 +37,7 @@ export function checkoutOf(dir: string): Checkout | null {
 
 export function mainCheckout(dir: string): string {
   const [main, kind] = git(["worktree", "list", "--porcelain"], dir).split("\n");
-  if (kind === "bare") return git(["rev-parse", "--show-toplevel"], dir);
+  if (kind === "bare") return path.resolve(git(["rev-parse", "--show-toplevel"], dir));
   return fs.realpathSync(main.slice(WORKTREE_PREFIX.length));
 }
 
@@ -45,7 +45,7 @@ export function worktreeRoots(dir: string): string[] {
   return git(["worktree", "list", "--porcelain"], dir)
     .split("\n")
     .filter((line) => line.startsWith(WORKTREE_PREFIX))
-    .map((line) => line.slice(WORKTREE_PREFIX.length));
+    .map((line) => path.resolve(line.slice(WORKTREE_PREFIX.length)));
 }
 
 export function defaultRevision(dir: string): string {

@@ -29,6 +29,10 @@ type Target = {
 const PARENT = /^\.\.(\/|$)/;
 const MAX_CANDIDATES = 10;
 
+function toPosix(relPath: string): string {
+  return relPath.split(path.sep).join("/");
+}
+
 function withinRepo(relPath: string): string | null {
   const normal = path.posix.normalize(relPath);
   if (path.posix.isAbsolute(normal) || PARENT.test(normal)) return null;
@@ -101,7 +105,7 @@ export function resolveRefs(
     if (session === null) {
       return failure(ref, null, `no shard is registered as "${head}" and the current directory is not in a git repo`);
     }
-    const relPath = withinRepo(path.relative(session.root, path.resolve(cwd, ref)));
+    const relPath = withinRepo(toPosix(path.relative(session.root, path.resolve(cwd, ref))));
     if (relPath === null) return failure(ref, null, "the path leaves the current repo");
     const shard = findShard(session.root);
     if (shard !== undefined) touched.add(shard.id);
@@ -112,7 +116,7 @@ export function resolveRefs(
       repo: mainCheckout(session.root),
       root: session.root,
       relPath,
-      toRef: (found) => path.relative(cwd, path.join(session.root, found)) || "."
+      toRef: (found) => toPosix(path.relative(cwd, path.join(session.root, found))) || "."
     });
     if (!result.ok && ref.includes("/") && !fs.existsSync(path.resolve(cwd, head))) {
       result.reason = `${result.reason}, and no shard is registered as "${head}"`;
