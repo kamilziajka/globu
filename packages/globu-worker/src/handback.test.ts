@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
+import { FILED_FILE, filedFor, saveFiled } from "./filed.js";
 import { fileFollowUps, followUpSection, parseFollowUps, SUMMARY_LIMIT } from "./handback.js";
 import type { JiraClient, NewIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
@@ -30,7 +33,7 @@ shards:
 
 type Fake = JiraClient & { created: NewIssue[]; linked: string[] };
 
-function jira(options: { failCreate?: string; failLink?: string } = {}): Fake {
+function jira(options: { failCreate?: string; failLink?: string; first?: number } = {}): Fake {
   const created: NewIssue[] = [];
   const linked: string[] = [];
   const unused = async () => {
@@ -52,12 +55,15 @@ function jira(options: { failCreate?: string; failLink?: string } = {}): Fake {
     createIssue: async (issue) => {
       if (issue.summary === options.failCreate) throw new Error("Jira POST /issue failed: 400 issuetype is invalid");
       created.push(issue);
-      return `${issue.project}-${100 + created.length}`;
+      return `${issue.project}-${(options.first ?? 100) + created.length}`;
     },
     linkIssues: async (type, inward, outward) => {
       if (outward === options.failLink) throw new Error("Jira POST /issueLink failed: 404 no link type");
       linked.push(`${inward} ${type} ${outward}`);
-    }
+    },
+    issueTypes: unused,
+    linkTypes: unused,
+    permissions: unused
   };
 }
 
@@ -133,7 +139,7 @@ describe("parseFollowUps", () => {
 describe("fileFollowUps", () => {
   it("does nothing unless follow-ups are configured", async () => {
     const fake = jira();
-    expect(await fileFollowUps(fake, config(), "MR-7", "run-1", HANDBACK)).toEqual([]);
+    expect(await fileFollowUps(fake, config(), tempDir(), "MR-7", "run-1", HANDBACK)).toEqual([]);
     expect(fake.created).toEqual([]);
   });
 
@@ -141,7 +147,14 @@ describe("fileFollowUps", () => {
     const { logger, entries } = memory();
     setLogger(logger);
     const fake = jira();
-    const filed = await fileFollowUps(fake, config("  followUps:\n    issueType: Task"), "MR-7", "run-1", HANDBACK);
+    const filed = await fileFollowUps(
+      fake,
+      config("  followUps:\n    issueType: Task"),
+      tempDir(),
+      "MR-7",
+      "run-1",
+      HANDBACK
+    );
     expect(filed.map((entry) => entry.key)).toEqual(["MR-101", "MR-102", "MR-103"]);
     expect(fake.created[0]).toEqual({
       project: "MR",
@@ -163,7 +176,7 @@ describe("fileFollowUps", () => {
     setLogger(logger);
     const fake = jira({ failCreate: "Rename the flag", failLink: "MR-101" });
     const settings = "  followUps:\n    issueType:\n      MR: Story\n    linkType: Relates to\n    max: 2";
-    const filed = await fileFollowUps(fake, config(settings), "MR-7", "run-1", HANDBACK);
+    const filed = await fileFollowUps(fake, config(settings), tempDir(), "MR-7", "run-1", HANDBACK);
     expect(filed).toEqual([
       {
         summary: "Add retries to the client",
@@ -175,8 +188,65 @@ describe("fileFollowUps", () => {
     ]);
     expect(fake.created.map((issue) => issue.issueType)).toEqual(["Story"]);
     expect(entries.filter((entry) => entry.startsWith("warn follow-up failed"))).toHaveLength(3);
-    const other = await fileFollowUps(fake, config(settings), "SB-2", "run-2", "## Follow-ups\n- One\n");
+    const other = await fileFollowUps(fake, config(settings), tempDir(), "SB-2", "run-2", "## Follow-ups\n- One\n");
     expect(other).toEqual([{ summary: "One", key: null, problem: "no jira.followUps.issueType for project SB" }]);
+  });
+});
+
+describe("fileFollowUps on a later attempt", () => {
+  const settings = "  followUps:\n    issueType: Task";
+  const first = "## Follow-ups\n- Add retries to the client\n- Rename the flag\n- Drop the old flag\n";
+
+  it("records each follow-up as it is created and linked, and reuses it on a later attempt", async () => {
+    const { logger, entries } = memory();
+    setLogger(logger);
+    const home = tempDir();
+    const fake = jira({ failLink: "MR-102" });
+    await fileFollowUps(fake, config(settings), home, "MR-7", "run-1", first);
+    expect(JSON.parse(fs.readFileSync(path.join(home, FILED_FILE), "utf8"))).toEqual({
+      "MR-7": [
+        { summary: "Add retries to the client", key: "MR-101", linked: true },
+        { summary: "Rename the flag", key: "MR-102", linked: false },
+        { summary: "Drop the old flag", key: "MR-103", linked: true }
+      ]
+    });
+    const second = "## Follow-ups\n- Rename the flag\n- Add retries to the client\n- Write the docs\n";
+    const again = jira({ first: 200 });
+    const filed = await fileFollowUps(again, config(settings), home, "MR-7", "run-2", second);
+    expect(filed).toEqual([
+      { summary: "Rename the flag", key: "MR-102", problem: null },
+      { summary: "Add retries to the client", key: "MR-101", problem: null },
+      { summary: "Write the docs", key: "MR-201", problem: null },
+      { summary: "Drop the old flag", key: "MR-103", problem: "filed by an earlier attempt, not in this handback" }
+    ]);
+    expect(again.created.map((issue) => issue.summary)).toEqual(["Write the docs"]);
+    expect(again.linked).toEqual(["MR-7 Relates MR-102", "MR-7 Relates MR-201"]);
+    expect(filedFor(home, "MR-7").map((entry) => [entry.key, entry.linked])).toEqual([
+      ["MR-101", true],
+      ["MR-102", true],
+      ["MR-103", true],
+      ["MR-201", true]
+    ]);
+    expect(entries.filter((entry) => entry.includes("follow-up reused"))).toHaveLength(2);
+    expect(entries.at(-1)).toBe(
+      'info follow-up kept {"run":"run-2","key":"MR-7","followUp":"MR-103","summary":"Drop the old flag"}'
+    );
+    expect(filedFor(home, "SB-2")).toEqual([]);
+  });
+
+  it("tries again to link an earlier follow-up the new handback leaves out", async () => {
+    const home = tempDir();
+    saveFiled(home, "MR-7", [{ summary: "Drop the old flag", key: "MR-103", linked: false }]);
+    const filed = await fileFollowUps(jira({ failLink: "MR-103" }), config(settings), home, "MR-7", "run-2", "");
+    expect(filed).toEqual([
+      {
+        summary: "Drop the old flag",
+        key: "MR-103",
+        problem:
+          "filed by an earlier attempt, not in this handback, not linked: Jira POST /issueLink failed: 404 no link type"
+      }
+    ]);
+    expect(filedFor(home, "MR-7")[0].linked).toBe(false);
   });
 });
 

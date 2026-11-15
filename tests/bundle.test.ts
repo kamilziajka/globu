@@ -197,7 +197,10 @@ function unclaimedJira(claims: string[]): JiraClient {
     setField: nothing,
     remoteLink: nothing,
     createIssue: async () => "MR-100",
-    linkIssues: nothing
+    linkIssues: nothing,
+    issueTypes: async () => [],
+    linkTypes: async () => [],
+    permissions: async () => ({})
   };
 }
 

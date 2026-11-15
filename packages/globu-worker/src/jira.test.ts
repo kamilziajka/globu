@@ -170,6 +170,26 @@ describe("jiraClient", () => {
     ]);
   });
 
+  it("reads a project's issue types, the link types and the user's permissions in a project", async () => {
+    const { fetchFn, calls } = fakeFetch({
+      "GET /project/MR": {
+        body: { key: "MR", issueTypes: [{ id: "10001", name: "Task", subtask: false, iconUrl: "x" }] }
+      },
+      "GET /issueLinkType": { body: { issueLinkTypes: [{ id: "1", name: "Relates", inward: "relates to" }] } },
+      "GET /mypermissions?projectKey=MR&permissions=CREATE_ISSUES,LINK_ISSUES": {
+        body: { permissions: { CREATE_ISSUES: { key: "CREATE_ISSUES", havePermission: true } } }
+      }
+    });
+    const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
+    expect(await client.issueTypes("MR")).toEqual([{ id: "10001", name: "Task" }]);
+    expect(await client.linkTypes()).toEqual(["Relates"]);
+    expect(await client.permissions("MR", ["CREATE_ISSUES", "LINK_ISSUES"])).toEqual({
+      CREATE_ISSUES: true,
+      LINK_ISSUES: false
+    });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET"]);
+  });
+
   it("removes a label and sets a text or option field after reading its type", async () => {
     const { fetchFn, calls } = fakeFetch({
       "PUT /issue/MR-7": {},

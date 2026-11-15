@@ -16,6 +16,7 @@ import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
 import { notStarted, type Runner, runOrThrow } from "./exec.js";
+import { forgetFiled } from "./filed.js";
 import { fileFollowUps, followUpSection } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
@@ -589,7 +590,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
     record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token));
   }
-  const filed = await fileFollowUps(jira, config, issue.key, record.id, handback);
+  const filed = await fileFollowUps(jira, config, deps.home, issue.key, record.id, handback);
   const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
@@ -598,6 +599,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     issue.key,
     `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`
   );
+  forgetFiled(deps.home, issue.key);
   for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
   record.state = "handed-back";
   record.endedAt = deps.now().toISOString();

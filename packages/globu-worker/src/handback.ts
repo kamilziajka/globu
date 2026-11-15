@@ -1,10 +1,10 @@
-import { projectOf, statusFor, type WorkerConfig } from "./config.js";
+import { type FollowUpSettings, projectOf, statusFor, type WorkerConfig } from "./config.js";
+import { type FiledEntry, filedFor, saveFiled } from "./filed.js";
 import type { JiraClient } from "./jira.js";
 import { log } from "./logger.js";
 
 export type FollowUpItem = { summary: string; description: string };
 export type FiledFollowUp = { summary: string; key: string | null; problem: string | null };
-type FollowUpSettings = NonNullable<WorkerConfig["jira"]["followUps"]>;
 
 const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*?)[\s#]*$/;
 const SECTION_RE = /^follow[- ]?ups$/i;
@@ -72,55 +72,98 @@ function description(item: FollowUpItem, key: string, runId: string): string {
   return item.description === "" ? origin : `${item.description}\n\n${origin}`;
 }
 
+type Ledger = { home: string; key: string; entries: FiledEntry[]; earlier: FiledEntry[] };
+
+const EARLIER = "filed by an earlier attempt, not in this handback";
+
+function remember(ledger: Ledger): void {
+  saveFiled(ledger.home, ledger.key, ledger.entries);
+}
+
+async function link(jira: JiraClient, settings: FollowUpSettings, ledger: Ledger, entry: FiledEntry) {
+  if (entry.linked) return null;
+  try {
+    await jira.linkIssues(settings.linkType, ledger.key, entry.key);
+  } catch (err) {
+    return `not linked: ${(err as Error).message}`;
+  }
+  entry.linked = true;
+  remember(ledger);
+  return null;
+}
+
+async function create(
+  jira: JiraClient,
+  settings: FollowUpSettings,
+  ledger: Ledger,
+  runId: string,
+  item: FollowUpItem
+): Promise<FiledEntry | string> {
+  const issueType = statusFor(settings.issueType, ledger.key);
+  if (issueType === undefined) return `no jira.followUps.issueType for project ${projectOf(ledger.key)}`;
+  let key: string;
+  try {
+    key = await jira.createIssue({
+      project: projectOf(ledger.key),
+      issueType,
+      summary: item.summary,
+      description: description(item, ledger.key, runId)
+    });
+  } catch (err) {
+    return (err as Error).message;
+  }
+  const entry = { summary: item.summary, key, linked: false };
+  ledger.entries.push(entry);
+  remember(ledger);
+  return entry;
+}
+
 async function fileOne(
   jira: JiraClient,
   settings: FollowUpSettings,
-  key: string,
+  ledger: Ledger,
   runId: string,
   item: FollowUpItem,
   index: number
-): Promise<FiledFollowUp> {
+): Promise<FiledFollowUp & { reused: boolean }> {
   const { summary } = item;
-  if (index >= settings.max) return { summary, key: null, problem: `over jira.followUps.max of ${settings.max}` };
-  const issueType = statusFor(settings.issueType, key);
-  if (issueType === undefined) {
-    return { summary, key: null, problem: `no jira.followUps.issueType for project ${projectOf(key)}` };
+  if (index >= settings.max) {
+    return { summary, key: null, problem: `over jira.followUps.max of ${settings.max}`, reused: false };
   }
-  let created: string;
-  try {
-    created = await jira.createIssue({
-      project: projectOf(key),
-      issueType,
-      summary,
-      description: description(item, key, runId)
-    });
-  } catch (err) {
-    return { summary, key: null, problem: (err as Error).message };
-  }
-  try {
-    await jira.linkIssues(settings.linkType, key, created);
-  } catch (err) {
-    return { summary, key: created, problem: `not linked: ${(err as Error).message}` };
-  }
-  return { summary, key: created, problem: null };
+  const at = ledger.earlier.findIndex((entry) => entry.summary === summary);
+  const reused = at !== -1;
+  const entry = reused ? ledger.earlier.splice(at, 1)[0] : await create(jira, settings, ledger, runId, item);
+  if (typeof entry === "string") return { summary, key: null, problem: entry, reused };
+  const problem = await link(jira, settings, ledger, entry);
+  return { summary, key: entry.key, problem, reused };
 }
 
 export async function fileFollowUps(
   jira: JiraClient,
   config: WorkerConfig,
+  home: string,
   key: string,
   runId: string,
   handback: string
 ): Promise<FiledFollowUp[]> {
   const settings = config.jira.followUps;
   if (settings === undefined) return [];
+  const entries = filedFor(home, key);
+  const ledger: Ledger = { home, key, entries, earlier: [...entries] };
   const filed: FiledFollowUp[] = [];
   for (const [index, item] of parseFollowUps(handback).entries()) {
-    const entry = await fileOne(jira, settings, key, runId, item, index);
+    const { reused, ...entry } = await fileOne(jira, settings, ledger, runId, item, index);
     const fields = { run: runId, key, followUp: entry.key, summary: entry.summary };
-    if (entry.problem === null) log().info("follow-up filed", fields);
-    else log().warn("follow-up failed", { ...fields, problem: entry.problem });
+    if (entry.problem !== null) log().warn("follow-up failed", { ...fields, problem: entry.problem });
+    else log().info(reused ? "follow-up reused" : "follow-up filed", fields);
     filed.push(entry);
+  }
+  for (const earlier of ledger.earlier) {
+    const problem = await link(jira, settings, ledger, earlier);
+    const fields = { run: runId, key, followUp: earlier.key, summary: earlier.summary };
+    log().info("follow-up kept", problem === null ? fields : { ...fields, problem });
+    const note = problem === null ? EARLIER : `${EARLIER}, ${problem}`;
+    filed.push({ summary: earlier.summary, key: earlier.key, problem: note });
   }
   return filed;
 }

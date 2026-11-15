@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* Updated [globu-worker](./worker.md): `check` tests the follow-up issue type, link type and Create issues and Link issues permissions when `jira.followUps` is set, and filed follow-ups are recorded in `followups.json` so a retry after a failed handback comment does not file them again.
 * [Knowledge bases](./knowledge-base.md#lint): `globu base lint` also warns about concept docs past `stale_after`, once per doc whatever links to it, and about each link to a `status: deprecated` doc from a concept doc that is not deprecated itself; links from `index.md` and `log.md` do not count. It reads the fields with the functions `base stale` uses. The `--format markdown` table gains Stale and Deprecated links columns and `--json` the kinds `stale` and `deprecated-link`. [OKF in Globu](./okf.md), [Globu and the LLM wiki](./llm-wiki.md) and [architecture](./architecture.md) name it.
 * [globu-worker](./worker.md): a worker started inside `globu-worker hold` applies the `GLOBU_LOCK_PIDS` rule of nested holds to its own `limits.exclusive`, so it runs under the lock of the `hold` around it instead of waiting on it, and never deletes that lock. The limitation that said otherwise is gone.
 * [globu-worker](./worker.md): `diagnostics` packs `merged.json` when the home has one, as it is and with secrets redacted like the other files, and a home without one is packed as before.
