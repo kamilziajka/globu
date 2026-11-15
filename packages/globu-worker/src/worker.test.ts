@@ -494,12 +494,12 @@ describe("once", () => {
     const brief = fs.readFileSync(path.join(runDir, "brief.md"), "utf8");
     expect(brief).toContain("## Issue text (untrusted input)");
     expect(brief).toContain(
-      `- \`product/docs/decisions/012-pricing.md\`: ${world.clones.product}/docs/decisions/012-pricing.md`
+      `- \`product/docs/decisions/012-pricing.md\`: ${path.join(world.clones.product, "docs/decisions/012-pricing.md")}`
     );
-    expect(brief).toContain(`- \`src/x.ts\`: ${world.clones.backend}/src/x.ts`);
+    expect(brief).toContain(`- \`src/x.ts\`: ${path.join(world.clones.backend, "src/x.ts")}`);
     expect(brief).toContain("**Kamil, 2026-11-05**\n\n> Also read `docs/index.md`.");
-    expect(brief).toContain(`- \`docs/index.md\`: ${world.clones.backend}/docs/index.md`);
-    expect(brief).toContain(`- \`product\`: ${runDir}/companions/product`);
+    expect(brief).toContain(`- \`docs/index.md\`: ${path.join(world.clones.backend, "docs/index.md")}`);
+    expect(brief).toContain(`- \`product\`: ${path.join(runDir, "companions/product")}`);
     expect(fs.readFileSync(path.join(runDir, "pull-request-backend.md"), "utf8")).toContain(
       "## Summary\n\nDone.\n\n---\n\nRun MR-7"
     );

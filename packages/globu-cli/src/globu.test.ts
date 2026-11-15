@@ -521,7 +521,9 @@ describe("globu hook guard", () => {
     expect(JSON.parse(written.out).hookSpecificOutput.permissionDecisionReason).toContain(
       `this command writes to ${path.join(repo, "out.txt")}, which belongs to shard "notes". That shard asks before edits from sessions in other repos.`
     );
-    expect(bash(`cd ${sh} && npm test`).out).toContain(`this command may change ${path.join(repo, "test")}, which`);
+    expect(JSON.parse(bash(`cd ${sh} && npm test`).out).hookSpecificOutput.permissionDecisionReason).toContain(
+      `this command may change ${path.join(repo, "test")}, which`
+    );
     process.env.CLAUDE_PROJECT_DIR = other;
     expect(bash("npm test", repo).out).toContain('"ask"');
 

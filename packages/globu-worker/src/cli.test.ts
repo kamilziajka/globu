@@ -293,7 +293,9 @@ describe("globu-worker", () => {
     const io = captureIo(root);
     const args = ["--log-level", "debug", "once", "--issue", "MR-1"];
     expect(await workerMain(args, io, given, { ...quiet(), jira: sessionJira(), run })).toBe(0);
-    expect(io.stderr).toBe(`globu-worker: ${file} is readable by others, run chmod 600 on it\n`);
+    expect(io.stderr).toBe(
+      process.platform === "win32" ? "" : `globu-worker: ${file} is readable by others, run chmod 600 on it\n`
+    );
     expect(seen).toHaveLength(1);
     expect(seen[0].ANTHROPIC_API_KEY).toBe("sk-file-key");
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();
