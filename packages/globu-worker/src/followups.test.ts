@@ -370,6 +370,29 @@ describe("following pull requests", () => {
     expect(second.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
   });
 
+  it("prints a repair as repaired or repair failed, and says which issue waits for the slot it took", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 5\n" });
+    const pulls = { [setup.url]: pull(setup.url) };
+    const failing = deps(setup, { pulls, claude: "add-only" });
+    failing.jira.search = async () => [
+      { key: "MR-9", labels: [] },
+      { key: "MR-10", labels: [] }
+    ];
+    await once(failing.worker);
+    expect(failing.io.stdout.trim().split("\n")).toEqual([
+      `MR-7\trepair failed: the merge was not committed ${setup.url}`,
+      "MR-9\twaiting on a slot, taken by the repair of #7"
+    ]);
+
+    const idle = deps(setup, { pulls, claude: "resolve" });
+    await once(idle.worker);
+    expect(idle.io.stdout.trim().split("\n")).toEqual([`MR-7\trepaired ${setup.url}`, "nothing eligible"]);
+
+    const byHand = deps(setup, { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } });
+    await once(byHand.worker, { repair: setup.url });
+    expect(byHand.io.stdout).toContain("MR-7\trepair failed: the repair made no commits");
+  });
+
   it("fails a repair that commits nothing", async () => {
     const clean = world({ author: false });
     const failing = { mergeable: "MERGEABLE", statusCheckRollup: [{ name: "test", conclusion: "FAILURE" }] };

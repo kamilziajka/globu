@@ -36,6 +36,7 @@ import {
   newRunId,
   pruneRuns,
   type RunRecord,
+  type RunState,
   removeLinks,
   removeTree,
   runsDir,
@@ -667,10 +668,17 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
   }
 }
 
+const REPAIR_STATES: Partial<Record<RunState, string>> = { "handed-back": "repaired", released: "repair failed" };
+
 function describe(record: RunRecord): string {
   const reason = record.reason === null ? "" : `: ${record.reason.split("\n")[0]}`;
   const met = record.outcome === undefined ? "" : ` (${record.outcome})`;
-  return `${record.key}\t${record.state}${met}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`;
+  const state = record.repairOf === undefined ? record.state : REPAIR_STATES[record.state];
+  return `${record.key}\t${state}${met}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`;
+}
+
+function pullNumber(record: RunRecord): string {
+  return `#${record.pullRequests[0].split("/").at(-1)}`;
 }
 
 export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {
@@ -1145,7 +1153,13 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
     }
   }
   deps.onPlan?.(structuredClone(plan));
-  if (plan.length === 0) io.out("nothing eligible");
+  if (keys.length === 0) io.out("nothing eligible");
+  if (slots === 0) {
+    const pulls = repaired.map(pullNumber).join(", ");
+    for (const key of keys.slice(0, config.limits.concurrent)) {
+      io.out(`${key}\twaiting on a slot, taken by the repair of ${pulls}`);
+    }
+  }
   for (const entry of plan) io.out(`${entry.key}\t${entry.action}`);
   const runs = await Promise.all(
     picked.map((candidate) => {

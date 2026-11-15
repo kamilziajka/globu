@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [globu-worker](./worker.md#commands): `once` and the service log name a repair as `repaired` or `repair failed` instead of `handed-back` and `released`, and when repairs took every slot they name the issues that wait for the next cycle instead of printing `nothing eligible`.
 * [globu-worker](./worker.md#following-its-pull-requests): a repair's record is written before its comments are sent, and a comment that cannot be posted is kept in `run.json` under `unposted`, reported and posted at the start of the next cycle. A run closed after a restart keeps the reason it already had.
 * [globu-worker](./worker.md#a-run): a program that Windows ended, with an NTSTATUS exit code from `0xC0000000` up, is a problem of the machine like one that cannot start: the release adds no `blockedLabel`, the loop stops with exit 69 and a repair that failed that way does not count against `limits.repairs`. A `git` or `gh` that is not found counts the same way now.
 * [Claude Code hook contract](./claude-code-hooks.md#seen-in-worker-runs): what worker runs and short `claude -p` runs showed on 2026-11-15: one `result` line per stretch of a run that waits on background tasks, which of its figures are per stretch and which are running totals, `--max-turns` counting per stretch, the plugins and MCP servers in the `init` event, a denied call under `dontAsk`, allow rules from trusted settings applying on top of `--allowedTools` and read-only commands running without a rule.
