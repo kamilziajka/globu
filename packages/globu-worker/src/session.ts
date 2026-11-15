@@ -40,7 +40,12 @@ function planRow(entry: PlanEntry): Omit<Row, "key" | "summary"> {
 
 function runRow(record: RunRecord): Omit<Row, "key" | "summary"> {
   const state = RUN_STATES[record.state];
-  if (record.state === "handed-back") return { state, detail: record.pullRequests.join(" ") };
+  if (record.state === "handed-back") {
+    return {
+      state,
+      detail: [...(record.outcome === undefined ? [] : [record.outcome]), ...record.pullRequests].join(" ")
+    };
+  }
   if (record.state === "released") return { state, detail: (record.reason as string).split("\n")[0] };
   return { state, detail: `since ${record.startedAt.slice(11, 16)} UTC` };
 }

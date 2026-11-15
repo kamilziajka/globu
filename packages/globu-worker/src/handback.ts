@@ -13,6 +13,15 @@ const BULLET_RE = /^ ?[-*+]\s+(.*\S)\s*$/;
 const NONE_RE = /^(none|nothing|n\/a)\.?$/i;
 export const SUMMARY_LIMIT = 255;
 
+export type HandbackOutcome = "met" | "partial" | "not met";
+
+const OUTCOME_RE = /^[\s>*_#-]*outcome[\s*_]*:[\s*_]*(not met|partial|met)/im;
+
+export function parseOutcome(handback: string): HandbackOutcome | null {
+  const match = OUTCOME_RE.exec(handback);
+  return match === null ? null : (match[1].toLowerCase() as HandbackOutcome);
+}
+
 function heading(line: string): { depth: number; text: string } | null {
   const match = HEADING_RE.exec(line);
   return match === null ? null : { depth: match[1].length, text: match[2] };

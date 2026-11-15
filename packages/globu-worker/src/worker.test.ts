@@ -425,6 +425,16 @@ describe("once", () => {
     return { calls, io, result };
   };
 
+  it("reads the handback's outcome and shows it in the line and the notification of a hand back", async () => {
+    const partial = await notifying(setup(), [issue("MR-8")], {
+      commit: true,
+      handback: "## Summary\n\nOutcome: partial\n\n3 of 7 labs pass.\n"
+    });
+    expect(partial.result.runs[0]).toMatchObject({ state: "handed-back", outcome: "partial" });
+    expect(notices(partial.calls)[0][3]).toBe("MR-8 handed back, partial: https://github.com/acme/pr/2");
+    expect(partial.io.stdout).toContain("MR-8\thanded-back (partial) https://github.com/acme/pr/2");
+  });
+
   it("notifies on a hand back, keeps the subscription figure and claims nothing past its limit", async () => {
     const world = setup();
     const handed = await notifying(world, [issue("MR-7")], {

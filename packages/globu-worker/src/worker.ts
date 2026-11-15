@@ -17,7 +17,7 @@ import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summariz
 import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
 import { notStarted, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
-import { fileFollowUps, followUpSection } from "./handback.js";
+import { fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
@@ -611,6 +611,8 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   const token = deps.secrets.githubToken;
   if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
   const handback = written ?? `The run wrote no handback. Its last message:\n\n${outcome?.summary.result ?? "(none)"}`;
+  const met = parseOutcome(handback);
+  if (met !== null) record.outcome = met;
   const issue = await jira.issue(record.key);
   const title = `${issue.key}: ${issue.summary}`;
   for (const worktree of worktrees) {
@@ -632,8 +634,8 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
   record.state = "handed-back";
   endRun(record, deps.now());
-  log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests });
-  const message = `${record.key} handed back: ${record.pullRequests.join(" ")}`;
+  log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests, outcome: met });
+  const message = `${record.key} handed back${met === null ? "" : `, ${met}`}: ${record.pullRequests.join(" ")}`;
   await tell(deps, record, "handed-back", record.pullRequests[0], message);
   return record;
 }
@@ -660,7 +662,8 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
 
 function describe(record: RunRecord): string {
   const reason = record.reason === null ? "" : `: ${record.reason.split("\n")[0]}`;
-  return `${record.key}\t${record.state}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`;
+  const met = record.outcome === undefined ? "" : ` (${record.outcome})`;
+  return `${record.key}\t${record.state}${met}${reason}${record.pullRequests.map((url) => ` ${url}`).join("")}`;
 }
 
 export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {

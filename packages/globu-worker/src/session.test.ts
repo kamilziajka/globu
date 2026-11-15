@@ -64,6 +64,9 @@ describe("sessionList", () => {
     expect(
       list.run(run("MR-1", { state: "handed-back", pullRequests: ["https://x/1", "https://x/2"] }))[0].detail
     ).toBe("https://x/1 https://x/2");
+    expect(
+      list.run(run("MR-1", { state: "handed-back", pullRequests: ["https://x/1"], outcome: "partial" }))[0].detail
+    ).toBe("partial https://x/1");
     expect(list.run(run("MR-9", { state: "released", reason: "no marker\nmore" }))).toEqual([
       { key: "MR-9", summary: "", state: "released", detail: "no marker" }
     ]);

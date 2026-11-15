@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { FILED_FILE, filedFor, saveFiled } from "./filed.js";
-import { fileFollowUps, followUpSection, parseFollowUps, SUMMARY_LIMIT } from "./handback.js";
+import { fileFollowUps, followUpSection, parseFollowUps, parseOutcome, SUMMARY_LIMIT } from "./handback.js";
 import type { JiraClient, NewIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 
@@ -262,5 +262,21 @@ describe("followUpSection", () => {
     ).toBe(
       "Follow-up issues:\n- MR-9: One\n- MR-10: Two (not linked: no link type)\n- not created: Three (issuetype is invalid)\n\n"
     );
+  });
+});
+
+describe("parseOutcome", () => {
+  it("reads met, partial or not met from the handback's Outcome line, however it is marked up", () => {
+    expect(parseOutcome("## Summary\n\nOutcome: met\n\nAll seven labs pass.")).toBe("met");
+    expect(parseOutcome("## Summary\n\n**Outcome:** partial. 3 of 7 labs pass.\n")).toBe("partial");
+    expect(parseOutcome("## Summary\n\n- Outcome: Partially met\n")).toBe("partial");
+    expect(parseOutcome("## Summary\n\n> outcome: NOT MET, the issue is not ready\n")).toBe("not met");
+    expect(parseOutcome("## Summary\n\nOutcome: met\n\n## Not done\n\nOutcome: not met\n")).toBe("met");
+  });
+
+  it("has no outcome for a handback without the line", () => {
+    expect(parseOutcome("## Summary\n\nDone. The outcome: unclear.\n")).toBeNull();
+    expect(parseOutcome("## Summary\n\nOutcome: fine\n")).toBeNull();
+    expect(parseOutcome("")).toBeNull();
   });
 });

@@ -325,7 +325,7 @@ Nothing in Jira or GitHub tells the owner of the machine that a run ended. `noti
 | `needs-human` | The last allowed repair of a pull request failed | The pull request |
 | `stopped` | The `run` loop or `start --mode auto` stopped for a [machine problem](#a-run) | The issue whose run found it |
 
-The command runs with the same shell as `setup` (`sh -c`, Git's `sh` on Windows), in the worker's home, and gets the event, the issue key and the URL as `$1`, `$2` and `$3` and as `GLOBU_EVENT`, `GLOBU_ISSUE` and `GLOBU_URL`, with a line for a person in `GLOBU_MESSAGE`, such as `MR-7 handed back: https://github.com/acme/backend/pull/3` or `MR-8 released: the run made no commits`. Its environment is the worker's without the Jira, GitHub and Claude secrets; a token the command needs can go into `secrets.env` under a name of its own, which passes through. A command that fails, cannot start or outlasts `notify.timeout` is logged as `notify failed` with the reason and never stops the worker. When the machine problem that stops the worker is the shell itself, the `stopped` notification cannot run either: the worker then prints `could not send the stopped notification: ...` to its error output next to the stop, and the log has both. Runs driven from a session never notify, since a person is already in them.
+The command runs with the same shell as `setup` (`sh -c`, Git's `sh` on Windows), in the worker's home, and gets the event, the issue key and the URL as `$1`, `$2` and `$3` and as `GLOBU_EVENT`, `GLOBU_ISSUE` and `GLOBU_URL`, with a line for a person in `GLOBU_MESSAGE`, such as `MR-7 handed back, met: https://github.com/acme/backend/pull/3`, with the handback's [outcome](#the-outcome) when it has one, or `MR-8 released: the run made no commits`. Its environment is the worker's without the Jira, GitHub and Claude secrets; a token the command needs can go into `secrets.env` under a name of its own, which passes through. A command that fails, cannot start or outlasts `notify.timeout` is logged as `notify failed` with the reason and never stops the worker. When the machine problem that stops the worker is the shell itself, the `stopped` notification cannot run either: the worker then prints `could not send the stopped notification: ...` to its error output next to the stop, and the log has both. Runs driven from a session never notify, since a person is already in them.
 
 [ntfy](https://ntfy.sh) sends a push notification to a phone subscribed to a topic; the `Click` header opens the URL:
 
@@ -373,6 +373,19 @@ A release moves the issue back to `releasedStatus`, unassigns it, adds `blockedL
 A problem of the machine is not the issue's fault: the setup shell is missing, or a setup command or `claude` cannot start at all. Such a release says "could not start `<program>`: not found on PATH" rather than an exit code, does not add `blockedLabel`, says on the issue that the machine needs fixing and sets `environment: true` in `run.json`. The `run` loop and `start --mode auto` then stop with exit code 69 (`EX_UNAVAILABLE`), since every next issue would fail the same way, and [notify](#notifications) `stopped`; once the machine is fixed, starting the worker again takes the issue up on the next poll. A failed repair for that reason does not count against `limits.repairs`.
 
 Every footer, in the pull request body and in the Jira comment, names the run id, the Jira account and GitHub login the worker acted as, turns, with the number of segments when there is more than one, cost, wall time with the part of it spent in the model API, the blocked writes and the denied tool calls, each listed on a line of its own. A run driven from a session names the session instead of the turns, the cost and the blocked writes, which only the headless stream can count. Until Atlassian ships agent identities a run acts as whoever holds the tokens, and the footer records which identity that was.
+
+### The outcome
+
+The `issue-deliver` skill starts the handback's Summary with a line `Outcome: met`, `Outcome: partial` or `Outcome: not met`: whether the change meets what the issue asks for, in the run's own judgment. A run that got 3 of 7 labs to pass and said so is `partial`. The worker reads the first such line, whatever Markdown is around it, and shows the word wherever it reports a hand back, so a reviewer sees which pull request to open first:
+
+| Where | How it reads |
+|---|---|
+| `once`, `run` and `start --mode auto` | `KLAYBOY-125	handed-back (partial) https://github.com/acme/klayboy/pull/5` |
+| The session list of `start` | `handed back  partial https://github.com/acme/klayboy/pull/5` |
+| `GLOBU_MESSAGE` of a `handed-back` notification | `KLAYBOY-125 handed back, partial: https://github.com/acme/klayboy/pull/5` |
+| `run.json` and the worker's log | `outcome` |
+
+The pull request body and the Jira comment carry it as the first line of the handback. A handback without the line, from an older plugin or written by hand, has no outcome and reads as before. The word is the run's claim, not a check of the worker's: the reviewer still decides.
 
 ### Segments
 

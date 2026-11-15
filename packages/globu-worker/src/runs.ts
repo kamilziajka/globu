@@ -31,6 +31,7 @@ export type RunRecord = {
   apiMs?: number;
   segments?: number;
   wallMs?: number;
+  outcome?: "met" | "partial" | "not met";
 };
 export type StoredRun = { dir: string; record: RunRecord };
 
