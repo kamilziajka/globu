@@ -17,7 +17,8 @@ function tools(missing: string[] = []): Runner {
 
 function unpack(archive: string): string {
   const dir = tempDir();
-  execFileSync("tar", ["-xzf", archive, "-C", dir]);
+  // From the archive's directory: the GNU tar of Git for Windows reads a drive letter in -f as a remote host.
+  execFileSync("tar", ["-xzf", path.basename(archive), "-C", dir], { cwd: path.dirname(archive) });
   return dir;
 }
 

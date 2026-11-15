@@ -36,4 +36,5 @@ const { name } = readJson<{ name: string }>(path.join(packageDir, "package.json"
 const link = path.join(pluginDir, "node_modules", name);
 fs.rmSync(path.join(pluginDir, "node_modules"), { recursive: true, force: true });
 fs.mkdirSync(path.dirname(link), { recursive: true });
-fs.symlinkSync(path.relative(path.dirname(link), packageDir), link);
+// A junction on Windows: a directory symlink there needs Developer Mode or an elevated shell.
+fs.symlinkSync(path.relative(path.dirname(link), packageDir), link, "junction");

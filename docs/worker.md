@@ -315,7 +315,7 @@ notify:
     http://homeassistant.local:8123/api/webhook/globu-worker
 ```
 
-A longer command is better kept in a script next to `worker.yaml`, such as `command: ./notify.sh`, since the command runs in the worker's home.
+A longer command is better kept in a script next to `worker.yaml`, such as `command: ./notify.sh "$@"`, since the command runs in the worker's home. The `"$@"` passes the three arguments on to the script: they belong to the command line, and a script started without it gets none, though it still reads the `GLOBU_` variables.
 
 ## From a session
 

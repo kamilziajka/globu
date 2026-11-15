@@ -73,7 +73,12 @@ describe("run records", () => {
     fs.mkdirSync(path.join(tree, "node_modules/@acme"), { recursive: true });
     fs.symlinkSync(path.join(tree, "packages/a"), path.join(tree, "node_modules/@acme/a"), "junction");
     fs.symlinkSync(outside, path.join(tree, "node_modules/@acme/outside"), "junction");
-    fs.symlinkSync(path.join(outside, "keep.txt"), path.join(tree, "keep.txt"));
+    try {
+      fs.symlinkSync(path.join(outside, "keep.txt"), path.join(tree, "keep.txt"));
+    } catch (err) {
+      // A file symlink on Windows needs Developer Mode, which CI has and a developer's machine may not.
+      if ((err as NodeJS.ErrnoException).code !== "EPERM") throw err;
+    }
     removeTree(tree);
     expect(fs.existsSync(tree)).toBe(false);
     expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("keep\n");

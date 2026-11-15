@@ -42,9 +42,11 @@ const world = (
     return { value: undefined };
   });
   on("tool.call", () => ({ result: {}, text: "ok" }));
-  on("fs.exists", (_$, e) => ({
-    value: bases.some((base) => e.path === `${base}/index.md` || e.path === `${base}/log.md`)
-  }));
+  // On Windows the harness resolves /repo/docs/index.md to C:\repo\docs\index.md.
+  on("fs.exists", (_$, e) => {
+    const posix = e.path.replace(/\\/g, "/").replace(/^[A-Za-z]:/, "");
+    return { value: bases.some((base) => posix === `${base}/index.md` || posix === `${base}/log.md`) };
+  });
   on("command.list", () => ({
     value: commands.map((name) => ({ name, description: "", source: "plugin" as const, plugin: "globu" }))
   }));

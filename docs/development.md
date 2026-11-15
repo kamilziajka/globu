@@ -80,6 +80,7 @@ CI runs the suite on `windows-latest` as well, so the code paths that exist only
 - Run a bundle as `node <bundle>` on Windows, which does not read the shebang, and run a hook command with the shell `setupShell` finds, which is Git's `sh` on Windows.
 - A test of the worker that scripts the setup shell as `sh` sets `platform: "linux"` in its deps. The Windows lookup has tests of its own with `platform: "win32"`, and one test leaves the platform out, so the host's shell is looked up for real.
 - Pass `"junction"` to `fs.symlinkSync` for a directory link. Elsewhere the type is ignored; on Windows the test then removes a real junction.
+- `.gitattributes` keeps every text file at LF in a checkout, so Biome passes on a Windows machine whose git has `core.autocrlf true`, the Git for Windows default.
 - Windows starts processes several times slower, so the test timeout there is 30 s instead of 5 s (`vitest.config.ts`).
 
 Two tests are skipped on Windows, because what they check does not exist there:
@@ -89,7 +90,7 @@ Two tests are skipped on Windows, because what they check does not exist there:
 | `paths` falls back to the temp directory when the home directory is not writable | it makes the home unwritable with `chmod 500`, and Windows ignores the mode bits of a directory |
 | `findOnPath` looks through a colon separated PATH elsewhere | a Windows path holds a drive colon, so it cannot be written into a `:` separated `PATH` |
 
-The coverage gate is enforced on Linux only. The Windows job runs the tests without it, since the branches for the other platform are not reached there.
+The coverage gate is enforced on Linux only. The Windows job runs the tests without it, since the branches for the other platform are not reached there, and `vitest.config.ts` sets no thresholds on Windows, so `npm run verify` and the pre-commit hook pass on a Windows machine too. The junction test there skips its file symlink when Windows refuses it, as it does without Developer Mode.
 
 ## Design choices that keep the code testable
 
