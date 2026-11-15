@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { register } from "../../globu-core/src/index.js";
 import { captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { workerMain } from "./cli.js";
@@ -541,5 +541,44 @@ describe("globu-worker", () => {
     expect(await pending).toBe(0);
     expect(Date.now() - started).toBeLessThan(900);
     expect(paused.stdout.split("\n").slice(5).join("\n")).toBe("nothing eligible\nstopping after the current cycle\n");
+  });
+
+  it.each([["run"], ["start", "--mode", "auto"]])(
+    "keeps polling with %s after a cycle that runs and after one that claims nothing",
+    async (...argv) => {
+      const root = prepare();
+      const signals = new EventEmitter();
+      let cycles = 0;
+      const jira: JiraClient = {
+        ...sessionJira(),
+        search: async (_jql, max) => {
+          if (max === 1) return [];
+          cycles += 1;
+          if (cycles === 3) signals.emit("SIGTERM");
+          return cycles === 1 ? [{ key: "MR-1", labels: [] }] : [];
+        }
+      };
+      expect(await workerMain(argv, captureIo(root), withGithub(), { jira, signals, run: healthy })).toBe(0);
+      expect(cycles).toBe(3);
+    }
+  );
+
+  it("pauses on a timer that holds the process and ends it when a signal stops the loop", async () => {
+    const root = prepare();
+    const signals = new EventEmitter();
+    const setTimer = vi.spyOn(globalThis, "setTimeout");
+    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
+    const pending = workerMain(["run"], captureIo(root), withGithub(), { jira: idleJira(), signals, run: healthy });
+    const pause = await vi.waitFor(() => {
+      const found = setTimer.mock.calls.findIndex((call) => call[1] === 1000);
+      expect(found).toBeGreaterThanOrEqual(0);
+      return setTimer.mock.results[found].value as NodeJS.Timeout;
+    });
+    expect(pause.hasRef()).toBe(true);
+    signals.emit("SIGTERM");
+    expect(await pending).toBe(0);
+    expect(clearTimer).toHaveBeenCalledWith(pause);
+    setTimer.mockRestore();
+    clearTimer.mockRestore();
   });
 });

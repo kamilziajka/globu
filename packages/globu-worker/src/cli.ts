@@ -170,8 +170,11 @@ export async function workerMain(
       stopped: () => stopped,
       sleep: (ms) =>
         new Promise<void>((resolve) => {
-          wake = resolve;
-          setTimeout(resolve, ms).unref();
+          const timer = setTimeout(resolve, ms);
+          wake = () => {
+            clearTimeout(timer);
+            resolve();
+          };
         })
     });
   };

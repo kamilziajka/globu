@@ -1,6 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -187,6 +189,20 @@ const timer = setInterval(() => {
 }, 20);
 `;
 
+const POLLING_CONFIG = `
+jira:
+  site: http://127.0.0.1:PORT
+  jql: project = MR
+  claimedStatus: Delivery
+  releasedStatus: Ready for delivery
+  repository:
+    labelPrefix: "repo:"
+shards:
+  deliverable: [backend]
+poll:
+  every: 1s
+`;
+
 const WAITING_CONFIG = `
 jira:
   site: https://acme.atlassian.net
@@ -276,6 +292,74 @@ describe("globu-worker hold", () => {
     expect(await ended).toBe(0);
     expect(fs.existsSync(lock)).toBe(false);
   });
+});
+
+const FAKE_GH = `process.stdout.write("octocat\\n");`;
+const FAKE_CLAUDE = `
+const init = { type: "system", subtype: "init", model: "m", skills: ["globu:issue-deliver"] };
+const result = { type: "result", is_error: false, result: "OK", total_cost_usd: 0.01 };
+process.stdout.write(JSON.stringify(init) + "\\n" + JSON.stringify(result) + "\\n");
+`;
+
+function fakeProgram(dir: string, name: string, script: string): void {
+  const file = write(dir, `${name}.cjs`, script);
+  fs.writeFileSync(path.join(dir, name), `#!/bin/sh\nexec "${process.execPath}" "${file}" "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, `${name}.cmd`), `@"${process.execPath}" "${file}" %*\r\n`);
+}
+
+function fakeJira(onSearch: () => void): Promise<http.Server> {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const search = request.url === "/rest/api/2/search/jql";
+      if (search) onSearch();
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify(search ? { issues: [] } : { accountId: "bot", displayName: "Bot" }));
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
+
+describe("globu-worker run", () => {
+  it("stays up as a process of its own across idle cycles and stops on a signal", async () => {
+    const root = tempDir();
+    const home = process.env.GLOBU_HOME as string;
+    const remote = initRepo(path.join(root, "remotes/backend"), { "README.md": "backend\n" });
+    register({ locator: `file://${remote}`, cwd: root, dest: path.join(home, "work/backend") });
+    const bin = path.join(root, "bin");
+    fakeProgram(bin, "gh", FAKE_GH);
+    fakeProgram(bin, "claude", FAKE_CLAUDE);
+    let searches = 0;
+    const jira = await fakeJira(() => {
+      searches += 1;
+    });
+    const { port } = jira.address() as AddressInfo;
+    write(home, "worker.yaml", POLLING_CONFIG.replace("PORT", String(port)));
+    const secrets = { JIRA_EMAIL: "bot@acme.example", JIRA_API_TOKEN: "secret", GH_TOKEN: "gh-token" };
+    const env = withDirOnPath({ ...process.env, ...secrets }, bin, process.platform);
+    const worker = spawn(...executable(GLOBU_WORKER, ["run"]), { env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    worker.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    worker.stderr.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    const ended = new Promise<number | null>((resolve) => worker.on("close", resolve));
+    try {
+      while (searches < 3 && worker.exitCode === null) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect({ exitCode: worker.exitCode, output }).toMatchObject({ exitCode: null });
+      worker.kill("SIGTERM");
+      const code = await ended;
+      if (!WINDOWS) {
+        expect(code).toBe(0);
+        expect(output.trim().split("\n").at(-1)).toBe("stopping after the current cycle");
+      }
+    } finally {
+      worker.kill("SIGKILL");
+      jira.close();
+    }
+  }, 30_000);
 });
 
 describe("plugin hooks", () => {
