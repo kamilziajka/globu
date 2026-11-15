@@ -194,6 +194,7 @@ describe("globu base list and owner", () => {
   });
 
   it("exits 1 when no base owns the file", () => {
+    initRepo(root);
     expect(run(["base", "owner", "a.ts"])).toEqual({ code: 1, out: "no owning base\n", err: "" });
     expect(run(["base", "owner"])).toEqual({ code: 1, out: "", err: "error: missing required argument 'file'\n" });
   });
