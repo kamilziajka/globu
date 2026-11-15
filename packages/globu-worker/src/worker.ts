@@ -18,6 +18,7 @@ import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } fr
 import { notStarted, type Runner, runOrThrow } from "./exec.js";
 import { fileFollowUps, followUpSection } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
+import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
 import { mergedIssues, recordMerged } from "./merged.js";
@@ -518,6 +519,15 @@ async function runClaude(
   record.state = "running";
   persist(deps, dir, record);
   log().info("running", { run: record.id, key: record.key, tree: cwd });
+  const platform = deps.platform ?? process.platform;
+  const bin = launcherDir(deps.home);
+  writeLaunchers(bin, process.execPath, WORKER_SCRIPT, platform);
+  const env = {
+    ...scrubbedEnv(deps.env),
+    ...authorEnv(config),
+    GLOBU_HOME: deps.home,
+    CLAUDE_CONFIG_DIR: deps.claudeConfigDir
+  };
   const result = await deps.run(
     "claude",
     claudeArgs({
@@ -531,12 +541,7 @@ async function runClaude(
     }),
     {
       cwd,
-      env: {
-        ...scrubbedEnv(deps.env),
-        ...authorEnv(config),
-        GLOBU_HOME: deps.home,
-        CLAUDE_CONFIG_DIR: deps.claudeConfigDir
-      },
+      env: withDirOnPath(env, bin, platform),
       timeoutMs: config.limits.timeout,
       stdoutFile: streamFile
     }

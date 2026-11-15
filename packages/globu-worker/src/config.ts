@@ -42,7 +42,7 @@ export const DEFAULT_ALLOWED_TOOLS = [
   "Bash(head *)",
   "Bash(tail *)",
   "Bash(wc *)",
-  "Bash(node *globu.mjs* base stamp *)"
+  "Bash(globu base stamp *)"
 ];
 
 export const DENIED_TOOLS = [
@@ -51,7 +51,7 @@ export const DENIED_TOOLS = [
   "Bash(gh *)",
   "Bash(curl *)",
   "Bash(wget *)",
-  "Bash(node *globu.mjs* base stamp *--verified*)"
+  "Bash(globu base stamp *--verified*)"
 ];
 
 const RepositorySchema = z.union([

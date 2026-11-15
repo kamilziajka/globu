@@ -496,7 +496,7 @@ describe("once", () => {
     ]);
     expect(claude.args).toContain("--allowedTools");
     expect(claude.args).toContain("Bash(git commit *)");
-    expect(claude.args).toContain("Bash(node *globu.mjs* base stamp *)");
+    expect(claude.args).toContain("Bash(globu base stamp *)");
     expect(claude.args.slice(claude.args.indexOf("--disallowedTools"), claude.args.indexOf("--add-dir"))).toEqual([
       "--disallowedTools",
       "Bash(git push*)",
@@ -504,8 +504,11 @@ describe("once", () => {
       "Bash(gh *)",
       "Bash(curl *)",
       "Bash(wget *)",
-      "Bash(node *globu.mjs* base stamp *--verified*)"
+      "Bash(globu base stamp *--verified*)"
     ]);
+    expect(claude.env.PATH).toBe(`${path.join(world.home, "bin")}:${process.env.PATH}`);
+    expect(fs.readFileSync(path.join(world.home, "bin", "globu"), "utf8")).toContain(' globu "$@"');
+    expect(fs.existsSync(path.join(world.home, "bin", "globu.cmd"))).toBe(true);
     expect(claude.env.JIRA_API_TOKEN).toBeUndefined();
     expect(claude.env.GH_TOKEN).toBeUndefined();
     expect(claude.env).toMatchObject({

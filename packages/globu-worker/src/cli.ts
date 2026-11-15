@@ -20,6 +20,7 @@ import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
 import { hold, POLL_MS, withLockPid } from "./hold.js";
 import { jiraClient } from "./jira.js";
+import { LAUNCHER_COMMAND, launcherMain } from "./launcher.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
@@ -120,6 +121,7 @@ export async function workerMain(
   env: NodeJS.ProcessEnv,
   overrides: Overrides
 ): Promise<number> {
+  if (argv[0] === LAUNCHER_COMMAND) return launcherMain(argv.slice(1), io);
   const program = new Command("globu-worker")
     .description(DESCRIPTION)
     .version(VERSION)

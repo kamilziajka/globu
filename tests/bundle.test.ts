@@ -8,6 +8,7 @@ import YAML from "yaml";
 import { register } from "../packages/globu-core/src/index.js";
 import { workerMain } from "../packages/globu-worker/src/cli.js";
 import type { JiraClient } from "../packages/globu-worker/src/jira.js";
+import { withDirOnPath, writeLaunchers } from "../packages/globu-worker/src/launcher.js";
 import { setupShell } from "../packages/globu-worker/src/shell.js";
 import { baseIndex, captureIo, initRepo, read, tempDir, write } from "../packages/testing/index.js";
 
@@ -143,6 +144,36 @@ describe("bundled worker", () => {
     const result = spawnSync(...executable(GLOBU_WORKER, ["once"]), { encoding: "utf8", env });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GLOBU_HOME points at");
+  });
+
+  it("stamps generated through the globu launcher a run finds on its PATH", () => {
+    const bin = tempDir();
+    writeLaunchers(bin, process.execPath, GLOBU_WORKER, process.platform);
+    const repo = tempDir();
+    write(repo, "wiki/index.md", baseIndex("demo"));
+    write(repo, "wiki/a.md", "---\ntype: Note\ntitle: A\ndescription: a\n---\n\n# A\n");
+    write(repo, "wiki/b.md", "---\ntype: Note\ntitle: B\ndescription: b\n---\n\n# B\n");
+    const env = withDirOnPath({ ...process.env }, bin, process.platform);
+    const shell = setupShell(process.env, process.platform) as string;
+    const stamped = spawnSync(shell, ["-c", "globu base stamp wiki/a.md"], { cwd: repo, encoding: "utf8", env });
+    expect(stamped.stdout).toMatch(/^generated\t\S+a\.md\tglobu\/\d+\.\d+\.\d+\t/);
+    expect(read(repo, "wiki/a.md")).toContain('generated: { by: "globu/');
+    const refused = spawnSync(shell, ["-c", "globu base stamp --verified wiki/a.md"], {
+      cwd: repo,
+      encoding: "utf8",
+      env
+    });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("a verification needs a person");
+    if (WINDOWS) {
+      const cmd = spawnSync("cmd.exe", ["/d", "/s", "/c", "globu base stamp wiki\\b.md"], {
+        cwd: repo,
+        encoding: "utf8",
+        env
+      });
+      expect(cmd.stdout).toMatch(/^generated\t/);
+      expect(read(repo, "wiki/b.md")).toContain('generated: { by: "globu/');
+    }
   });
 });
 
