@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
+import { mergedIssues } from "./merged.js";
 import {
   followingUp,
   isTerminal,
@@ -88,7 +89,7 @@ describe("run records", () => {
     expect(followingUp({ ...record, state: "released" })).toBe(false);
   });
 
-  it("keeps the newest runs, open follow-ups with their repairs, unfinished runs and today's runs", () => {
+  it("keeps the newest runs, open follow-ups with their repairs, unfinished runs and today's runs, and every merge", () => {
     const home = tempDir();
     const at = (key: string, day: number, patch: Partial<RunRecord> = {}): RunRecord => {
       const record = { ...newRun(key, new Date(Date.UTC(2026, 9, day, 9)), IDENTITY), ...patch };
@@ -112,6 +113,7 @@ describe("run records", () => {
         .sort()
     ).toEqual([open.id, repair.id, running.id, today.id, newest.id].sort());
     expect(fs.existsSync(path.join(runsDir(home), old.id))).toBe(false);
+    expect(Object.keys(mergedIssues(home, []))).toEqual(["MR-1", "MR-6"]);
     expect(pruneRuns(home, 2, NOW)).toEqual([]);
   });
 });
