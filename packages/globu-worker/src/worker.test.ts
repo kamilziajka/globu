@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
+import { filedFor } from "./filed.js";
 import type { JiraClient, JiraIssue, NewIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { loadRuns, newRun, type RunRecord, runsDir, saveRun } from "./runs.js";
@@ -113,7 +115,7 @@ type FakeJira = JiraClient & {
   issueLinks: string[];
 };
 
-type FakeOptions = { stolen?: string[]; failTransition?: boolean; failCreate?: string };
+type FakeOptions = { stolen?: string[]; failTransition?: boolean; failCreate?: string; failHandback?: boolean };
 
 function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
   const store = new Map(issues.map((entry) => [entry.key, structuredClone(entry)]));
@@ -148,6 +150,9 @@ function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
       get(key).statusId = STATUS_IDS[name] ?? "";
     },
     comment: async (key, body) => {
+      if (options.failHandback && body.includes("Pull requests:")) {
+        throw new Error(`Jira POST /issue/${key}/comment failed: 500`);
+      }
       comments[key] = [...(comments[key] ?? []), body];
     },
     addLabel: async (key, label) => {
@@ -167,7 +172,10 @@ function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
     },
     linkIssues: async (type, inward, outward) => {
       issueLinks.push(`${inward} ${type} ${outward}`);
-    }
+    },
+    issueTypes: async () => [],
+    linkTypes: async () => [],
+    permissions: async () => ({})
   };
 }
 
@@ -881,6 +889,24 @@ describe("once", () => {
     expect(fs.existsSync(lock)).toBe(true);
   });
 
+  it("runs inside a hold of a process above it without waiting on that process or deleting its lock", async () => {
+    const world = setup();
+    world.config.limits.exclusive = ["gpu"];
+    const dir = process.env.GLOBU_LOCK_DIR as string;
+    fs.mkdirSync(dir, { recursive: true });
+    const above = { pid: process.ppid, host: os.hostname(), holder: "globu-worker hold (npm run render)" };
+    const lock = path.join(dir, "gpu.lock");
+    fs.writeFileSync(lock, JSON.stringify(above));
+    const calls: Calls = { gh: [], claude: [] };
+    const jira = fakeJira([issue("MR-7")]);
+    const { worker } = deps(world, jira, fakeRunner({ commit: true }, calls));
+    worker.env = { ...worker.env, GLOBU_LOCK_PIDS: `${process.ppid},${process.pid}` };
+    expect((await once(worker, { dryRun: true })).plan[0].action).toMatch(/^would claim and run in backend/);
+    expect((await once(worker)).runs[0].state).toBe("handed-back");
+    expect(calls.claude[0].env.GLOBU_LOCK_PIDS).toBe(`${process.ppid},${process.pid}`);
+    expect(JSON.parse(fs.readFileSync(lock, "utf8"))).toEqual(above);
+  });
+
   it("files the two follow-ups of a handback as linked issues and lists their keys on the issue", async () => {
     const world = setup();
     world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
@@ -928,6 +954,26 @@ describe("once", () => {
     expect(jira.comments["MR-7"][0]).toContain(
       "Follow-up issues:\n- not created: Rename the flag (Jira POST /issue failed: 400 issuetype is invalid)"
     );
+  });
+
+  it("does not file the follow-ups again when the comment failed and a later run hands back", async () => {
+    const world = setup();
+    world.config.jira = { ...world.config.jira, followUps: { issueType: "Task", linkType: "Relates", max: 10 } };
+    const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Add retries to the client\n- Rename the flag\n";
+    const failed = await runWith(world, [issue("MR-7")], { commit: true, handback }, { jira: { failHandback: true } });
+    expect(failed.record?.state).toBe("released");
+    expect(failed.record?.reason).toContain("Jira POST /issue/MR-7/comment failed: 500");
+    expect(failed.record?.followUpIssues).toEqual(["MR-101", "MR-102"]);
+    expect(filedFor(world.home, "MR-7").map((entry) => entry.key)).toEqual(["MR-101", "MR-102"]);
+
+    const retry = await runWith(world, [issue("MR-7", { summary: "Change x again" })], { commit: true, handback });
+    expect(retry.record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
+    expect(retry.jira.created).toEqual([]);
+    expect(retry.jira.issueLinks).toEqual([]);
+    expect(retry.jira.comments["MR-7"][0]).toContain(
+      "Follow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
+    );
+    expect(filedFor(world.home, "MR-7")).toEqual([]);
   });
 
   it("leaves the follow-ups in the comment only when they are not configured", async () => {

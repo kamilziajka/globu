@@ -78,7 +78,10 @@ function idleJira(onSearch: () => void = () => {}): JiraClient {
     setField: async () => {},
     remoteLink: async () => {},
     createIssue: async () => "MR-100",
-    linkIssues: async () => {}
+    linkIssues: async () => {},
+    issueTypes: async () => [],
+    linkTypes: async () => [],
+    permissions: async () => ({})
   };
 }
 
@@ -291,7 +294,12 @@ describe("globu-worker", () => {
       if (command === "claude") seen.push(options.env as NodeJS.ProcessEnv);
       return { code: 0, stdout: "", stderr: "", timedOut: false };
     };
-    const given = { GLOBU_HOME: home, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, JIRA_API_TOKEN: "env-token" };
+    const given = {
+      GLOBU_HOME: home,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      JIRA_API_TOKEN: "env-token",
+      GLOBU_LOCK_PIDS: "4242"
+    };
     const io = captureIo(root);
     const args = ["--log-level", "debug", "once", "--issue", "MR-1"];
     expect(await workerMain(args, io, given, { ...quiet(), jira: sessionJira(), run })).toBe(0);
@@ -302,7 +310,7 @@ describe("globu-worker", () => {
     expect(seen[0].JIRA_API_TOKEN).toBeUndefined();
     expect(seen[0].JIRA_EMAIL).toBeUndefined();
     expect([seen[0].GIT_TERMINAL_PROMPT, seen[0].GCM_INTERACTIVE]).toEqual(["0", "never"]);
-    expect(seen[0].GLOBU_LOCK_PIDS).toBe(String(process.pid));
+    expect(seen[0].GLOBU_LOCK_PIDS).toBe(`4242,${process.pid}`);
     expect(process.env.GIT_TERMINAL_PROMPT).toBe("0");
     const logs = fs
       .readdirSync(path.join(home, "logs"))

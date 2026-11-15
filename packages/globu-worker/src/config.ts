@@ -74,9 +74,13 @@ export function projectOf(key: string): string {
   return key.split("-")[0];
 }
 
-export function statusFor(setting: StatusSetting | undefined, key: string): string | undefined {
+export function settingFor(setting: StatusSetting | undefined, project: string): string | undefined {
   if (setting === undefined || typeof setting === "string") return setting;
-  return setting[projectOf(key)] ?? setting[DEFAULT_PROJECT];
+  return setting[project] ?? setting[DEFAULT_PROJECT];
+}
+
+export function statusFor(setting: StatusSetting | undefined, key: string): string | undefined {
+  return settingFor(setting, projectOf(key));
 }
 
 const WorkerConfigSchema = z.object({
@@ -143,6 +147,8 @@ const WorkerConfigSchema = z.object({
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
+
+export type FollowUpSettings = NonNullable<WorkerConfig["jira"]["followUps"]>;
 
 export function workerConfigPath(home: string): string {
   return path.join(home, "worker.yaml");

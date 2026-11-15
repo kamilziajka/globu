@@ -5,7 +5,7 @@ import type { Io } from "../../globu-cli/src/cli/index.js";
 import { useGitHubToken } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import { bootstrapShards } from "./bootstrap.js";
-import { attempt, CHECK_NAMES, type Check, checkAccess, formatCheck } from "./check.js";
+import { attempt, type Check, checkAccess, checkNames, formatCheck } from "./check.js";
 import {
   type Homes,
   loadWorkerConfig,
@@ -18,9 +18,10 @@ import {
 } from "./config.js";
 import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
-import { hold, POLL_MS, withLockPid } from "./hold.js";
+import { hold, POLL_MS } from "./hold.js";
 import { jiraClient } from "./jira.js";
 import { LAUNCHER_COMMAND, launcherMain } from "./launcher.js";
+import { withLockPid } from "./lock.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
@@ -110,7 +111,7 @@ async function verify(io: Io, overrides: Overrides, deps: WorkerDeps, first: Che
     if (screen === undefined) io.out(formatCheck(check));
     else screen.write(`${checkLine(check.name, check, 0, widthOf(screen))}\n`);
   }
-  return [...first, ...(await report(io, overrides, CHECK_NAMES, (onCheck) => checkAccess(deps, onCheck)))];
+  return [...first, ...(await report(io, overrides, checkNames(deps.config), (onCheck) => checkAccess(deps, onCheck)))];
 }
 
 const passed = (checks: Check[]) => checks.every((check) => check.ok);

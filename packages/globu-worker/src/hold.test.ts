@@ -4,17 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureIo, tempDir } from "../../testing/index.js";
-import {
-  HELD_EXIT,
-  type HoldDeps,
-  hold,
-  holderOf,
-  LOCK_PIDS,
-  NOT_STARTED_EXIT,
-  parseResources,
-  withLockPid
-} from "./hold.js";
-import { lockDir, lockFile } from "./lock.js";
+import { HELD_EXIT, type HoldDeps, hold, holderOf, NOT_STARTED_EXIT, parseResources } from "./hold.js";
+import { LOCK_PIDS, lockDir, lockFile, withLockPid } from "./lock.js";
 
 const CHILD = `
 const fs = require("node:fs");
@@ -199,20 +190,20 @@ describe("hold", () => {
 
   it("counts a lock held by a process named in GLOBU_LOCK_PIDS on this machine as its own", async () => {
     const { deps, io, dir, report } = setup();
-    const env = { ...deps.env, [LOCK_PIDS]: `1,${process.pid}` };
-    const gpu = plant(dir, "gpu", { pid: process.pid, host: os.hostname(), holder: "globu-worker" });
+    const env = { ...deps.env, [LOCK_PIDS]: `1,${process.ppid}` };
+    const gpu = plant(dir, "gpu", { pid: process.ppid, host: os.hostname(), holder: "globu-worker" });
     expect(await hold({ ...deps, env }, "gpu,disk", child(report, "0"), {})).toBe(0);
     expect(reportOf(report)).toMatchObject({
       locks: ["disk.lock", "gpu.lock"],
-      pids: `1,${process.pid},${process.pid}`
+      pids: `1,${process.ppid},${process.pid}`
     });
     expect(fs.readdirSync(dir)).toEqual(["gpu.lock"]);
     expect(JSON.parse(fs.readFileSync(gpu, "utf8")).holder).toBe("globu-worker");
 
-    plant(dir, "gpu", { pid: process.pid, host: "render-box" });
+    plant(dir, "gpu", { pid: process.ppid, host: "render-box" });
     expect(await hold({ ...deps, env }, "gpu", child(report, "0"), {})).toBe(HELD_EXIT);
     expect(io.stderr).toBe(
-      `globu-worker: could not take gpu (held by another process, pid ${process.pid} on render-box)\n`
+      `globu-worker: could not take gpu (held by another process, pid ${process.ppid} on render-box)\n`
     );
   });
 });

@@ -195,7 +195,7 @@ Rules that hold everywhere:
 ## Repository layout
 
 ```
-packages/knowledge-base      OKF library: frontmatter, scan, validate, field checks, stale, stamp, setup, log
+packages/knowledge-base      OKF library: frontmatter, scan, validate, field checks, stale, stamp, lint, setup, log
 packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
 packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
 packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the once and run commands

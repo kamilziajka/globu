@@ -36,7 +36,7 @@ And these warnings about the optional families below, which never fail it. Each 
 
 It does not check prose or links between pages. A base that passes is well formed, not necessarily correct. The field checks live in `packages/knowledge-base/src/fields.ts` as plain functions over parsed frontmatter, so other commands can reuse them.
 
-`globu base lint` is the content check beside it: links that do not resolve, docs nothing links to and index entries that drifted from the linked doc's `description`, which §8 says an entry should carry. Its findings are warnings and never fail it, as §6 asks of consumers. See [knowledge bases](./knowledge-base.md#lint).
+`globu base lint` is the content check beside it: links that do not resolve, docs nothing links to, index entries that drifted from the linked doc's `description`, which §8 says an entry should carry, docs past `stale_after` and links from current docs to deprecated ones. Its findings are warnings and never fail it, as §6 asks of consumers. See [knowledge bases](./knowledge-base.md#lint).
 
 ## The optional families
 
@@ -46,7 +46,7 @@ Version 0.2 defines optional frontmatter families beyond the reserved files. Glo
 |---|---|---|
 | Provenance | `sources`, a list with ids that footnotes cite | Checked by `validate`. Nothing writes it. |
 | Trust | `generated` and `verified`, each `{by, at}` with an actor such as `claude-code/x`, `human:<id>` or `process:<id>` | Checked by `validate`. `base stamp` writes them and `update-knowledge` calls it. No trust tier is computed: the spec stores signals, not scores. |
-| Lifecycle | `status` of `draft`, `stable` or `deprecated`, and `stale_after` | Checked by `validate`. `base stale` lists the docs past `stale_after` or `deprecated`, and `doctor` and the session index count them per shard. |
+| Lifecycle | `status` of `draft`, `stable` or `deprecated`, and `stale_after` | Checked by `validate`. `base stale` lists the docs past `stale_after` or `deprecated`, `base lint` warns about stale docs and links to deprecated ones, and `doctor` and the session index count them per shard. |
 | Attested Computations | Verified results attached to a doc | Out of scope. Aimed at data catalogs. |
 
 ### Stamping trust
@@ -57,7 +57,7 @@ The `update-knowledge` skill stamps `generated` on each doc it creates or change
 
 ### Stale docs
 
-A doc is stale when the current time is at or past its `stale_after`, and it counts here as well when its `status` is `deprecated`. A `stale_after` that does not parse is a `validate` warning and never makes a doc stale. `globu base stale [path]` lists them for every base under a directory, with the reason, and exits 0 either way. `globu doctor` and the session index give one line per shard with the count and that command, never the list, so the index stays short.
+A doc is stale when the current time is at or past its `stale_after`, and it counts here as well when its `status` is `deprecated`. A `stale_after` that does not parse is a `validate` warning and never makes a doc stale. `globu base stale [path]` lists them for every base under a directory, with the reason, and exits 0 either way. `globu doctor` and the session index give one line per shard with the count and that command, never the list, so the index stays short. `globu base lint` reports the same stale docs and, for a deprecated doc, each link to it from a current doc, as described in [lint](./knowledge-base.md#lint).
 
 Every timestamp in these families is an ISO 8601 datetime with an offset, such as `2026-11-05T08:00:00Z`. A bare date is not valid. This is what a doc that uses the trust and lifecycle fields looks like:
 
