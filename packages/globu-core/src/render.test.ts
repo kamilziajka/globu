@@ -38,7 +38,7 @@ describe("renderIndex", () => {
       "work",
       path.join(repo, "docs")
     );
-    expect(text).toContain("# Globu knowledge shards (context: work)");
+    expect(text).toContain("# Globu knowledge shards (project: work)");
     expect(text).toContain(`- **product** (okf, writable, you are working inside it)\n  - Location: ${repo}\n`);
     expect(text).toContain("  - What: Product decisions\n  - Use when: Pricing questions");
     expect(text).toContain(`  - Entry: product: ${path.join(repo, "docs/index.md")}`);

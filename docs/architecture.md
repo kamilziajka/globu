@@ -22,8 +22,8 @@ A third program, [`globu-worker`](./worker.md), sits on top of both: it claims a
 - **Shard**: one registered unit of knowledge. Today a shard is one git repo.
 - **Root**: a place inside a shard where knowledge starts, with an entry file. An OKF repo with a base per package is one shard with many roots.
 - **Format**: how a shard's knowledge is laid out. Each format has a driver.
-- **Context**: a named selection of shards, for example `work` or `personal`.
-- **Manifest**: the portable list of shards and contexts.
+- **Project**: a named group of shards, for example `mercastra` or `klayboy`. A session is scoped to the project of the repo it starts in.
+- **Manifest**: the portable list of shards and projects.
 - **State**: what is true only on this machine.
 
 ## Configuration
@@ -43,20 +43,27 @@ shards:
     description: Product decisions and domain rules
     useWhen: Pricing, roadmap or domain modelling questions
     access: read
-contexts:
-  work: [product, team-*]
+projects:
+  acme:
+    shards: [product, team-*]
+    jira: ACME
+always: [handbook]
 imports:
   - source: git@github.com:acme/product.git
     commit: 4f1c2d9e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d
 ```
 
-`imports` records the team manifests merged in with `globu import`, so a later bare `globu import --yes` refreshes them. An entry holds the source, the `file` when it is not the default, the `ref` when the import came from a link to a file on a branch, and the `commit` the team repo was at, so the next refresh can say whether it moved. The merge copies shards and contexts into this file: nothing is resolved at session time, and the team repo is only read when `import` runs.
+`imports` records the team manifests merged in with `globu import`, so a later bare `globu import --yes` refreshes them. An entry holds the source, the `file` when it is not the default, the `ref` when the import came from a link to a file on a branch, and the `commit` the team repo was at, so the next refresh can say whether it moved. The merge copies shards and projects into this file: nothing is resolved at session time, and the team repo is only read when `import` runs.
+
+A project is a list of shard ids and patterns, where `*` is a wildcard. `always` lists the shards every session sees whatever its project. The registry reads only `shards` of a project and `always`. Any other key of a project, such as `jira` and `worker`, and any other key at the top of the file is kept as written when the manifest is saved and is never read by `globu-core`: those two belong to the [worker](./worker.md), so the registry, the resolver and the hooks still know nothing about Jira.
+
+A manifest written before projects existed has `contexts`, a map of names to shard patterns. Each entry is read as a project with only `shards`, after the entries of `projects` and behind a project of the same name. `globu project set` moves the entry it changes into `projects`.
 
 `state.yaml` is per machine and never shared.
 
 ```yaml
 version: 1
-current: work
+current: null
 shards:
   product: { path: /Users/me/.globu/clones/product, mode: read, owner: globu }
 claude:
@@ -88,7 +95,18 @@ The state path of a shard is always the main checkout of its repo. `register` ru
 
 ## Resolver
 
-The resolver merges manifest and state into resolved shards (`id`, `path`, `mode`, `owner`, `present`, `format`, `roots`, routing text). Every command and hook works from that list. The active context filters it: `GLOBU_CONTEXT` wins, then `current` in state, and with neither set every shard is active.
+The resolver merges manifest and state into resolved shards (`id`, `path`, `mode`, `owner`, `present`, `format`, `roots`, routing text). Every command and hook works from that list.
+
+## Projects and what a session sees
+
+The index, `list` and `resolve` show the shards of one project plus the `always` shards (`packages/globu-core/src/context.ts`). The project is chosen in this order:
+
+1. `GLOBU_CONTEXT`, then `current` in state. Both take a project name and are manual overrides: they apply whatever repo the session starts in.
+2. The session's home repo. Home is the repo of `CLAUDE_PROJECT_DIR`, or of the working directory without it, matched to a shard as the [session view](#session-view) does, so a linked worktree counts. The project is the first one in manifest order whose shards include that shard.
+3. A home shard that is in no project sees the `always` shards and itself.
+4. A home that is no shard, or a manifest with no projects, sees every shard.
+
+The guard is not scoped: it works from every registered shard, so a shard outside the session's project is still protected by its mode. `globu claude sync` has no home and uses every shard unless a project is pinned.
 
 ## Session view
 
@@ -130,7 +148,7 @@ The CLI detects structure only. Meaning is drafted by Claude: the `register` ski
 
 All of it comes from the `globu` plugin, which should be enabled at user scope.
 
-- **SessionStart hook** runs `globu hook session-start`. It prints the active context's index (id, location, routing text, entry files, a count of stale or deprecated docs for an OKF shard that has any, format conventions) and Claude Code adds that to the session. Location and entry files come from `workPath`, so a session in a worktree is pointed at that worktree and told to leave the main checkout alone. It prints nothing when no shards are registered. It reads local files, including the frontmatter of every concept doc in the OKF roots for the stale count, and runs `git rev-parse`.
+- **SessionStart hook** runs `globu hook session-start`. It prints the index of the session's project (id, location, routing text, entry files, a count of stale or deprecated docs for an OKF shard that has any, format conventions) and Claude Code adds that to the session. Location and entry files come from `workPath`, so a session in a worktree is pointed at that worktree and told to leave the main checkout alone. It prints nothing when no shards are registered. It reads local files, including the frontmatter of every concept doc in the OKF roots for the stale count, and runs `git rev-parse`.
 - **PreToolUse guard** runs `globu hook guard` before `Edit`, `Write`, `NotebookEdit` and `Bash`. It finds the shard by the repo the target belongs to, so a file in any worktree maps to its shard. For a `read` shard it blocks the edit with exit code 2. For an `ask` shard it returns the PreToolUse permission decision `ask`, which makes Claude Code prompt the user, unless the session's home is that shard's repo. Home is the repo of `CLAUDE_PROJECT_DIR`, the directory the session started in. The hook's `cwd` is only the fallback because it follows `cd`, and a session must not become exempt by changing into a sibling repo. Shell commands are read as described below.
 - **`globu claude sync`** writes the active shards' paths into `permissions.additionalDirectories` in the user's Claude settings so reads need no prompt. It records which entries it added and only ever changes those. It is an explicit command and nothing calls it implicitly. The register skill offers it after a shard is registered and runs it only when the user agrees.
 - **PostToolUse edit hook** runs `globu hook validate-edit` after `Edit` and `Write` and validates the base an edited Markdown file belongs to. Errors block, warnings about the edited doc's optional fields are passed to Claude as context. See [knowledge bases](./knowledge-base.md).
@@ -196,7 +214,7 @@ Rules that hold everywhere:
 
 ```
 packages/knowledge-base      OKF library: frontmatter, scan, validate, field checks, stale, stamp, lint, setup, log
-packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
+packages/globu-core          manifest, state, resolver, session view, probe, drivers, projects, Claude settings
 packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
 packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the cycle and its follow-ups, the session commands, locks and hold, the stamp launcher
 packages/testing             test helpers

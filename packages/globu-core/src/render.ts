@@ -50,7 +50,7 @@ export function renderIndex(shards: ResolvedShard[], context: string | null, cwd
   const missing = shards.filter((shard) => !shard.present);
 
   const lines = [
-    `# Globu knowledge shards${context === null ? "" : ` (context: ${context})`}`,
+    `# Globu knowledge shards${context === null ? "" : ` (project: ${context})`}`,
     "",
     "These knowledge sources are registered on this machine. Most live outside the current repo. When a task touches a shard's area, read its entry file first and follow links from there. Leave them alone when the task is unrelated.",
     "",

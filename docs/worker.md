@@ -39,7 +39,7 @@ export GLOBU_HOME=~/.globu/worker CLAUDE_CONFIG_DIR=~/.globu/worker/claude
 ```
 
 ```bash
-globu import https://github.com/acme/product.git --context team --yes
+globu import https://github.com/acme/product.git --project team --yes
 ```
 
 ```bash

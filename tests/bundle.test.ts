@@ -94,7 +94,7 @@ describe("bundled CLI", () => {
     expect(runBundle(GLOBU, ["import", `file://${team}`, "--context", "team", "--yes"]).status).toBe(0);
     expect(runBundle(GLOBU, ["sync"]).stdout).toMatch(/^cloned\tproduct\ncloned\tnotes\nnext: `globu claude sync`/);
     const index = runBundle(GLOBU, ["index"]).stdout;
-    expect(index).toContain("# Globu knowledge shards (context: team)");
+    expect(index).toContain("# Globu knowledge shards (project: team)");
     expect(index).toContain(`- **product** (okf, read-only)\n  - Location: ${path.join(home, "clones/product")}`);
     expect(index).toContain("- **notes** (generic, read-only)");
 

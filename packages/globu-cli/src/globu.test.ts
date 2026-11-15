@@ -205,7 +205,7 @@ describe("globu import", () => {
       useWhen: "Notes questions"
     };
     write(teamDir, ".globu/manifest.yaml", YAML.stringify({ shards: [shard], contexts: { team: ["notes"] } }));
-    const plan = [teamDir, "  added:    notes", "  updated:  -", "  contexts: team", "active context: team"];
+    const plan = [teamDir, "  added:    notes", "  updated:  -", "  projects: team", "active project: team"];
     const claudeHint =
       "next: `globu claude sync` adds the clones to the Claude settings, so Claude reads them without a prompt";
     const nextSteps = [
@@ -217,14 +217,14 @@ describe("globu import", () => {
     expect(run(["import", "team", "--context", "team"])).toEqual({
       code: 0,
       err: "",
-      out: [...plan, "nothing written, apply with: globu import team --context team --yes", ""].join("\n")
+      out: [...plan, "nothing written, apply with: globu import team --project team --yes", ""].join("\n")
     });
     expect(run(["import", "team", "--file", ".globu/manifest.yaml", "--sync"])).toMatchObject({
       code: 1,
       err: "globu: --sync needs --yes, nothing is cloned for a preview\n"
     });
     expect(run(["import", "team", "--file", ".globu/manifest.yaml"]).out).toContain(
-      "apply with: globu import team --file .globu/manifest.yaml --context team --yes\n"
+      "apply with: globu import team --file .globu/manifest.yaml --project team --yes\n"
     );
     expect(run(["list"]).out).toBe("no shards registered\n");
     expect(json(["import", "team"])).toMatchObject({
@@ -235,14 +235,14 @@ describe("globu import", () => {
       plans: [{ file: null, ref: null, commit: null }]
     });
 
-    expect(run(["import", "team", "--context", "team", "--yes"]).out).toBe(
+    expect(run(["import", "team", "--project", "team", "--yes"]).out).toBe(
       [...plan, `written to ${manifestPath()}`, ...nextSteps, ""].join("\n")
     );
-    expect(run(["list"]).out).toBe("context: team\nnotes\tgeneric\tread\t(not synced)\n");
+    expect(run(["list"]).out).toBe("project: team\nnotes\tgeneric\tread\t(not synced)\n");
     expect(run(["sync"]).out).toBe(`cloned\tnotes\n${claudeHint}\n`);
     expect(run(["import"]).out).toContain("nothing written, apply with: globu import --yes\n");
     expect(run(["import", "--yes"]).out).toBe(
-      [teamDir, "  added:    -", "  updated:  -", "  contexts: team", `written to ${manifestPath()}`, ""].join("\n")
+      [teamDir, "  added:    -", "  updated:  -", "  projects: team", `written to ${manifestPath()}`, ""].join("\n")
     );
     expect(run(["import", "team", "--file", ".globu/manifest.yaml"]).out).toMatch(
       /^.*team \(\.globu\/manifest\.yaml\)\n/
@@ -250,7 +250,7 @@ describe("globu import", () => {
 
     write(teamDir, ".globu/manifest.yaml", YAML.stringify({ shards: [{ ...shard, description: "Team notes" }] }));
     expect(run(["import", "--yes"]).out).toBe(
-      [teamDir, "  added:    -", "  updated:  notes", "  contexts: -", `written to ${manifestPath()}`, ""].join("\n")
+      [teamDir, "  added:    -", "  updated:  notes", "  projects: -", `written to ${manifestPath()}`, ""].join("\n")
     );
     expect(run(["show", "notes"]).out).toContain("description: Team notes\n");
   });
@@ -266,11 +266,13 @@ describe("globu import", () => {
     const commit = git(teamDir, "rev-parse", "HEAD").slice(0, 7);
 
     expect(run(["import", "team"]).out).toContain(
-      `  commit:   ${commit}\nnothing written, apply with: globu import team --context team --yes\n`
+      `  commit:   ${commit}\nnothing written, apply with: globu import team --project team --yes\n`
     );
     const result = run(["import", "team", "--yes", "--sync"]);
     expect(result.code).toBe(1);
-    expect(result.out).toContain("note: the team manifest defines the context team, `globu use team` activates it\n");
+    expect(result.out).toContain(
+      "note: the team manifest defines the project team, `globu use team` pins it for every session\n"
+    );
     expect(result.out).toContain("cloned\tnotes\nerror\tgone\tgit ");
     expect(result.out).toContain("next: `globu claude sync` adds the clones");
     expect(result.out).not.toContain("globu register <path>");
@@ -312,30 +314,69 @@ describe("globu import", () => {
   });
 });
 
-describe("globu contexts", () => {
-  it("defines, selects and removes contexts", () => {
-    run(["register", localRepo("team-api")]);
-    run(["register", localRepo("private")]);
-    expect(run(["context", "list"]).out).toBe("no contexts defined, every shard is active\n");
+describe("globu projects", () => {
+  it("defines, pins and removes projects", () => {
+    const api = localRepo("team-api");
+    const personal = localRepo("private");
+    run(["register", api]);
+    run(["register", personal]);
+    run(["register", localRepo("notes")]);
+    expect(run(["project", "list"]).out).toBe("no projects defined, every session sees every shard\n");
 
-    expect(run(["context", "set", "work", "team-*"]).out).toBe("context work: team-*\n");
+    expect(run(["project", "set", "work", "team-*"]).out).toBe("project work: team-*\n");
     run(["context", "set", "personal", "private"]);
-    expect(run(["use", "work"]).out).toBe("active context: work\n");
+    expect(run(["use", "work"]).out).toBe("active project: work\n");
     expect(run(["context", "list"]).out).toBe("* work\tteam-*\n  personal\tprivate\n");
-    expect(run(["list"]).out).toMatch(/^context: work\nteam-api\t/);
-    expect(json(["list", "--all"])).toMatchObject({ context: null, shards: [{ id: "team-api" }, { id: "private" }] });
+    expect(run(["list"]).out).toMatch(/^project: work\nteam-api\t/);
+    expect(json(["list", "--all"])).toMatchObject({
+      context: null,
+      shards: [{ id: "team-api" }, { id: "private" }, { id: "notes" }]
+    });
 
-    expect(run(["use", "--all"]).out).toBe("active context: all shards\n");
-    expect(run(["context", "rm", "personal"]).out).toBe("removed context personal\n");
-    expect(json(["context", "list"])).toEqual({ current: null, contexts: { work: ["team-*"] } });
+    expect(run(["use", "--all"]).out).toBe("active project: the one of the session's home repo\n");
+    expect(run(["project", "rm", "personal"]).out).toBe("removed project personal\n");
+    expect(json(["project", "list"])).toEqual({ current: null, projects: { work: ["team-*"] }, always: [] });
+  });
+
+  it("scopes the list, the index and the session hook to the project of the session's home", () => {
+    const api = localRepo("team-api");
+    const personal = localRepo("private");
+    for (const repo of [api, personal, localRepo("notes")]) run(["register", repo]);
+    run(["project", "set", "work", "team-*"]);
+    fs.appendFileSync(manifestPath(), "always: [notes]\n");
+    expect(run(["project", "list"]).out).toBe("  work\tteam-*\nalways\tnotes\n");
+
+    expect(run(["list"], "", api).out).toMatch(/^project: work\nteam-api\t.*\nnotes\t[^\n]*\n$/);
+    expect(run(["list"], "", personal).out).toMatch(/^private\t.*\nnotes\t[^\n]*\n$/);
+    expect(run(["list"]).out.split("\n")).toHaveLength(4);
+
+    const index = run(["index"], "", api).out;
+    expect(index).toContain("# Globu knowledge shards (project: work)");
+    expect(index).toContain("- **notes**");
+    expect(index).not.toContain("- **private**");
+    const hook = run(["hook", "session-start"], { cwd: personal }).out;
+    expect(hook).toContain("- **private**");
+    expect(hook).not.toContain("- **team-api**");
+
+    write(api, "a.md", "a\n");
+    commitAll(api);
+    expect(run(["resolve", "team-api/a.md"], "", personal)).toMatchObject({
+      code: 1,
+      out: 'fail\tteam-api/a.md\tshard "team-api" is not in this session\'s project\n'
+    });
+    process.env.GLOBU_CONTEXT = "work";
+    expect(run(["resolve", "team-api/a.md"], "", personal).out).toMatch(/^ok\tteam-api\/a\.md\t/);
+    expect(run(["hook", "session-start"], { cwd: personal }).out).not.toContain("- **private**");
+    delete process.env.GLOBU_CONTEXT;
+    expect(run(["claude", "sync"], "", api).out.split("\n")).toHaveLength(5);
   });
 
   it("rejects bad arguments", () => {
-    expect(run(["use"]).err).toBe("globu: use needs a context name, or --all\n");
-    expect(run(["context", "set"]).code).toBe(1);
-    expect(run(["context", "set", "work"]).err).toBe("error: missing required argument 'patterns'\n");
-    expect(run(["context", "nope", "x"]).err).toBe("error: unknown command 'nope'\n");
-    expect(run(["context"])).toMatchObject({ code: 1, err: expect.stringMatching(/^Usage: globu context /) });
+    expect(run(["use"]).err).toBe("globu: use needs a project name, or --all\n");
+    expect(run(["project", "set"]).code).toBe(1);
+    expect(run(["project", "set", "work"]).err).toBe("error: missing required argument 'patterns'\n");
+    expect(run(["project", "nope", "x"]).err).toBe("error: unknown command 'nope'\n");
+    expect(run(["context"])).toMatchObject({ code: 1, err: expect.stringMatching(/^Usage: globu project\|context /) });
   });
 });
 

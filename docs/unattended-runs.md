@@ -10,7 +10,7 @@ Everything Globu does rests on three things being present on the machine: `~/.gl
 
 ## The team manifest
 
-A team manifest is an ordinary Globu manifest (see [architecture](./architecture.md#configuration)) kept in a repo every member and every job can reach, by convention at `.globu/manifest.yaml`. It lists the team's shards with their repo URLs, routing text and access caps, and the contexts that select them:
+A team manifest is an ordinary Globu manifest (see [architecture](./architecture.md#configuration)) kept in a repo every member and every job can reach, by convention at `.globu/manifest.yaml`. It lists the team's shards with their repo URLs, routing text and access caps, and the projects that group them:
 
 ```yaml
 version: 1
@@ -30,25 +30,26 @@ shards:
       - { path: docs, name: backend, entry: docs/index.md }
     description: The API, its data model and its tests
     useWhen: Changing or calling a backend endpoint
-contexts:
-  team: [product, backend]
+projects:
+  team:
+    shards: [product, backend]
 ```
 
 Every shard needs a repo URL. The manifest holds no paths, modes or tokens: those are per machine and come from `state.yaml` and the environment.
 
-The easiest way to write one is to register the shards on a laptop and copy the `shards` and `contexts` sections of `~/.globu/manifest.yaml` into the team repo.
+The easiest way to write one is to register the shards on a laptop and copy the `shards`, `projects` and `always` sections of `~/.globu/manifest.yaml` into the team repo.
 
 ## Import
 
 `globu import <locator>` merges a team manifest into the local one. The locator is a path to a manifest file, a directory holding `.globu/manifest.yaml`, a git URL of a repo holding it, or the browser link to the file on GitHub or GitLab (`.../-/blob/main/.globu/manifest.yaml`), which is split into repo, ref and file. A URL is cloned shallowly into a temporary directory that is removed after the file is read. `--file <path>` names another file inside the repo or directory.
 
-Without `--yes` the command only prints what it would add, update and define, followed by the full command that applies it. With `--yes` it writes the manifest and records the locator, the file, the ref and the commit it read under `imports`, so a bare `globu import --yes` later refreshes every recorded import and says whether the team manifest moved. `--context <name>` makes one of the merged contexts active in the same step; when the team manifest defines exactly one context the preview suggests it. `--sync` runs `globu sync` in the same command.
+Without `--yes` the command only prints what it would add, update and define, followed by the full command that applies it. With `--yes` it writes the manifest and records the locator, the file, the ref and the commit it read under `imports`, so a bare `globu import --yes` later refreshes every recorded import and says whether the team manifest moved. `--project <name>` pins one of the merged projects in the same step, so every session on the machine gets it whatever repo it starts in; when the team manifest defines exactly one project the preview suggests it. `--sync` runs `globu sync` in the same command.
 
 The rules of the merge:
 
 - Ids are global. A team shard whose id is already registered for a different repo is an error, as is a team repo already registered under another id. Nothing is written in that case.
 - A team shard that matches a local shard by id and repo is updated from the team manifest: format, roots, routing text and access cap. The local clone, mode and path are untouched.
-- Team contexts replace local contexts of the same name.
+- A team project replaces the local project of the same name, with every key it carries. A `contexts` entry of an older team manifest does the same. The team's `always` list is added to the local one.
 - The import is one level deep. An `imports` list inside the team manifest is ignored.
 
 Imported shards have no clone until `globu sync` runs, which clones them read-only under `~/.globu/clones`. A checkout that already exists, such as the job's own repository or a developer's working copy, is attached with `globu register <path>` before `sync`, and is then editable and fetched rather than cloned again. Done after `sync`, the same `register <path>` still attaches the existing checkout and deletes the read-only copy `sync` made. A written import that added shards prints these steps, and `sync` and `unregister` remind about `globu claude sync` when the Claude settings need to follow.
@@ -111,7 +112,7 @@ jobs:
       - name: Bootstrap Globu
         run: |
           npm install -g @kazet/globu
-          globu import https://github.com/acme/product.git --context team --yes
+          globu import https://github.com/acme/product.git --project team --yes
           globu register "$GITHUB_WORKSPACE"
           globu sync
           globu claude sync
@@ -126,7 +127,7 @@ jobs:
 
 What each line of the bootstrap does:
 
-1. `import` fetches `.globu/manifest.yaml` from the product repo with the token, merges it and activates the `team` context.
+1. `import` fetches `.globu/manifest.yaml` from the product repo with the token, merges it and pins the `team` project.
 2. `register "$GITHUB_WORKSPACE"` attaches the job's checkout to the shard the team manifest lists for this repo, so the session index says Claude is working inside it and writes to it are free. A repo the team manifest does not list is registered as a local shard, which is harmless.
 3. `sync` clones the other shards read-only under `$GLOBU_HOME/clones` and fetches the checkout with the credentials `actions/checkout` left in it.
 4. `claude sync` adds the clone paths to `permissions.additionalDirectories` in the runner's `~/.claude/settings.json`, so Claude reads them without a permission prompt. The action keeps that file and merges its own `settings` input over it, so do not pass `permissions` in that input or the entry is replaced.

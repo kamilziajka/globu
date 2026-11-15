@@ -29,6 +29,6 @@ One repo with its own base, and a second repo that uses it.
 
 4. **Work from another repo.** A session started anywhere begins with the shard index: each shard's location, routing text and entry file. When a task touches a shard's area, Claude reads that shard's `index.md` and follows the links. When the task produces knowledge that belongs to a shard, `update-knowledge` writes it there, within that shard's mode.
 
-5. **Keep it current.** `globu sync` pulls the clones Globu owns and fetches the user's own. `globu doctor` reports clones that are missing or drifted and shards without routing text. Contexts (`globu context set work product team-*` then `globu use work`) select which shards a session sees.
+5. **Keep it current.** `globu sync` pulls the clones Globu owns and fetches the user's own. `globu doctor` reports clones that are missing or drifted and shards without routing text. Projects (`globu project set work product team-*`) decide which shards a session sees: those of the project its repo belongs to, plus the manifest's `always` shards.
 
 See [architecture](./architecture.md) for how the pieces fit, [knowledge bases](./knowledge-base.md) for the base model and commands, and the [CLI reference](./globu-cli.md) for every command.

@@ -92,7 +92,10 @@ export function resolveRefs(
 
   function shardRef(ref: string, id: string, rest: string): RefResult {
     const shard = located.find((candidate) => candidate.id === id);
-    if (shard === undefined) return failure(ref, id, `shard "${id}" is not in the active context "${context}"`);
+    if (shard === undefined) {
+      const project = context === null ? "this session's project" : `the active project "${context}"`;
+      return failure(ref, id, `shard "${id}" is not in ${project}`);
+    }
     if (!shard.present) return failure(ref, id, `shard "${id}" has no clone on this machine, run \`globu sync\``);
     touched.add(id);
     const relPath = withinRepo(rest);

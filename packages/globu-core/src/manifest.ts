@@ -25,15 +25,20 @@ const ImportSchema = z.object({
   commit: z.string().optional()
 });
 
-const ManifestSchema = z.object({
+const ProjectSchema = z.looseObject({ shards: z.array(z.string()).min(1) });
+
+const ManifestSchema = z.looseObject({
   version: z.number().default(1),
   shards: z.array(ShardSchema).default([]),
   contexts: z.record(z.string(), z.array(z.string()).min(1)).default({}),
+  projects: z.record(z.string(), ProjectSchema).optional(),
+  always: z.array(z.string()).optional(),
   imports: z.array(ImportSchema).default([])
 });
 
 export type Root = z.infer<typeof RootSchema>;
 export type Shard = z.infer<typeof ShardSchema>;
+export type Project = z.infer<typeof ProjectSchema>;
 export type ManifestImport = z.infer<typeof ImportSchema>;
 export type Manifest = z.infer<typeof ManifestSchema>;
 

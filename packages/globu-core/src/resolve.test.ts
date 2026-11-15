@@ -113,7 +113,7 @@ describe("resolveRefs on shards", () => {
       "work"
     );
     expect(report.refs.map((result) => [result.shard, result.reason])).toEqual([
-      ["product", 'shard "product" is not in the active context "work"'],
+      ["product", 'shard "product" is not in the active project "work"'],
       ["gone", 'shard "gone" has no clone on this machine, run `globu sync`'],
       ["moved", 'shard "moved" has no clone on this machine, run `globu sync`']
     ]);

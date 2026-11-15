@@ -40,7 +40,7 @@ The skill only reads. It never comments on the issue, changes its status or edit
    - Only in a worktree or not pushed: the doc must be committed and pushed to the default branch, or the issue must point at the doc that is there.
    - Not on the default branch anywhere: the path is wrong or the doc was renamed. Suggest the `rename` candidate when there is one. Otherwise list the `name` candidates. When there are none, search every registered shard for the intended file, since docs also move between shards: `list --all --json` gives each `workPath`.
    - No clone on this machine: `globu sync`.
-   - Not in the active context: the shard is registered but excluded by `globu use`. The delivering agent may not see it either.
+   - Not in the session's project: the shard is registered but belongs to another project, or a project is pinned with `globu use`. The delivering agent may not see it either.
 
 ## Notes
 

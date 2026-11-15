@@ -90,7 +90,7 @@ describe("import from a file", () => {
           previousCommit: null,
           added: ["product", "backend"],
           updated: [],
-          contexts: ["team"]
+          projects: ["team"]
         }
       ]
     });
@@ -123,7 +123,7 @@ describe("import from a file", () => {
     write(dir, ".globu/manifest.yaml", teamManifest([{ id: "product", repo: product, access: "read" }]));
 
     expect(run(dir).plans[0]).toMatchObject({ source: dir, added: ["product"] });
-    expect(run(dir).plans[0]).toMatchObject({ added: [], updated: [], contexts: [] });
+    expect(run(dir).plans[0]).toMatchObject({ added: [], updated: [], projects: [] });
 
     write(dir, ".globu/manifest.yaml", teamManifest([{ id: "product", repo: product, description: "Product truth" }]));
     const refreshed = run(undefined);
@@ -136,7 +136,7 @@ describe("import from a file", () => {
         previousCommit: null,
         added: [],
         updated: ["product"],
-        contexts: []
+        projects: []
       }
     ]);
     expect(loadManifest().shards[0]).toMatchObject({ description: "Product truth" });
@@ -205,9 +205,9 @@ describe("import conflicts", () => {
     expect(() => run(undefined, { file: "x" })).toThrow(/--file needs a path or a repo URL/);
 
     write(sandbox, "team.yaml", teamManifest([{ id: "notes", repo: remoteRepo("notes") }], { team: ["notes"] }));
-    expect(() => run("team.yaml", { context: "ghost" })).toThrow(/unknown context "ghost" \(known: team\)/);
+    expect(() => run("team.yaml", { context: "ghost" })).toThrow(/unknown project "ghost" \(known: team\)/);
     write(sandbox, "bare.yaml", teamManifest([]));
-    expect(() => run("bare.yaml", { context: "ghost" })).toThrow(/unknown context "ghost" \(known: none\)/);
+    expect(() => run("bare.yaml", { context: "ghost" })).toThrow(/unknown project "ghost" \(known: none\)/);
     expect(fs.existsSync(manifestPath())).toBe(false);
     expect(fs.existsSync(statePath())).toBe(false);
   });
@@ -222,6 +222,50 @@ describe("import conflicts", () => {
     write(sandbox, "team.yaml", YAML.stringify(team));
     expect(run("team.yaml").plans[0]).toMatchObject({ added: [] });
     expect(loadManifest().imports).toEqual([{ source: path.join(sandbox, "team.yaml") }]);
+  });
+});
+
+describe("import projects", () => {
+  it("merges projects with their opaque keys, contexts and the always list", () => {
+    const repo = remoteRepo("product");
+    const shard = YAML.parse(teamManifest([{ id: "product", repo }])).shards[0];
+    saveManifest({
+      ...loadManifest(),
+      contexts: { team: ["old"], mine: ["x"] },
+      projects: { legacy: { shards: ["y"], jira: "OLD" }, kept: { shards: ["z"] } }
+    });
+    write(
+      sandbox,
+      "team.yaml",
+      YAML.stringify({
+        shards: [shard],
+        contexts: { legacy: ["product"], both: ["a"] },
+        projects: {
+          team: { shards: ["product"], jira: "MR", worker: { setup: { product: ["npm ci"] } } },
+          both: { shards: ["b"] }
+        },
+        always: ["env", "handbook"]
+      })
+    );
+
+    const result = run("team.yaml");
+    expect(result.plans[0].projects).toEqual(["legacy", "both", "team"]);
+    expect(result.suggestedContext).toBeNull();
+    expect(loadManifest()).toMatchObject({
+      contexts: { mine: ["x"], legacy: ["product"] },
+      projects: {
+        kept: { shards: ["z"] },
+        team: { shards: ["product"], jira: "MR", worker: { setup: { product: ["npm ci"] } } },
+        both: { shards: ["b"] }
+      },
+      always: ["env", "handbook"]
+    });
+    expect(loadManifest().projects).not.toHaveProperty("legacy");
+    write(sandbox, "more.yaml", YAML.stringify({ always: ["handbook", "extra"] }));
+    run("more.yaml");
+    expect(loadManifest().always).toEqual(["env", "handbook", "extra"]);
+    expect(run("team.yaml", { context: "team" }).context).toBe("team");
+    expect(loadState().current).toBe("team");
   });
 });
 
@@ -241,7 +285,7 @@ describe("import from a repo", () => {
       previousCommit: null,
       added: ["notes"],
       updated: [],
-      contexts: ["work"]
+      projects: ["work"]
     });
     expect(loadManifest().imports).toEqual([{ source: url, commit: first }]);
     expect(fs.existsSync(clonesDir())).toBe(false);
@@ -278,7 +322,7 @@ describe("import from a repo", () => {
       file: ".globu/manifest.yaml",
       ref: "main",
       added: ["notes"],
-      contexts: ["work"]
+      projects: ["work"]
     });
     expect(run(`${base}/blob/draft/manifests/draft.yaml?ref_type=heads`).plans[0]).toMatchObject({
       ref: "draft",

@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isInside } from "../../knowledge-base/src/index.js";
-import { activeContextName, selectShards } from "./context.js";
+import { activeContextName, assertProject, projectShards, selectForHome, selectShards } from "./context.js";
 import { clone, fetch, isRepo, mainCheckout, pull, remoteUrl } from "./git.js";
 import { looksLikeRepoUrl, repoBasename, sameRepo } from "./giturl.js";
 import { loadManifest, type Manifest, type Shard, saveManifest } from "./manifest.js";
 import { clonesDir } from "./paths.js";
 import { type Probe, probeDir } from "./probe.js";
+import { locate, sessionHome } from "./session.js";
 import { type Access, type LocalShard, loadState, type Mode, type Owner, type State, saveState } from "./state.js";
 
 export type ResolvedShard = Shard & { path: string | null; owner: Owner | null; mode: Mode; present: boolean };
@@ -235,10 +236,14 @@ export function resolveAll(): Registry {
   return { manifest, state, shards: manifest.shards.map((shard) => resolveShard(shard, state)) };
 }
 
-export function resolveActive(): ActiveRegistry {
+export function resolveActive(cwd?: string): ActiveRegistry {
   const all = resolveAll();
   const context = activeContextName(all.state);
-  return { ...all, context, shards: selectShards(all.shards, all.manifest, context) };
+  if (context !== null || cwd === undefined) {
+    return { ...all, context, shards: selectShards(all.shards, all.manifest, context) };
+  }
+  const home = locate(all.shards, sessionHome(cwd)).find((shard) => shard.here);
+  return { ...all, ...selectForHome(all.shards, all.manifest, home?.id ?? null) };
 }
 
 function syncShard(shard: ResolvedShard, state: State): SyncEntry["action"] {
@@ -292,35 +297,35 @@ export function reprobe(id: string, apply = true): ReprobeResult {
   return { changed, applied: apply, shard: resolveShard(shard, state), previous, probed };
 }
 
-export function useContext(name: string | null): string | null {
+export function useProject(name: string | null): string | null {
   const manifest = loadManifest();
   const state = loadState();
-  if (name !== null && !Object.hasOwn(manifest.contexts, name)) {
-    throw new Error(`unknown context "${name}" (known: ${Object.keys(manifest.contexts).join(", ") || "none"})`);
-  }
+  if (name !== null) assertProject(manifest, name);
   state.current = name;
   saveState(state);
   return name;
 }
 
-export function setContext(name: string, patterns: string[]): Manifest["contexts"] {
-  if (!NAME_RE.test(name)) throw new Error(`invalid context name "${name}"`);
-  if (patterns.length === 0) throw new Error("a context needs at least one shard id or pattern");
+export function setProject(name: string, patterns: string[]): Record<string, string[]> {
+  if (!NAME_RE.test(name)) throw new Error(`invalid project name "${name}"`);
+  if (patterns.length === 0) throw new Error("a project needs at least one shard id or pattern");
   const manifest = loadManifest();
-  manifest.contexts[name] = patterns;
+  manifest.projects = { ...manifest.projects, [name]: { ...manifest.projects?.[name], shards: patterns } };
+  delete manifest.contexts[name];
   saveManifest(manifest);
-  return manifest.contexts;
+  return projectShards(manifest);
 }
 
-export function removeContext(name: string): Manifest["contexts"] {
+export function removeProject(name: string): Record<string, string[]> {
   const manifest = loadManifest();
   const state = loadState();
-  if (!Object.hasOwn(manifest.contexts, name)) throw new Error(`unknown context "${name}"`);
+  assertProject(manifest, name);
   delete manifest.contexts[name];
+  delete manifest.projects?.[name];
   saveManifest(manifest);
   if (state.current === name) {
     state.current = null;
     saveState(state);
   }
-  return manifest.contexts;
+  return projectShards(manifest);
 }

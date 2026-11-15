@@ -12,11 +12,12 @@ import {
   importManifests,
   locate,
   type Mode,
+  projectShards,
   type RefResult,
   type ReprobeResult,
   type ResolvedShard,
   register,
-  removeContext,
+  removeProject,
   renderIndex,
   reprobe,
   resolveActive,
@@ -25,12 +26,12 @@ import {
   type SessionShard,
   type SyncEntry,
   sessionHome,
-  setContext,
+  setProject,
   sync,
   syncClaudeDirectories,
   unregister,
   updateShard,
-  useContext,
+  useProject,
   type Verdict
 } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
@@ -44,7 +45,7 @@ const PROGRAM = {
 };
 
 const FOOTER = `
-Config lives in ~/.globu (override with GLOBU_HOME). GLOBU_CONTEXT overrides the active context for one process.
+Config lives in ~/.globu (override with GLOBU_HOME). GLOBU_CONTEXT names the project for one process, whatever repo the session starts in.
 GLOBU_GIT_TOKEN makes the clones globu makes and pulls go over https with that token.`;
 
 const MODES: Mode[] = ["read", "ask", "write"];
@@ -105,7 +106,7 @@ function importPlanLines(plan: ImportPlan): string[] {
     `${plan.source}${plan.file === null ? "" : ` (${plan.file})`}${at}`,
     `  added:    ${plan.added.join(", ") || "-"}`,
     `  updated:  ${plan.updated.join(", ") || "-"}`,
-    `  contexts: ${plan.contexts.join(", ") || "-"}`
+    `  projects: ${plan.projects.join(", ") || "-"}`
   ];
   if (plan.commit !== null) {
     const was =
@@ -117,15 +118,15 @@ function importPlanLines(plan: ImportPlan): string[] {
   return lines;
 }
 
-type ImportArgs = { locator?: string; file?: string; context?: string; sync?: boolean };
+type ImportArgs = { locator?: string; file?: string; project?: string; context?: string; sync?: boolean };
 
 function applyCommand(args: ImportArgs, result: ImportResult): string {
-  const context = args.context ?? result.suggestedContext;
+  const project = result.context ?? result.suggestedContext;
   return [
     "globu import",
     ...(args.locator === undefined ? [] : [args.locator]),
     ...(args.file === undefined ? [] : [`--file ${args.file}`]),
-    ...(context === null ? [] : [`--context ${context}`]),
+    ...(project === null ? [] : [`--project ${project}`]),
     "--yes"
   ].join(" ");
 }
@@ -136,7 +137,7 @@ function syncLines(report: SyncEntry[]): string[] {
 
 function importText(args: ImportArgs, result: ImportResult, synced: SyncEntry[] | null): string {
   const lines = result.plans.flatMap(importPlanLines);
-  if (result.context !== null) lines.push(`active context: ${result.context}`);
+  if (result.context !== null) lines.push(`active project: ${result.context}`);
   if (!result.applied) {
     lines.push(`nothing written, apply with: ${applyCommand(args, result)}`);
     return lines.join("\n");
@@ -144,7 +145,7 @@ function importText(args: ImportArgs, result: ImportResult, synced: SyncEntry[] 
   lines.push(`written to ${result.manifestPath}`);
   if (result.suggestedContext !== null) {
     lines.push(
-      `note: the team manifest defines the context ${result.suggestedContext}, \`globu use ${result.suggestedContext}\` activates it`
+      `note: the team manifest defines the project ${result.suggestedContext}, \`globu use ${result.suggestedContext}\` pins it for every session`
     );
   }
   const added = result.plans.some((plan) => plan.added.length > 0);
@@ -241,14 +242,16 @@ export function globuMain(argv: string[], io: Io): number {
           print(io, options.json, result, lines.join("\n"));
         });
 
-      command(program, "list", "list the shards in the active context")
-        .option("--all", "list every shard, whatever the active context")
+      command(program, "list", "list the shards of this session's project")
+        .option("--all", "list every shard, whatever the project")
         .action((options: JsonOption & { all?: boolean }) => {
-          const { context, shards: resolved } = options.all ? { ...resolveAll(), context: null } : resolveActive();
+          const { context, shards: resolved } = options.all
+            ? { ...resolveAll(), context: null }
+            : resolveActive(io.cwd);
           const shards = locate(resolved, io.cwd);
           const lines = shards.map(listLine);
           if (lines.length === 0) lines.push("no shards registered");
-          if (context !== null) lines.unshift(`context: ${context}`);
+          if (context !== null) lines.unshift(`project: ${context}`);
           print(io, options.json, { context, shards }, lines.join("\n"));
         });
 
@@ -297,7 +300,8 @@ export function globuMain(argv: string[], io: Io): number {
 
       command(program, "import [locator]", "merge a team manifest into this machine's manifest")
         .option("--file <path>", `the manifest inside a repo or directory, default ${DEFAULT_IMPORT_FILE}`)
-        .option("--context <name>", "make this context active once the import is written")
+        .option("--project <name>", "pin this project for every session once the import is written")
+        .addOption(new Option("--context <name>").hideHelp())
         .option("--yes", "write the merged manifest; without it the command only shows what would change")
         .option("--sync", "with --yes, run `globu sync` right after the import")
         .action((locator: string | undefined, options: JsonOption & ImportArgs & { yes?: boolean }) => {
@@ -305,7 +309,7 @@ export function globuMain(argv: string[], io: Io): number {
           const result = importManifests({
             locator,
             file: options.file,
-            context: options.context,
+            context: options.project ?? options.context,
             apply: options.yes === true,
             cwd: io.cwd
           });
@@ -314,47 +318,52 @@ export function globuMain(argv: string[], io: Io): number {
           if (synced?.some((entry) => entry.action === "error")) exit(1);
         });
 
-      command(program, "use [context]", "make a context active for new sessions")
-        .option("--all", "clear the active context so every shard is active")
-        .action((context: string | undefined, options: JsonOption & { all?: boolean }) => {
-          const selected = options.all ? null : context;
-          if (selected === undefined) throw new Error("use needs a context name, or --all");
-          const name = useContext(selected);
-          print(io, options.json, { current: name }, `active context: ${name ?? "all shards"}`);
+      command(program, "use [project]", "pin one project for every new session, whatever repo it starts in")
+        .option("--all", "clear the pin, so a session's project comes from its home repo again")
+        .action((project: string | undefined, options: JsonOption & { all?: boolean }) => {
+          const selected = options.all ? null : project;
+          if (selected === undefined) throw new Error("use needs a project name, or --all");
+          const name = useProject(selected);
+          print(io, options.json, { current: name }, `active project: ${name ?? "the one of the session's home repo"}`);
         });
 
-      const context = program.command("context").description("define and inspect contexts");
+      const project = program.command("project").alias("context").description("define and inspect projects");
 
-      command(context, "list", "show the contexts and which one is active").action((options: JsonOption) => {
-        const { manifest, state } = resolveAll();
-        const lines = Object.entries(manifest.contexts).map(
-          ([name, selection]) => `${name === state.current ? "*" : " "} ${name}\t${selection.join(" ")}`
-        );
-        const text = lines.join("\n") || "no contexts defined, every shard is active";
-        print(io, options.json, { current: state.current, contexts: manifest.contexts }, text);
-      });
+      command(project, "list", "show the projects, the pinned one and the shards every session sees").action(
+        (options: JsonOption) => {
+          const { manifest, state } = resolveAll();
+          const projects = projectShards(manifest);
+          const always = manifest.always ?? [];
+          const lines = Object.entries(projects).map(
+            ([name, selection]) => `${name === state.current ? "*" : " "} ${name}\t${selection.join(" ")}`
+          );
+          if (always.length > 0) lines.push(`always\t${always.join(" ")}`);
+          const text = lines.join("\n") || "no projects defined, every session sees every shard";
+          print(io, options.json, { current: state.current, projects, always }, text);
+        }
+      );
 
       command(
-        context,
+        project,
         "set <name> <patterns...>",
-        "define a context from shard ids or patterns, * is a wildcard"
+        "define a project's shards from ids or patterns, * is a wildcard"
       ).action((name: string, patterns: string[], options: JsonOption) => {
-        print(io, options.json, setContext(name, patterns), `context ${name}: ${patterns.join(" ")}`);
+        print(io, options.json, setProject(name, patterns), `project ${name}: ${patterns.join(" ")}`);
       });
 
-      command(context, "rm <name>", "delete a context").action((name: string, options: JsonOption) => {
-        print(io, options.json, removeContext(name), `removed context ${name}`);
+      command(project, "rm <name>", "delete a project").action((name: string, options: JsonOption) => {
+        print(io, options.json, removeProject(name), `removed project ${name}`);
       });
 
       command(program, "index", "print the text the session hook injects").action((options: JsonOption) => {
-        const { shards, context: active } = resolveActive();
+        const { shards, context: active } = resolveActive(io.cwd);
         const index = renderIndex(shards, active, io.cwd);
         print(io, options.json, { context: active, index }, index);
       });
 
       command(program, "resolve <refs...>", "check that references exist on their repo's default branch").action(
         (refs: string[], options: JsonOption) => {
-          const { shards: active, context: activeContext } = resolveActive();
+          const { shards: active, context: activeContext } = resolveActive(io.cwd);
           const report = resolveRefs(refs, resolveAll().shards, active, io.cwd, activeContext);
           const touched = active.filter((shard) => report.shards.includes(shard.id));
           const index = renderIndex(touched, activeContext, io.cwd);
@@ -374,7 +383,11 @@ export function globuMain(argv: string[], io: Io): number {
 
       const claude = program.command("claude").description("integrate with Claude Code settings");
 
-      command(claude, "sync", "add the active shards' paths to permissions.additionalDirectories")
+      command(
+        claude,
+        "sync",
+        "add the shards' paths to permissions.additionalDirectories, every shard unless a project is pinned"
+      )
         .option("--remove", "remove the paths globu added")
         .action((options: JsonOption & { remove?: boolean }) => {
           const result = syncClaudeDirectories(options.remove === true);
@@ -392,7 +405,7 @@ export function globuMain(argv: string[], io: Io): number {
         .action(() => {
           const cwd = readHookInput(io)?.cwd ?? io.cwd;
           try {
-            const { shards, context: active } = resolveActive();
+            const { shards, context: active } = resolveActive(cwd);
             const index = renderIndex(shards, active, cwd);
             if (index) io.out(index);
           } catch (err) {

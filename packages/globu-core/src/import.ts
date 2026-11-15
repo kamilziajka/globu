@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { assertProject } from "./context.js";
 import { clone, headCommit } from "./git.js";
 import { looksLikeRepoUrl, sameRepo, splitFileLink } from "./giturl.js";
 import {
@@ -25,7 +26,7 @@ export type ImportPlan = {
   previousCommit: string | null;
   added: string[];
   updated: string[];
-  contexts: string[];
+  projects: string[];
 };
 export type ImportResult = {
   applied: boolean;
@@ -84,7 +85,7 @@ function merge(manifest: Manifest, team: TeamManifest, entry: ManifestImport, pr
     previousCommit: previous?.commit ?? null,
     added: [],
     updated: [],
-    contexts: []
+    projects: []
   };
   for (const shard of team.manifest.shards) {
     if (shard.source.repo === null) {
@@ -106,8 +107,16 @@ function merge(manifest: Manifest, team: TeamManifest, entry: ManifestImport, pr
   }
   for (const [name, patterns] of Object.entries(team.manifest.contexts)) {
     manifest.contexts[name] = patterns;
-    plan.contexts.push(name);
+    delete manifest.projects?.[name];
+    plan.projects.push(name);
   }
+  for (const [name, project] of Object.entries(team.manifest.projects ?? {})) {
+    manifest.projects = { ...manifest.projects, [name]: project };
+    delete manifest.contexts[name];
+    if (!plan.projects.includes(name)) plan.projects.push(name);
+  }
+  const always = team.manifest.always ?? [];
+  if (always.length > 0) manifest.always = [...new Set([...(manifest.always ?? []), ...always])];
   return plan;
 }
 
@@ -153,10 +162,8 @@ export function importManifests(options: ImportOptions): ImportResult {
     return plan;
   });
   const context = options.context ?? null;
-  if (context !== null && !Object.hasOwn(manifest.contexts, context)) {
-    throw new Error(`unknown context "${context}" (known: ${Object.keys(manifest.contexts).join(", ") || "none"})`);
-  }
-  const defined = [...new Set(plans.flatMap((plan) => plan.contexts))];
+  if (context !== null) assertProject(manifest, context);
+  const defined = [...new Set(plans.flatMap((plan) => plan.projects))];
   const suggestedContext = context === null && defined.length === 1 && state.current !== defined[0] ? defined[0] : null;
 
   if (options.apply) {

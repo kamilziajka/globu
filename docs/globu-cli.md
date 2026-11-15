@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "globu CLI"
-description: "Command reference for the globu CLI: knowledge bases, registering shards, contexts, sync, diagnostics and the hook entry points."
+description: "Command reference for the globu CLI: knowledge bases, registering shards, projects, sync, diagnostics and the hook entry points."
 ---
 
 # globu CLI
@@ -11,7 +11,7 @@ Published to npm as `@kazet/globu` and built to `packages/globu-cli/dist/globu.m
 Environment:
 
 - `GLOBU_HOME`: config directory, default `~/.globu`. When the home directory is not writable the default is `globu` under the system temp directory.
-- `GLOBU_CONTEXT`: overrides the active context for one process.
+- `GLOBU_CONTEXT`: names the project for one process, whatever repo the session starts in.
 - `GLOBU_GIT_TOKEN`: makes the clones Globu makes and the pulls of clones it owns go over https with this token. `GLOBU_GIT_USER` sets the user name sent with it, default `x-access-token`. See [unattended runs](./unattended-runs.md).
 - `CLAUDE_CONFIG_DIR`: where `claude sync` finds `settings.json`, default `~/.claude`.
 
@@ -27,7 +27,7 @@ The `base` group works on the repo the command runs in and needs no registered s
 | `register <url>` | Shallow clone into `~/.globu/clones/<id>`, read-only. |
 | `register <url> --path <dir>` | Full clone at `dir` (or adopt a matching clone already there), editable. |
 | `unregister <id> [--purge]` | Remove from manifest and state. `--purge` also deletes a globu-owned clone. User-owned clones are never deleted. Prints a `globu claude sync` reminder when the Claude settings still list the clone. |
-| `list [--all]` | Shards in the active context, or all of them. Run inside a worktree of a shard's repo, it adds that worktree as `this session: <dir>`. With `--json` every shard carries `here` and `workPath`. |
+| `list [--all]` | Shards of the session's [project](#projects) plus the `always` shards, or all of them. Run inside a worktree of a shard's repo, it adds that worktree as `this session: <dir>`. With `--json` every shard carries `here` and `workPath`. |
 | `show <id>` | Everything known about one shard. |
 | `set <id> [--description] [--use-when] [--mode] [--access]` | Edit routing text, local mode or the manifest's access cap. |
 | `reprobe <id> [--dry-run]` | Detect format and roots again and update the manifest. It prints the old and new format and roots; `--dry-run` prints them without writing. |
@@ -49,23 +49,27 @@ Behaviours worth knowing:
 |---|---|
 | `import [locator]` | Merge a team manifest into this machine's manifest. The locator is a manifest file, a directory holding `.globu/manifest.yaml`, a git URL of a repo holding it, or a browser link to the file inside the repo on GitHub or GitLab. Without `--yes` it only prints what would be added, updated and defined, and the full command that applies it. With no locator it refreshes every import recorded earlier. |
 
-Flags: `--file <path>` names the manifest inside the repo or directory, `--context <name>` makes that context active once the import is written, `--yes` writes, `--sync` runs `globu sync` right after a `--yes` import.
+Flags: `--file <path>` names the manifest inside the repo or directory, `--project <name>` pins that project for every session once the import is written (`--context` is the older spelling), `--yes` writes, `--sync` runs `globu sync` right after a `--yes` import.
 
 A browser link such as `https://gitlab.example.com/group/repo/-/blob/main/.globu/manifest.yaml` (GitLab `/-/blob/` and `/-/raw/`, GitHub `/blob/` and `/raw/`, and `raw.githubusercontent.com`) is split into the repo URL, the ref and the file. The repo is cloned at that ref and the record under `imports` keeps all three, so a refresh reads the same file at the same ref. A ref the clone cannot check out, for example a commit id, is an error that says which repo URL and `--file` to pass instead.
 
-Each import records the commit of the team repo it read, when the source is a git URL or a directory inside a repo. The output shows that commit and the one read last time, so a refresh says whether the team manifest moved. When a team manifest defines exactly one context and it is not the active one, the preview puts `--context <name>` into the suggested command and a written import says how to activate it.
+Each import records the commit of the team repo it read, when the source is a git URL or a directory inside a repo. The output shows that commit and the one read last time, so a refresh says whether the team manifest moved. When a team manifest defines exactly one project and it is not the pinned one, the preview puts `--project <name>` into the suggested command and a written import says how to pin it. A session started in one of the project's repos gets the project without a pin.
 
 Ids are global: a team shard whose id or repo is already registered under something else is an error and nothing is written. A team shard that matches a local one by id and repo updates its manifest entry and leaves the clone, mode and path alone. The import is one level deep. New shards have no clone until `globu sync` runs, which clones them read-only. A written import that added shards therefore ends with the three steps that follow: `globu register <path>` for each repo already cloned on the machine, so that clone is attached editable and no second copy is made, then `globu sync` for the rest, then `globu claude sync`. The reasoning and a CI example are in [unattended runs](./unattended-runs.md).
 
-## Contexts
+## Projects
+
+A project groups shards. A session sees the shards of the project its home repo belongs to plus the `always` shards; [architecture](./architecture.md#projects-and-what-a-session-sees) has the full order.
 
 | Command | Purpose |
 |---|---|
-| `context list` | Show contexts and which is active. |
-| `context set <name> <id-or-pattern...>` | Define a context. `*` is a wildcard. |
-| `context rm <name>` | Delete a context. |
-| `use <name>` | Make a context active for new sessions. |
-| `use --all` | Clear the active context so every shard is active. |
+| `project list` | Show the projects, which one is pinned and the `always` shards. |
+| `project set <name> <id-or-pattern...>` | Define a project's shards. `*` is a wildcard. Other keys of the project, such as `jira` and `worker`, are kept. |
+| `project rm <name>` | Delete a project. |
+| `use <name>` | Pin a project for every new session, whatever repo it starts in. |
+| `use --all` | Clear the pin, so a session's project comes from its home repo again. |
+
+`context` is an alias of `project`, and a `contexts` map in an older manifest is read as projects. `always` and a project's `jira` and `worker` keys have no command: edit `manifest.yaml`.
 
 ## Claude Code
 
@@ -85,7 +89,7 @@ Ids are global: a team shard whose id or repo is already registered under someth
 
 A ref is `<shard-id>/<path>` when its first segment is a registered shard id, and otherwise a path relative to the current directory in the repo the command runs in. A shard id alone means the root of that shard's repo. The default branch is `origin/HEAD` as last fetched, or `HEAD` of the main checkout when the repo has no `origin/HEAD`. A file that exists only in the working tree, in a linked worktree, in an unpushed commit or on another branch does not resolve, because a coding agent that checks out the repo will not see it.
 
-Each failure names its reason: the shard is not in the active context, it has no clone on this machine, the path leaves the repo, or the path is not on the default branch. In the last case the worktrees where the path does exist are listed. A path in the current repo that fails while its first segment is not a directory there also says that no shard has that id, which is the usual sign of a shard missing from this machine. A path that is not on the default branch also gets candidates for the file that was meant, each written as a ref that resolves from the same directory. A `renamed` candidate is where git history moved the file on the default branch, followed through up to five renames, including renames made on a branch that was later merged. `similar` candidates are files and directories on the default branch with the same name, ignoring case, with those that share the most path segments with the ref first. There are at most ten, the rename first. The text output prints each as a line after the failure, such as `renamed<TAB><ref><TAB><candidate>`. With `--json` the report has `ok`, `context`, `shards`, `index` and one entry per ref with `ref`, `shard`, `ok`, `location`, `revision`, `worktrees`, `reason` and `candidates`, a list of `{ ref, match }` where `match` is `rename` or `name`. `location` is under the session's worktree when the command runs in one, like the index. Run `globu sync` first when a doc was pushed from elsewhere. The `issue-check` skill extracts refs from a Jira issue and calls this, and `issue-fix` uses the candidates to correct the issue.
+Each failure names its reason: the shard is not in the session's project, it has no clone on this machine, the path leaves the repo, or the path is not on the default branch. In the last case the worktrees where the path does exist are listed. A path in the current repo that fails while its first segment is not a directory there also says that no shard has that id, which is the usual sign of a shard missing from this machine. A path that is not on the default branch also gets candidates for the file that was meant, each written as a ref that resolves from the same directory. A `renamed` candidate is where git history moved the file on the default branch, followed through up to five renames, including renames made on a branch that was later merged. `similar` candidates are files and directories on the default branch with the same name, ignoring case, with those that share the most path segments with the ref first. There are at most ten, the rename first. The text output prints each as a line after the failure, such as `renamed<TAB><ref><TAB><candidate>`. With `--json` the report has `ok`, `context`, `shards`, `index` and one entry per ref with `ref`, `shard`, `ok`, `location`, `revision`, `worktrees`, `reason` and `candidates`, a list of `{ ref, match }` where `match` is `rename` or `name`. `location` is under the session's worktree when the command runs in one, like the index. Run `globu sync` first when a doc was pushed from elsewhere. The `issue-check` skill extracts refs from a Jira issue and calls this, and `issue-fix` uses the candidates to correct the issue.
 
 ## Diagnostics
 

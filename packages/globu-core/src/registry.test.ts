@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
 import {
   addWorktree,
   bareWorktree,
@@ -17,15 +18,15 @@ import { loadManifest, saveManifest } from "./manifest.js";
 import { clonesDir, manifestPath, statePath } from "./paths.js";
 import {
   register,
-  removeContext,
+  removeProject,
   reprobe,
   resolveActive,
   resolveAll,
-  setContext,
+  setProject,
   sync,
   unregister,
   updateShard,
-  useContext
+  useProject
 } from "./registry.js";
 import { loadState, saveState } from "./state.js";
 
@@ -393,48 +394,120 @@ describe("reprobe", () => {
   });
 });
 
-describe("contexts", () => {
+describe("projects", () => {
+  let repos: Record<string, string>;
+
   beforeEach(() => {
-    for (const name of ["team-api", "team-web", "private"]) register({ locator: localRepo(name), cwd: sandbox });
+    repos = {};
+    for (const name of ["team-api", "team-web", "private", "notes"]) {
+      repos[name] = localRepo(name);
+      register({ locator: repos[name], cwd: sandbox });
+    }
   });
 
-  it("select shards by id or pattern", () => {
-    expect(ids()).toEqual(["team-api", "team-web", "private"]);
-    setContext("work", ["team-*"]);
-    setContext("personal", ["private"]);
+  function idsIn(cwd: string): string[] {
+    return resolveActive(cwd).shards.map((shard) => shard.id);
+  }
 
-    expect(useContext("work")).toBe("work");
+  it("select shards by id or pattern", () => {
+    expect(ids()).toEqual(["team-api", "team-web", "private", "notes"]);
+    expect(setProject("work", ["team-*"])).toEqual({ work: ["team-*"] });
+    setProject("personal", ["private"]);
+
+    expect(useProject("work")).toBe("work");
     expect(resolveActive().context).toBe("work");
     expect(ids()).toEqual(["team-api", "team-web"]);
+    expect(idsIn(repos.private)).toEqual(["team-api", "team-web"]);
 
     process.env.GLOBU_CONTEXT = "personal";
     expect(ids()).toEqual(["private"]);
+    expect(idsIn(repos["team-api"])).toEqual(["private"]);
     delete process.env.GLOBU_CONTEXT;
 
-    expect(useContext(null)).toBeNull();
-    expect(ids()).toHaveLength(3);
+    expect(useProject(null)).toBeNull();
+    expect(ids()).toHaveLength(4);
   });
 
-  it("removing the active context clears it", () => {
-    setContext("work", ["team-*"]);
-    setContext("other", ["private"]);
-    useContext("work");
-    expect(removeContext("other")).toEqual({ work: ["team-*"] });
+  it("picks the project of the session's home repo and adds the always shards", () => {
+    expect(idsIn(repos["team-api"])).toHaveLength(4);
+    setProject("work", ["team-*"]);
+    expect(idsIn(repos.notes)).toEqual(["notes"]);
+    setProject("wider", ["team-api", "private"]);
+    saveManifest({ ...loadManifest(), always: ["note*"] });
+
+    expect(resolveActive(repos["team-api"])).toMatchObject({ context: "work" });
+    expect(idsIn(repos["team-api"])).toEqual(["team-api", "team-web", "notes"]);
+    expect(idsIn(addWorktree(repos["team-web"], path.join(sandbox, "wt"), "feature"))).toEqual([
+      "team-api",
+      "team-web",
+      "notes"
+    ]);
+    expect(resolveActive(repos.private)).toMatchObject({ context: "wider" });
+    expect(idsIn(repos.private)).toEqual(["team-api", "private", "notes"]);
+
+    process.env.CLAUDE_PROJECT_DIR = repos.private;
+    expect(idsIn(repos["team-api"])).toEqual(["team-api", "private", "notes"]);
+    delete process.env.CLAUDE_PROJECT_DIR;
+
+    removeProject("wider");
+    expect(resolveActive(repos.private)).toMatchObject({ context: null });
+    expect(idsIn(repos.private)).toEqual(["private", "notes"]);
+    expect(idsIn(sandbox)).toHaveLength(4);
+    expect(ids()).toHaveLength(4);
+  });
+
+  it("reads contexts as projects and keeps the keys it does not know", () => {
+    fs.writeFileSync(
+      manifestPath(),
+      YAML.stringify({
+        ...loadManifest(),
+        contexts: { work: ["private"], legacy: ["team-web"] },
+        projects: { work: { shards: ["team-*"], jira: "MR", worker: { exclusive: ["gpu"] } } },
+        always: ["notes"],
+        future: { kept: true }
+      })
+    );
+    expect(setProject("personal", ["private"])).toEqual({
+      work: ["team-*"],
+      personal: ["private"],
+      legacy: ["team-web"]
+    });
+    expect(idsIn(repos["team-web"])).toEqual(["team-api", "team-web", "notes"]);
+
+    setProject("work", ["team-api"]);
+    setProject("legacy", ["team-web", "private"]);
+    expect(YAML.parse(read(manifestPath()))).toMatchObject({
+      contexts: {},
+      projects: {
+        work: { shards: ["team-api"], jira: "MR", worker: { exclusive: ["gpu"] } },
+        personal: { shards: ["private"] },
+        legacy: { shards: ["team-web", "private"] }
+      },
+      always: ["notes"],
+      future: { kept: true }
+    });
+  });
+
+  it("removing the pinned project clears the pin", () => {
+    setProject("work", ["team-*"]);
+    saveManifest({ ...loadManifest(), contexts: { other: ["private"] } });
+    useProject("work");
+    expect(removeProject("other")).toEqual({ work: ["team-*"] });
     expect(loadState().current).toBe("work");
-    expect(removeContext("work")).toEqual({});
+    expect(removeProject("work")).toEqual({});
     expect(loadState().current).toBeNull();
   });
 
-  it("rejects unknown and malformed contexts", () => {
-    expect(() => useContext("nope")).toThrow(/unknown context "nope" \(known: none\)/);
-    setContext("work", ["team-*"]);
-    expect(() => useContext("nope")).toThrow(/known: work/);
-    expect(() => removeContext("nope")).toThrow(/unknown context/);
-    expect(() => setContext("bad name", ["x"])).toThrow(/invalid context name/);
-    expect(() => setContext("empty", [])).toThrow(/at least one/);
+  it("rejects unknown and malformed projects", () => {
+    expect(() => useProject("nope")).toThrow(/unknown project "nope" \(known: none\)/);
+    setProject("work", ["team-*"]);
+    expect(() => useProject("nope")).toThrow(/known: work/);
+    expect(() => removeProject("nope")).toThrow(/unknown project/);
+    expect(() => setProject("bad name", ["x"])).toThrow(/invalid project name/);
+    expect(() => setProject("empty", [])).toThrow(/at least one/);
 
     process.env.GLOBU_CONTEXT = "ghost";
-    expect(() => resolveActive()).toThrow(/unknown context: ghost/);
+    expect(() => resolveActive()).toThrow(/unknown project: ghost/);
   });
 });
 
