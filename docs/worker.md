@@ -467,6 +467,8 @@ Each repair is a run of its own, with an id of the form `<KEY>-repair-<attempt>-
 
 Then the cap: with `limits.openPullRequests` or more pull requests open, conflicted and needing a person included, the cycle claims nothing and says `holding new issues`. The cap bounds how many branches can drift apart at once, so the number of conflicts stays small and review shows up as the bottleneck it is. `once --issue` and Enter in pick mode are deliberate and ignore the cap.
 
+A cycle runs its claimed issues to the end, which can take an hour. While they run, the worker reads the pull requests again every `poll.every` and settles the ones that were merged or closed in the meantime: the issue moves to `doneStatus`, the branch is deleted and the merge is recorded, so an issue that was blocked by it is free for the next cycle. Repairs are not started from there; they wait for the next cycle, like new issues. A read that fails is logged as `settling failed` and tried again at the next interval.
+
 Merging stays with people. A merge queue, or GitHub's auto-merge with required checks, is the natural partner: it lands approved pull requests in order and tests each on top of the ones ahead of it, which catches the conflicts that only show when two changes meet.
 
 ## Follow-up issues

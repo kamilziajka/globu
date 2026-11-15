@@ -900,6 +900,33 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
   return rows;
 }
 
+async function settlingMeanwhile<T>(deps: WorkerDeps, work: Promise<T>): Promise<T> {
+  const ended = Promise.allSettled([work]).then(() => true);
+  const workEnded = async (): Promise<boolean> => {
+    let timer: NodeJS.Timeout | undefined;
+    const interval = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), deps.config.poll.every);
+    });
+    const over = await Promise.race([interval, ended]);
+    clearTimeout(timer);
+    return over;
+  };
+  const settling = (async () => {
+    while (!(await workEnded())) {
+      try {
+        await followUps(deps, true);
+      } catch (err) {
+        log().warn("settling failed", { error: (err as Error).message });
+      }
+    }
+  })();
+  try {
+    return await work;
+  } finally {
+    await settling;
+  }
+}
+
 function authorArgs({ author }: Settings["git"]): string[] {
   return author === undefined ? [] : ["-c", `user.name=${author.name}`, "-c", `user.email=${author.email}`];
 }
@@ -1247,11 +1274,14 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds
     }
   }
   for (const entry of plan) io.out(`${entry.key}\t${entry.action}`);
-  const runs = await Promise.all(
-    picked.map((candidate) => {
-      const record = newRun(candidate.issue.key, deps.now(), identity);
-      return runOne(deps, candidate, record, path.join(runsDir(home), record.id));
-    })
+  const runs = await settlingMeanwhile(
+    deps,
+    Promise.all(
+      picked.map((candidate) => {
+        const record = newRun(candidate.issue.key, deps.now(), identity);
+        return runOne(deps, candidate, record, path.join(runsDir(home), record.id));
+      })
+    )
   );
   for (const record of runs) io.out(describe(record));
   return { runs: [...repaired, ...runs], plan };

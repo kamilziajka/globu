@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { stripVTControlCharacters as plain } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { register } from "../../globu-core/src/index.js";
 import { captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig } from "./config.js";
@@ -17,7 +17,13 @@ const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
 
 type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout" | "missing";
-type Script = { pulls: Record<string, object | null>; claude?: Claude; viewEnded?: boolean; commentEnded?: boolean };
+type Script = {
+  pulls: Record<string, object | null>;
+  claude?: Claude;
+  viewEnded?: boolean;
+  commentEnded?: boolean;
+  during?: () => Promise<void>;
+};
 type Calls = {
   gh: string[][];
   claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[];
@@ -47,6 +53,7 @@ function runner(script: Script, calls: Calls): Runner {
     const cwd = options.cwd as string;
     calls.claude.push({ cwd, env: options.env as NodeJS.ProcessEnv, prompt: args[1] });
     const mode = script.claude ?? "nothing";
+    await script.during?.();
     if (mode === "missing") return { code: null, stdout: "", stderr: "", timedOut: false, startError: "ENOENT" };
     if (mode === "resolve" || mode === "add-only") {
       write(cwd, "src/x.ts", "export const x = 3;\n");
@@ -522,6 +529,43 @@ describe("following pull requests", () => {
     await followUps(merged.worker, true);
     expect(merged.jira.transitions).toEqual([]);
     expect(merged.jira.comments).toEqual([`Merged: ${setup.url}`]);
+  });
+
+  it("settles a pull request that is merged while another issue runs, on the poll interval", async () => {
+    const setup = world();
+    const open = pull(setup.url, { mergeable: "MERGEABLE" });
+    const script: Script = { pulls: { [setup.url]: open } };
+    const { worker, jira: fake } = deps(setup, script);
+    worker.config.poll.every = 10;
+    const next = { assignee: null as string | null, status: "Ready for delivery" };
+    const others = fake.issue;
+    fake.search = async () => [{ key: "MR-9", labels: ["repo:backend"] }];
+    fake.issue = async (key) =>
+      key === "MR-9" ? { ...(await others(key)), labels: ["repo:backend"], ...next } : await others(key);
+    fake.assign = async (_key, accountId) => {
+      next.assignee = accountId;
+    };
+    fake.transitionTo = async (_key, status) => {
+      next.status = status;
+    };
+    const warnings: string[] = [];
+    setLogger({ ...silentLogger, warn: (message) => warnings.push(message) });
+    let seenDuringTheRun = false;
+    script.during = async () => {
+      script.pulls[setup.url] = null;
+      await vi.waitFor(() => expect(warnings).toContain("settling failed"));
+      script.pulls[setup.url] = pull(setup.url, { state: "MERGED" });
+      await vi.waitFor(() => expect(fake.comments).toContain(`Merged: ${setup.url}`));
+      seenDuringTheRun = true;
+    };
+    try {
+      const result = await once(worker);
+      expect(result.runs.map((record) => [record.key, record.reason])).toEqual([["MR-9", "the run made no commits"]]);
+    } finally {
+      setLogger(silentLogger);
+    }
+    expect(seenDuringTheRun).toBe(true);
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
   });
 
   it("closes a repair left behind by a restart without giving the issue back", async () => {
