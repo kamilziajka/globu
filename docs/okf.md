@@ -27,6 +27,8 @@ The [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledg
 
 It does not check prose, links between pages or any optional field. A base that passes is well formed, not necessarily correct.
 
+`globu base lint` is the content check beside it: links that do not resolve, docs nothing links to and index entries that drifted from the linked doc's `description`, which §8 says an entry should carry. Its findings are warnings and never fail it, as §6 asks of consumers. See [knowledge bases](./knowledge-base.md#lint).
+
 ## The optional families
 
 Version 0.2 defines optional frontmatter families beyond the reserved files. Globu accepts all of them and acts on none yet.
@@ -61,4 +63,4 @@ stale_after: 2027-05-01T00:00:00Z
 
 ## Bases made elsewhere
 
-Any OKF bundle works as a shard as it is: register the repo and Globu reads it. The spec says a consumer must tolerate broken links, and Globu does. Running `base setup` on such a bundle adds the authoring guide and the extra `index.md` keys and changes nothing else.
+Any OKF bundle works as a shard as it is: register the repo and Globu reads it. The spec says a consumer must tolerate broken links, and Globu does: `base lint` reports them as warnings and nothing else in Globu reads them. Running `base setup` on such a bundle adds the authoring guide and the extra `index.md` keys and changes nothing else.

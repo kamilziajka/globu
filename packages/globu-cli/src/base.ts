@@ -1,15 +1,17 @@
 import path from "node:path";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import {
   appendLog,
   findBases,
   isInside,
+  lintRepo,
   ownerBase,
   setupBase,
   validateBase,
   validateRepo
 } from "../../knowledge-base/src/index.js";
 import { command, type Exit, type Io, type JsonOption, print, readHookInput } from "./cli/index.js";
+import { type LintFormat, lintReport } from "./lint-report.js";
 
 function rel(io: Io, target: string): string {
   return path.relative(io.cwd, target) || ".";
@@ -55,6 +57,19 @@ export function defineBaseCommands(base: Command, io: Io, exit: Exit): void {
       if (errors.length > 0) exit(1);
     }
   );
+
+  command(base, "lint [path]", "report broken links, orphan docs and index drift as warnings")
+    .addOption(new Option("--format <format>", "text or markdown").choices(["text", "markdown"]).default("text"))
+    .action((dir: string | undefined, options: JsonOption & { format: LintFormat }) => {
+      const lint = lintRepo(target(io, dir));
+      print(
+        io,
+        options.json,
+        lint,
+        lintReport(lint, options.format, (file) => rel(io, file))
+      );
+      if (lint.errors.length > 0) exit(1);
+    });
 
   command(base, "list [path]", "list every base under a directory").action(
     (dir: string | undefined, options: JsonOption) => {

@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [Knowledge bases](./knowledge-base.md#lint): new `globu base lint [path]` reports broken relative and bundle-relative links, orphan concept docs and index entries that drifted from the linked doc's `description` as warnings, exits 0 on warnings and prints a CI job summary with `--format markdown`. [OKF in Globu](./okf.md) and [Globu and the LLM wiki](./llm-wiki.md) name it.
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14
