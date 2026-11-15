@@ -1,7 +1,7 @@
 ---
 type: "Reference"
 title: "Claude Code hook contract"
-description: "The Claude Code hook behaviours Globu's session and guard hooks rely on, where each is documented and which ones are still untested."
+description: "The Claude Code behaviours Globu's hooks and the worker rely on, where each is documented or how it was measured and which are still untested."
 ---
 
 # Claude Code hook contract
@@ -36,12 +36,26 @@ Neither point is answered by the docs, and neither was tested:
 
 Test both with a sibling repo in `ask` mode before relying on the mode for a rule that must hold.
 
+## Seen in worker runs
+
+[globu-worker](./worker.md) starts Claude with `-p --output-format stream-json`. These were measured on 2026-11-15 with Claude Code 2.1.316, in the streams of real runs and in short `claude -p` runs made for the purpose. None of it is in the Claude Code docs, so check it again when a run's records stop adding up.
+
+| Behaviour | Used by |
+|---|---|
+| A run that starts a command with `run_in_background` ends its turn, and `claude -p` stays up and wakes it for each task that finishes. Every stretch of work ends with a `result` line of its own, numbered by `result_index` from 0. | `summarizeStream` reads all of them, see [segments](./worker.md#segments) |
+| In a `result` line `num_turns` and `duration_ms` count that stretch only, while `total_cost_usd` and `duration_api_ms` are running totals of the run. | `run.json` sums the first two and keeps the last value of the others |
+| `--max-turns` counts each stretch from zero: under `--max-turns 3` a run used 2 turns, was woken and used 3 more before `error_max_turns`. | `claude.maxTurns` is documented as a bound on a segment |
+| The `init` event lists the loaded plugins with `name`, `version`, `source` (`globu@globu`) and `path`, and the MCP servers with `name` and `status`. | `check` compares the `globu` plugin's version with the worker's and names what a run loads |
+| Under `--permission-mode dontAsk` a call that no rule covers is denied at once with "Permission to use Bash has been denied because Claude Code is running in don't ask mode", and listed in the result's `permission_denials`. | the run goes on, and `run.json` keeps the denied calls |
+| An allow rule from a settings source Claude Code trusts applies on top of `--allowedTools`, also under `dontAsk`: with `--allowedTools "Bash(echo *)"` and the rule `Bash(touch:*)` passed through `--settings`, `touch` ran and `mkdir` was denied. The `settings.json` of the config dir is such a source. The same rule in the `.claude/settings.json` of a folder that was never trusted was ignored. | why `claude.configDir: user` gives a run the person's allow rules, and why `check` lists them |
+| Read-only Bash commands such as `ls` and `pwd` run under `dontAsk` with no rule at all. | nothing relies on it; a test of the allowlist needs a command that writes |
+
 ## Relied on by the worker, untested
 
 [globu-worker](./worker.md) starts Claude with `-p` and leans on these, none of which has been tried against a live run yet:
 
-- `--permission-mode dontAsk` denies, rather than hangs on, a tool call the allowlist does not cover and a hook's `ask`.
-- `--allowedTools` and `--disallowedTools` are honoured next to the config dir's own settings, and a disallowed tool wins over an allowed one.
+- `--permission-mode dontAsk` denies, rather than hangs on, a hook's `ask`. A call the allowlist does not cover is denied, see above.
+- A tool of `--disallowedTools` wins over an allow rule of the config dir's `settings.json`, as it does over `--allowedTools`.
 - `--add-dir <dir>` lets `Write` reach the run directory without a prompt under `dontAsk`.
 - `--output-format stream-json` carries a denied tool call as a `tool_result` with `is_error` and the hook's reason in its content, so blocked writes can be read from the stream.
 - `CLAUDE_CONFIG_DIR` moves plugin installs and `settings.json` together, so the worker's plugin and the `additionalDirectories` from `globu claude sync` land in the same place.
