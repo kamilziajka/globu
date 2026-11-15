@@ -29,6 +29,8 @@ export type RunRecord = {
   denied?: string[];
   durationMs?: number;
   apiMs?: number;
+  segments?: number;
+  wallMs?: number;
 };
 export type StoredRun = { dir: string; record: RunRecord };
 
@@ -74,6 +76,11 @@ export function newRun(
     reason: null,
     identity
   };
+}
+
+export function endRun(record: RunRecord, now: Date): void {
+  record.endedAt = now.toISOString();
+  record.wallMs = now.getTime() - new Date(record.startedAt).getTime();
 }
 
 export function saveRun(dir: string, record: RunRecord): void {

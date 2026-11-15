@@ -705,13 +705,41 @@ describe("once", () => {
       ]
     });
     const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true, stream });
-    expect(record).toMatchObject({ durationMs: 798_000, apiMs: 228_000 });
+    expect(record).toMatchObject({ durationMs: 798_000, apiMs: 228_000, segments: 1, wallMs: 0 });
     expect(record?.denied).toHaveLength(3);
     const comment = jira.comments["MR-7"][0];
     expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 3.");
     expect(comment).toContain("- denied Bash: git stash push -u\n");
     expect(comment).toContain("- denied Bash: cat <<'EOF' > a.ts …\n");
     expect(comment).toContain(`- denied Bash: node -e "${"x".repeat(145)} …`);
+  });
+
+  it("counts every segment of a run that was woken for its background tasks", async () => {
+    const world = setup();
+    const segment = (turns: number, ms: number, apiMs: number, cost: number) =>
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        num_turns: turns,
+        duration_ms: ms,
+        duration_api_ms: apiMs,
+        total_cost_usd: cost,
+        result: "done"
+      });
+    const stream = [
+      segment(62, 357_000, 105_000, 1.41),
+      segment(15, 40_000, 140_000, 1.79),
+      segment(17, 287_000, 210_000, 2.25)
+    ];
+    const { jira, record } = await runWith(world, [issue("MR-7")], {
+      commit: true,
+      handback: true,
+      stream: stream.join("\n")
+    });
+    expect(record).toMatchObject({ turns: 94, durationMs: 684_000, apiMs: 210_000, costUsd: 2.25, segments: 3 });
+    expect(jira.comments["MR-7"][0]).toContain(
+      ": 94 turns in 3 segments, 2.25 USD, 0.0 min, 3.5 min of it in the model API."
+    );
   });
 
   it("opens a plain pull request without labels or a commit author and notes a run without a last message", async () => {

@@ -27,6 +27,7 @@ import { issueUrl, type NotifyEvent, notify } from "./notify.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
+  endRun,
   followingUp,
   isTerminal,
   loadRun,
@@ -226,9 +227,10 @@ function footer(record: RunRecord, now: Date): string {
     return `Run ${record.id} as ${record.identity.jira}${github} from a Claude Code session, ${elapsed}.`;
   }
   const denied = record.denied ?? [];
+  const segments = (record.segments ?? 1) > 1 ? ` in ${record.segments} segments` : "";
   const api = record.apiMs ? `, ${minutes(record.apiMs)} of it in the model API` : "";
   const lines = [
-    `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns, ${record.costUsd.toFixed(2)} USD, ${elapsed}${api}. Blocked writes: ${record.blocked.length}. Denied tool calls: ${denied.length}.`,
+    `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns${segments}, ${record.costUsd.toFixed(2)} USD, ${elapsed}${api}. Blocked writes: ${record.blocked.length}. Denied tool calls: ${denied.length}.`,
     ...record.blocked.map((text) => `- ${text}`),
     ...denied.map((text) => `- denied ${oneLine(text)}`)
   ];
@@ -257,7 +259,7 @@ async function release(
   const { jira, config, io } = deps;
   record.state = "released";
   record.reason = reason;
-  record.endedAt = deps.now().toISOString();
+  endRun(record, deps.now());
   log().info("released", { run: record.id, key: record.key, reason, environment: record.environment === true });
   const machine = record.environment
     ? `\n\nThis is a problem with the worker's machine, not with the issue, so it is not labelled ${config.jira.blockedLabel} and the worker stops until the machine is fixed.`
@@ -568,6 +570,7 @@ async function runClaude(
   record.denied = summary.denied;
   record.durationMs = summary.durationMs;
   record.apiMs = summary.apiMs;
+  record.segments = summary.segments;
   if (summary.usage.length > 0) recordUsage(deps.home, summary.usage, deps.now());
   return {
     timedOut: result.timedOut,
@@ -622,7 +625,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   forgetFiled(deps.home, issue.key);
   for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
   record.state = "handed-back";
-  record.endedAt = deps.now().toISOString();
+  endRun(record, deps.now());
   log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests });
   const message = `${record.key} handed back: ${record.pullRequests.join(" ")}`;
   await tell(deps, record, "handed-back", record.pullRequests[0], message);
@@ -736,13 +739,13 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     if (record.repairOf !== undefined) {
       record.state = "released";
       record.reason = "the worker restarted during this repair";
-      record.endedAt = deps.now().toISOString();
+      endRun(record, deps.now());
     } else if (issue.assignee === me.accountId && sameStatus(issue, statusOf(config, "claimedStatus", record.key))) {
       await release(deps, record, "the worker restarted while this issue was claimed");
     } else {
       record.state = "released";
       record.reason = "the worker restarted and the issue was no longer claimed";
-      record.endedAt = deps.now().toISOString();
+      endRun(record, deps.now());
     }
     persist(deps, dir, record);
   }
@@ -942,7 +945,7 @@ export async function repairPullRequest(
   } finally {
     discard(dir, worktrees);
   }
-  record.endedAt = deps.now().toISOString();
+  endRun(record, deps.now());
   const run = footer(record, deps.now());
   if (problem === null) {
     record.state = "handed-back";

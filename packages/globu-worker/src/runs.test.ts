@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir, write } from "../../testing/index.js";
 import { mergedIssues } from "./merged.js";
 import {
+  endRun,
   followingUp,
   isTerminal,
   latestRuns,
@@ -23,6 +24,12 @@ const NOW = new Date("2026-11-05T10:20:30.123Z");
 const IDENTITY = { jira: "Bot (a1)", github: null };
 
 describe("run records", () => {
+  it("ends a run with the time and the wall time since its claim", () => {
+    const record = newRun("MR-7", NOW, IDENTITY);
+    endRun(record, new Date("2026-11-05T11:01:30.123Z"));
+    expect(record).toMatchObject({ endedAt: "2026-11-05T11:01:30.123Z", wallMs: 41 * 60_000 });
+  });
+
   it("names a run after the issue and the time", () => {
     expect(newRunId("MR-7", NOW)).toBe("MR-7-20261105T102030Z");
     expect(newRun("MR-7", NOW, IDENTITY)).toMatchObject({

@@ -91,6 +91,7 @@ describe("summarizeStream", () => {
       denied: ["Bash: cat a.txt | wc -l", 'Write: {"file_path":"/etc/x"}', "Task: {}"],
       durationMs: 798_000,
       apiMs: 228_000,
+      segments: 1,
       usage: []
     });
   });
@@ -107,9 +108,43 @@ describe("summarizeStream", () => {
       denied: [],
       durationMs: 0,
       apiMs: 0,
+      segments: 1,
       usage: []
     });
     expect(summarizeStream("").turns).toBe(0);
+  });
+
+  it("sums the turns and durations of a run that was woken for its background tasks", () => {
+    const segment = (turns: number, ms: number, apiMs: number, cost: number, denials: string[] = []) =>
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        num_turns: turns,
+        duration_ms: ms,
+        duration_api_ms: apiMs,
+        total_cost_usd: cost,
+        result: `after ${turns}`,
+        permission_denials: denials.map((command) => ({ tool_name: "Bash", tool_input: { command } }))
+      });
+    const woken = [
+      segment(62, 357_625, 105_097, 1.41),
+      segment(1, 1_267, 106_328, 1.43),
+      JSON.stringify({ type: "result", subtype: "success" }),
+      segment(17, 286_612, 209_648, 2.25)
+    ];
+    expect(summarizeStream(woken.join("\n"))).toMatchObject({
+      turns: 80,
+      durationMs: 645_504,
+      apiMs: 209_648,
+      costUsd: 2.25,
+      segments: 4,
+      result: "after 17"
+    });
+
+    const cumulative = [segment(1, 1, 1, 1, ["a"]), segment(1, 1, 1, 1, ["a", "b"])];
+    expect(summarizeStream(cumulative.join("\n")).denied).toEqual(["Bash: a", "Bash: b"]);
+    const perSegment = [segment(1, 1, 1, 1, ["a", "b"]), segment(1, 1, 1, 1, ["c"])];
+    expect(summarizeStream(perSegment.join("\n")).denied).toEqual(["Bash: a", "Bash: b", "Bash: c"]);
   });
 
   it("keeps the subscription windows of the latest rate limit event that has any", () => {

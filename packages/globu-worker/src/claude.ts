@@ -54,6 +54,7 @@ export type ClaudeSummary = {
   denied: string[];
   durationMs: number;
   apiMs: number;
+  segments: number;
   usage: UsageWindow[];
 };
 
@@ -92,6 +93,11 @@ function deniedCall(denial: Denial): string {
   return `${denial.tool_name}: ${what}`;
 }
 
+function withDenials(known: string[], reported: string[]): string[] {
+  const cumulative = known.every((call, index) => reported[index] === call);
+  return cumulative ? reported : [...known, ...reported];
+}
+
 function usageOf(info: RateLimitInfo): UsageWindow[] {
   const named = info.unifiedWindows ?? (info.rateLimitType === undefined ? {} : { [info.rateLimitType]: info });
   return Object.entries(named).flatMap(([window, figure]) => {
@@ -122,6 +128,7 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     denied: [],
     durationMs: 0,
     apiMs: 0,
+    segments: 0,
     usage: []
   };
   for (const line of jsonl.split("\n")) {
@@ -130,12 +137,13 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     if (event.type === "result") {
       summary.subtype = event.subtype ?? null;
       summary.isError = event.is_error === true;
-      summary.costUsd = event.total_cost_usd ?? 0;
-      summary.turns = event.num_turns ?? 0;
+      summary.costUsd = event.total_cost_usd ?? summary.costUsd;
+      summary.turns += event.num_turns ?? 0;
       summary.result = event.result ?? null;
-      summary.denied = (event.permission_denials ?? []).map(deniedCall);
-      summary.durationMs = event.duration_ms ?? 0;
-      summary.apiMs = event.duration_api_ms ?? 0;
+      summary.denied = withDenials(summary.denied, (event.permission_denials ?? []).map(deniedCall));
+      summary.durationMs += event.duration_ms ?? 0;
+      summary.apiMs = event.duration_api_ms ?? summary.apiMs;
+      summary.segments += 1;
       continue;
     }
     if (event.type === "rate_limit_event") {
