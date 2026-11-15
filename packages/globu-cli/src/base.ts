@@ -79,7 +79,11 @@ export function defineBaseCommands(base: Command, io: Io, exit: Exit): void {
     }
   );
 
-  command(base, "lint [path]", "report broken links, orphan docs and index drift as warnings")
+  command(
+    base,
+    "lint [path]",
+    "report broken links, orphan docs, index drift, stale docs and links to deprecated docs as warnings"
+  )
     .addOption(new Option("--format <format>", "text or markdown").choices(["text", "markdown"]).default("text"))
     .action((dir: string | undefined, options: JsonOption & { format: LintFormat }) => {
       const lint = lintRepo(target(io, dir));
