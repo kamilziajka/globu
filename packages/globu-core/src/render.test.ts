@@ -88,6 +88,25 @@ describe("renderIndex", () => {
     expect(short).not.toContain("more, run");
   });
 
+  it("counts stale and deprecated docs per shard without listing them", () => {
+    const repo = initRepo(path.join(tempDir(), "product"), {
+      "docs/index.md": "# product\n",
+      "docs/old.md": '---\ntype: "Note"\nstale_after: 2020-01-01T00:00:00Z\n---\n',
+      "docs/gone.md": '---\ntype: "Note"\nstatus: deprecated\n---\n',
+      "notes/old.md": '---\ntype: "Note"\nstatus: deprecated\n---\n'
+    });
+    const text = renderIndex(
+      [shard({ path: repo }), shard({ id: "notes", format: "generic", path: repo, roots: [{ path: "notes" }] })],
+      null,
+      "/elsewhere"
+    );
+    expect(text).toContain(
+      `  - Entry: product: ${repo}/docs/index.md\n  - Stale: 2 docs are past stale_after or deprecated, read them with caution. \`globu base stale ${repo}\` lists them\n`
+    );
+    expect(text.match(/- Stale:/g)).toHaveLength(1);
+    expect(text).not.toContain("old.md");
+  });
+
   it("names shards that are not on this machine", () => {
     const text = renderIndex(
       [shard({ id: "a", present: false }), shard({ id: "b", path: null, present: false })],

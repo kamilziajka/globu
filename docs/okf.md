@@ -18,25 +18,44 @@ The [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledg
 
 ## What validate checks
 
-`globu base validate` is a structural check. It runs on demand on one base or on every base under a directory, and from the edit hook after each change Claude makes. It reports:
+`globu base validate` is a structural check. It runs on demand on one base or on every base under a directory, and from the edit hook after each change Claude makes. It reports these errors, which fail the base:
 
 - a base directory without an `index.md`
 - an `index.md` without `okf_version`
 - a concept doc without a frontmatter block, or with a missing or empty `type`
 - frontmatter that does not parse as YAML
 
-It does not check prose, links between pages or any optional field. A base that passes is well formed, not necessarily correct.
+And these warnings about the optional families below, which never fail it. Each names the field, such as `verified[1].by`. A doc that uses none of the families gets none.
+
+- `sources` that is not a list, an entry that is not a mapping or has no `resource`, an `id` that is not a string and a footnote label in the body (outside code) that matches no `sources[].id`
+- `generated` that is not a mapping or has no `by`
+- `verified` that is neither a mapping nor a list of mappings, or an entry without `by` or `at`
+- a `by` in `generated` or `verified` that is not an actor: `<producer>/<version>`, `human:<id>` or `process:<id>`
+- `status` other than `draft`, `stable` or `deprecated`
+- a timestamp that is not an ISO 8601 datetime with an offset: `generated.at`, `verified.at`, `stale_after`, `last_modified` and the `from` and `to` of a `usage_window`
+
+It does not check prose or links between pages. A base that passes is well formed, not necessarily correct. The field checks live in `packages/knowledge-base/src/fields.ts` as plain functions over parsed frontmatter, so other commands can reuse them.
 
 ## The optional families
 
-Version 0.2 defines optional frontmatter families beyond the reserved files. Globu accepts all of them and acts on none yet.
+Version 0.2 defines optional frontmatter families beyond the reserved files. Globu checks their shape, writes the trust fields and reads the lifecycle fields.
 
-| Family | Fields | In Globu today |
+| Family | Fields | In Globu |
 |---|---|---|
-| Provenance | `sources`, a list with ids that footnotes cite | Passed through. Nothing reads or writes it. |
-| Trust | `generated` and `verified`, each `{by, at}` with an actor such as `claude-code/x`, `human:<id>` or `process:<id>` | Passed through. Reading a doc's trust tier is planned. |
-| Lifecycle | `status` of `draft`, `stable` or `deprecated`, and `stale_after` | Passed through. Surfacing stale docs is planned. |
+| Provenance | `sources`, a list with ids that footnotes cite | Checked by `validate`. Nothing writes it. |
+| Trust | `generated` and `verified`, each `{by, at}` with an actor such as `claude-code/x`, `human:<id>` or `process:<id>` | Checked by `validate`. `base stamp` writes them and `update-knowledge` calls it. No trust tier is computed: the spec stores signals, not scores. |
+| Lifecycle | `status` of `draft`, `stable` or `deprecated`, and `stale_after` | Checked by `validate`. `base stale` lists the docs past `stale_after` or `deprecated`, and `doctor` and the session index count them per shard. |
 | Attested Computations | Verified results attached to a doc | Out of scope. Aimed at data catalogs. |
+
+### Stamping trust
+
+`globu base stamp <files...>` sets `generated: { by: "globu/<version>", at: <now> }` on each concept doc, replacing an earlier `generated`. `globu base stamp --verified <files...>` appends `{ by: "human:<id>", at: <now> }` to `verified` instead and leaves `generated` alone; a bare mapping becomes a list with the old entry first. `<id>` is git `user.name` in the doc's repo. When that is unset it falls back to the login name of the account running the command, and the command fails only when neither is known. Times are UTC to the second. Only the stamped key changes: the rest of the frontmatter keeps its quoting, comments and order, and the body is untouched. When one of the files cannot be stamped, none is written.
+
+The `update-knowledge` skill stamps `generated` on each doc it creates or changes in substance, and adds a verification only when the user confirms a doc in the session. A doc with a `human:` entry in `verified` reads as human-reviewed to a consumer that derives OKF's trust tiers.
+
+### Stale docs
+
+A doc is stale when the current time is at or past its `stale_after`, and it counts here as well when its `status` is `deprecated`. A `stale_after` that does not parse is a `validate` warning and never makes a doc stale. `globu base stale [path]` lists them for every base under a directory, with the reason, and exits 0 either way. `globu doctor` and the session index give one line per shard with the count and that command, never the list, so the index stays short.
 
 Every timestamp in these families is an ISO 8601 datetime with an offset, such as `2026-11-05T08:00:00Z`. A bare date is not valid. This is what a doc that uses the trust and lifecycle fields looks like:
 

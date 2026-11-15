@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* OKF trust and freshness: `base validate` warns, never errors, about malformed `sources`, `generated`, `verified`, `status` and `stale_after` and names the field, and the edit hook passes the edited doc's warnings to Claude as `additionalContext` without blocking. New `base stamp` sets `generated` to `globu/<version>` and now, or with `--verified` appends a `human:<git user.name>` verification (login name when unset); `update-knowledge` calls both. New `base stale` lists docs past `stale_after` or deprecated, and `doctor` and the session index count them per shard with a pointer to it. Updated [OKF in Globu](./okf.md), [knowledge bases](./knowledge-base.md), [globu CLI](./globu-cli.md), [plugin skills](./skills.md), [architecture](./architecture.md) and the [hook contract](./claude-code-hooks.md).
 * [Plugin skills](./skills.md): `issue-work` names `globu-worker why <KEY> --session` for an issue missing from the plan and never runs `retry`, matching the skill.
 
 ## 2026-11-14
