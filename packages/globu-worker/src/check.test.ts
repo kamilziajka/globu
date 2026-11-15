@@ -52,6 +52,8 @@ function jira(overrides: Partial<JiraClient> = {}): JiraClient {
     removeLabel: unused,
     setField: unused,
     remoteLink: unused,
+    createIssue: unused,
+    linkIssues: unused,
     ...overrides
   };
 }
@@ -86,6 +88,7 @@ function deps(setup: World, options: { replies?: Replies; jira?: JiraClient; tok
     run: runner(options.replies ?? {}, calls),
     io: captureIo(setup.home),
     now: () => new Date(),
+    platform: "linux",
     env: { PATH: process.env.PATH, JIRA_API_TOKEN: "jira-secret", ANTHROPIC_API_KEY: "sk-1" }
   };
   return { worker, calls };

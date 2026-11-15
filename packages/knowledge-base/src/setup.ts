@@ -48,7 +48,7 @@ export function setupBase(targetDir: string, { name, description, dir }: SetupOp
     created: [],
     updated: [],
     unchanged: [],
-    validation: { docsDir, errors: [] }
+    validation: { docsDir, errors: [], warnings: [] }
   };
 
   fs.mkdirSync(docsDir, { recursive: true });

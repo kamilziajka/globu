@@ -50,6 +50,8 @@ function jira(issues: JiraIssue[], overrides: Partial<JiraClient> = {}): JiraCli
     removeLabel: async () => {},
     setField: async () => {},
     remoteLink: async () => {},
+    createIssue: async () => "MR-100",
+    linkIssues: async () => {},
     ...overrides
   };
 }

@@ -67,6 +67,20 @@ describe("doctor", () => {
     ]);
   });
 
+  it("counts stale and deprecated docs and points at the command that lists them", () => {
+    const repo = initRepo(path.join(tempDir(), "kb"), {
+      "docs/index.md": baseIndex("kb"),
+      "docs/old.md": '---\ntype: "Note"\nstale_after: 2020-01-01T00:00:00Z\n---\n'
+    });
+    register({ locator: repo, cwd: repo, description: "d", useWhen: "u", id: "kb" });
+    expect(messages()).toEqual([
+      "warning kb: no repo URL, so this shard cannot be synced to another machine",
+      `warning kb: 1 doc is past stale_after or deprecated, read them with caution. \`globu base stale ${repo}\` lists them`
+    ]);
+    write(repo, "docs/gone.md", '---\ntype: "Note"\nstatus: deprecated\n---\n');
+    expect(messages()[1]).toMatch(/^warning kb: 2 docs are past stale_after or deprecated/);
+  });
+
   it("notices a clone that is behind its remote as last fetched", () => {
     const sandbox = tempDir();
     const managedRemote = initRepo(path.join(sandbox, "remotes/managed"), { "README.md": "x" });

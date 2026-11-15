@@ -37,7 +37,7 @@ beforeEach(() => {
   sandbox = tempDir();
   const remote = initRepo(path.join(sandbox, "remotes", "product"), { "docs/index.md": "i\n", "docs/a.md": "a\n" });
   git(sandbox, "clone", "-q", remote, "product");
-  product = fs.realpathSync(path.join(sandbox, "product"));
+  product = fs.realpathSync.native(path.join(sandbox, "product"));
 });
 
 describe("resolveRefs on shards", () => {

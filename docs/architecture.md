@@ -130,10 +130,10 @@ The CLI detects structure only. Meaning is drafted by Claude: the `register` ski
 
 All of it comes from the `globu` plugin, which should be enabled at user scope.
 
-- **SessionStart hook** runs `globu hook session-start`. It prints the active context's index (id, location, routing text, entry files, format conventions) and Claude Code adds that to the session. Location and entry files come from `workPath`, so a session in a worktree is pointed at that worktree and told to leave the main checkout alone. It prints nothing when no shards are registered. It reads local files and runs `git rev-parse`.
+- **SessionStart hook** runs `globu hook session-start`. It prints the active context's index (id, location, routing text, entry files, a count of stale or deprecated docs for an OKF shard that has any, format conventions) and Claude Code adds that to the session. Location and entry files come from `workPath`, so a session in a worktree is pointed at that worktree and told to leave the main checkout alone. It prints nothing when no shards are registered. It reads local files, including the frontmatter of every concept doc in the OKF roots for the stale count, and runs `git rev-parse`.
 - **PreToolUse guard** runs `globu hook guard` before `Edit`, `Write`, `NotebookEdit` and `Bash`. It finds the shard by the repo the target belongs to, so a file in any worktree maps to its shard. For a `read` shard it blocks the edit with exit code 2. For an `ask` shard it returns the PreToolUse permission decision `ask`, which makes Claude Code prompt the user, unless the session's home is that shard's repo. Home is the repo of `CLAUDE_PROJECT_DIR`, the directory the session started in. The hook's `cwd` is only the fallback because it follows `cd`, and a session must not become exempt by changing into a sibling repo. Shell commands are read as described below.
 - **`globu claude sync`** writes the active shards' paths into `permissions.additionalDirectories` in the user's Claude settings so reads need no prompt. It records which entries it added and only ever changes those. It is an explicit command and nothing calls it implicitly. The register skill offers it after a shard is registered and runs it only when the user agrees.
-- **PostToolUse edit hook** runs `globu hook validate-edit` after `Edit` and `Write` and validates the base an edited Markdown file belongs to. See [knowledge bases](./knowledge-base.md).
+- **PostToolUse edit hook** runs `globu hook validate-edit` after `Edit` and `Write` and validates the base an edited Markdown file belongs to. Errors block, warnings about the edited doc's optional fields are passed to Claude as context. See [knowledge bases](./knowledge-base.md).
 - **Skills**: `setup-knowledge-base`, `register-knowledge-base`, `update-knowledge`, `issue-check`, `issue-fix`, `issue-deliver`, `issue-work` and `issue-watch`, each described in [plugin skills](./skills.md). `issue-deliver` implements an issue from a brief and writes a handback; the worker runs it unattended and a person can run it by hand. `issue-work` and `issue-watch` drive the worker's session commands so a session does the implementing with a person watching.
 
 The repo a session runs in needs nothing. The hooks read `~/.globu` only.
@@ -195,7 +195,7 @@ Rules that hold everywhere:
 ## Repository layout
 
 ```
-packages/knowledge-base      OKF library: frontmatter, scan, validate, setup, log
+packages/knowledge-base      OKF library: frontmatter, scan, validate, field checks, stale, stamp, setup, log
 packages/globu-core          manifest, state, resolver, session view, probe, drivers, contexts, Claude settings
 packages/globu-cli           the globu program, published to npm as @kazet/globu: the base group, the registry commands, the hooks and the commander runner
 packages/globu-worker        the globu-worker program, published to npm as @kazet/globu-worker: Jira client, run records, the once and run commands

@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { INDEX_FILENAME, RESERVED_FILENAMES } from "./constants.js";
+import { fieldWarnings } from "./fields.js";
 import { type Frontmatter, parseFrontmatter } from "./frontmatter.js";
 import { findBases } from "./scan.js";
 
 export type ValidationError = { file: string; message: string };
-export type BaseValidation = { docsDir: string; errors: ValidationError[] };
-export type RepoValidation = { results: BaseValidation[]; errors: ValidationError[] };
+export type ValidationWarning = ValidationError;
+export type BaseValidation = { docsDir: string; errors: ValidationError[]; warnings: ValidationWarning[] };
+export type RepoValidation = { results: BaseValidation[]; errors: ValidationError[]; warnings: ValidationWarning[] };
+export type FileCheck = { errors: string[]; warnings: string[] };
 
 function listMarkdown(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -17,36 +20,46 @@ function listMarkdown(dir: string, found: string[] = []): string[] {
   return found;
 }
 
-function conceptErrors(data: Frontmatter, hasFrontmatter: boolean): string[] {
-  if (!hasFrontmatter) return ["missing YAML frontmatter block"];
-  if (typeof data.type !== "string" || data.type.trim() === "") return ["missing or empty required `type` field"];
-  return [];
+export function listConcepts(docsDir: string): string[] {
+  return listMarkdown(docsDir)
+    .filter((filePath) => !RESERVED_FILENAMES.has(path.basename(filePath)))
+    .sort();
+}
+
+function conceptCheck(data: Frontmatter, body: string, hasFrontmatter: boolean): FileCheck {
+  if (!hasFrontmatter) return { errors: ["missing YAML frontmatter block"], warnings: [] };
+  const warnings = fieldWarnings(data, body);
+  if (typeof data.type !== "string" || data.type.trim() === "") {
+    return { errors: ["missing or empty required `type` field"], warnings };
+  }
+  return { errors: [], warnings };
 }
 
 function indexErrors(data: Frontmatter): string[] {
   return data.okf_version ? [] : [`${INDEX_FILENAME} is missing \`okf_version\``];
 }
 
-function fileErrors(filePath: string): string[] {
+export function checkFile(filePath: string): FileCheck {
   const isIndex = path.basename(filePath) === INDEX_FILENAME;
   try {
-    const { data, hasFrontmatter } = parseFrontmatter(fs.readFileSync(filePath, "utf8"));
-    return isIndex ? indexErrors(data) : conceptErrors(data, hasFrontmatter);
+    const { data, body, hasFrontmatter } = parseFrontmatter(fs.readFileSync(filePath, "utf8"));
+    return isIndex ? { errors: indexErrors(data), warnings: [] } : conceptCheck(data, body, hasFrontmatter);
   } catch (err) {
-    return [`unparseable YAML frontmatter: ${(err as Error).message}`];
+    return { errors: [`unparseable YAML frontmatter: ${(err as Error).message}`], warnings: [] };
   }
 }
 
 export function validateBase(docsDir: string): BaseValidation {
   const indexPath = path.join(docsDir, INDEX_FILENAME);
   if (!fs.existsSync(indexPath)) {
-    return { docsDir, errors: [{ file: indexPath, message: `missing required ${INDEX_FILENAME}` }] };
+    return { docsDir, errors: [{ file: indexPath, message: `missing required ${INDEX_FILENAME}` }], warnings: [] };
   }
-  const concepts = listMarkdown(docsDir)
-    .filter((filePath) => !RESERVED_FILENAMES.has(path.basename(filePath)))
-    .sort();
-  const errors = [indexPath, ...concepts].flatMap((file) => fileErrors(file).map((message) => ({ file, message })));
-  return { docsDir, errors };
+  const checks = [indexPath, ...listConcepts(docsDir)].map((file) => ({ file, ...checkFile(file) }));
+  return {
+    docsDir,
+    errors: checks.flatMap(({ file, errors }) => errors.map((message) => ({ file, message }))),
+    warnings: checks.flatMap(({ file, warnings }) => warnings.map((message) => ({ file, message })))
+  };
 }
 
 export function validateRepo(rootPath: string): RepoValidation {
@@ -54,8 +67,12 @@ export function validateRepo(rootPath: string): RepoValidation {
   const docsDirs = findBases(resolved).map((base) => base.docsDir);
 
   if (docsDirs.length === 0) {
-    return { results: [], errors: [{ file: resolved, message: "no OKF bases found" }] };
+    return { results: [], errors: [{ file: resolved, message: "no OKF bases found" }], warnings: [] };
   }
   const results = docsDirs.map(validateBase);
-  return { results, errors: results.flatMap((result) => result.errors) };
+  return {
+    results,
+    errors: results.flatMap((result) => result.errors),
+    warnings: results.flatMap((result) => result.warnings)
+  };
 }

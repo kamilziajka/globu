@@ -1,4 +1,5 @@
 import path from "node:path";
+import { staleCount, staleSummary } from "./freshness.js";
 import type { Root } from "./manifest.js";
 import { conventionsFor } from "./probe.js";
 import type { ResolvedShard } from "./registry.js";
@@ -38,6 +39,8 @@ function shardBlock(shard: PresentShard): string {
       lines.push(`    - ${shard.roots.length - MAX_ROOTS} more, run \`globu show ${shard.id}\` to list them`);
     }
   }
+  const stale = staleCount(shard, shard.workPath);
+  if (stale > 0) lines.push(`  - Stale: ${staleSummary(stale, shard.workPath)}`);
   return lines.join("\n");
 }
 

@@ -3,6 +3,7 @@ export * from "./claude.js";
 export * from "./command.js";
 export * from "./context.js";
 export * from "./doctor.js";
+export * from "./freshness.js";
 export * from "./giturl.js";
 export * from "./guard.js";
 export * from "./import.js";

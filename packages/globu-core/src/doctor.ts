@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { staleCount, staleSummary } from "./freshness.js";
 import { commitsBehind, defaultRevision, isRepo, remoteUrl } from "./git.js";
 import { sameRepo } from "./giturl.js";
 import type { Root } from "./manifest.js";
@@ -57,6 +58,11 @@ function probeFindings(shard: ResolvedShard, dir: string): Omit<Finding, "id">[]
   );
 }
 
+function staleFindings(shard: ResolvedShard, dir: string): Omit<Finding, "id">[] {
+  const count = staleCount(shard, dir);
+  return count === 0 ? [] : [{ level: "warning", message: staleSummary(count, dir) }];
+}
+
 function cloneFindings(shard: ResolvedShard): Omit<Finding, "id">[] {
   if (shard.path === null) return [{ level: "error", message: "not cloned on this machine, run `globu sync`" }];
   if (!shard.present) return [{ level: "error", message: `clone is missing at ${shard.path}` }];
@@ -66,7 +72,12 @@ function cloneFindings(shard: ResolvedShard): Omit<Finding, "id">[] {
   if (shard.source.repo !== null && !sameRepo(remoteUrl(shard.path), shard.source.repo)) {
     findings.push({ level: "error", message: `the clone's origin does not match the manifest (${shard.source.repo})` });
   }
-  return [...findings, ...behindFindings(shard, shard.path), ...probeFindings(shard, shard.path)];
+  return [
+    ...findings,
+    ...behindFindings(shard, shard.path),
+    ...probeFindings(shard, shard.path),
+    ...staleFindings(shard, shard.path)
+  ];
 }
 
 function routingFindings(shard: ResolvedShard): Omit<Finding, "id">[] {

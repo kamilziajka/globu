@@ -74,7 +74,7 @@ Ids are global: a team shard whose id or repo is already registered under someth
 | `index` | Print the text the session hook injects, for the directory it is run in. |
 | `claude sync [--remove]` | Add the active shards' paths to `permissions.additionalDirectories`, or remove the ones Globu added. Entries Globu did not add are never touched. The register skill offers to run it after registering. |
 | `hook session-start` | SessionStart entry point. Prints the index, or nothing. |
-| `hook validate-edit` | PostToolUse entry point for `Edit` and `Write`. Validates the base that owns an edited Markdown file and exits 2 with the errors when it fails. |
+| `hook validate-edit` | PostToolUse entry point for `Edit` and `Write`. Validates the base that owns an edited Markdown file and exits 2 with the errors when it fails. Warnings about the edited doc's optional OKF fields go to Claude as `additionalContext` and do not block. |
 | `hook guard` | PreToolUse entry point for `Edit`, `Write`, `NotebookEdit` and `Bash`. Exit code 2 when the target is in a `read` shard. For an `ask` shard changed from a session in another repo it prints a PreToolUse `permissionDecision` of `ask` and exits 0. Targets are matched to shards by git repo, so linked worktrees count wherever they are. For `Bash` it reads `tool_input.command`: certain writes are treated like file edits, possible ones only prompt. See [architecture](./architecture.md) for the rules and their limits. |
 
 ## References
@@ -89,7 +89,7 @@ Each failure names its reason: the shard is not in the active context, it has no
 
 ## Diagnostics
 
-`doctor` reports, per shard: missing or wrong clone, origin mismatch, a clone that is behind its remote as last fetched, format or roots that changed since registration, a missing entry file and missing routing text. After the shards it checks the paths it added to the Claude settings and reports, under the id `claude-settings`, any that no longer exists or belongs to no registered shard. Exit code 1 when any finding is an error.
+`doctor` reports, per shard: missing or wrong clone, origin mismatch, a clone that is behind its remote as last fetched, format or roots that changed since registration, a missing entry file, missing routing text and how many docs of an OKF shard are past `stale_after` or deprecated, with the `globu base stale` command that lists them. The session index carries the same count as a `Stale` line under the shard. After the shards it checks the paths it added to the Claude settings and reports, under the id `claude-settings`, any that no longer exists or belongs to no registered shard. Exit code 1 when any finding is an error.
 
 An origin mismatch is what a repo transfer or a changed remote leaves behind: `the clone's origin does not match the manifest` names the URL the manifest still holds. No command changes a shard's repo URL, so edit `repo:` under that shard's `source` in `~/.globu/manifest.yaml` to the clone's new origin, exactly as `git remote get-url origin` prints it, and run `doctor` again.
 

@@ -42,12 +42,19 @@ Decides where each piece of knowledge belongs, checks that it may be written the
    - `read`: do not edit. Tell the user what you would have written and stop there for that item.
 
 6. **Write, per target, using its format.**
-   - `okf`: read the base's `index.md` first, it carries the authoring guide, and skim the existing concept docs. Prefer editing an existing doc over creating a near-duplicate. New concept docs need frontmatter with a non-empty `type`, plus `title` and `description`; use `type: "Playbook"` for a repeatable procedure. Add new docs to the Contents list in `index.md`. Then record the change in the log and validate:
+   - `okf`: read the base's `index.md` first, it carries the authoring guide, and skim the existing concept docs. Prefer editing an existing doc over creating a near-duplicate. New concept docs need frontmatter with a non-empty `type`, plus `title` and `description`; use `type: "Playbook"` for a repeatable procedure. Add new docs to the Contents list in `index.md`. Then stamp the docs, record the change in the log and validate:
      ```bash
+     node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base stamp <doc> [<doc> ...]
      node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base log <docsDir> <YYYY-MM-DD> "<entry>" ["<entry>" ...] [--title "<text>"]
      node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base validate <docsDir>
      ```
-     `base log` joins the day's section whether its heading is bare or titled. Pass `--title` only when the base titles its day sections and the day has no section yet. Fix any errors before finishing. Build `<docsDir>` from the shard's `workPath` joined with the root's `path`, never from `path`: from a worktree that would send the edits to the main checkout.
+     `base stamp` sets `generated: { by: "globu/<version>", at: <now> }` in the frontmatter and changes nothing else. Pass it every concept doc you created or changed in substance in this run: a new or corrected fact, decision or procedure. Leave out docs where you only fixed a typo, a link or formatting, and never stamp a doc you did not edit. `base log` joins the day's section whether its heading is bare or titled. Pass `--title` only when the base titles its day sections and the day has no section yet. Fix any errors before finishing. Warnings about the optional fields (`sources`, `generated`, `verified`, `status`, `stale_after`) do not fail the base: fix the ones in docs you edited, and mention the others in the report instead of fixing them unasked.
+
+     When the user confirms in this session that a doc is right, for example after reading it they say it is correct, add their verification:
+     ```bash
+     node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base stamp --verified <doc> [<doc> ...]
+     ```
+     It appends `{ by: "human:<id>", at: <now> }` to `verified`, with `<id>` taken from git `user.name` in the doc's repo, or the login name when that is unset. Only an explicit confirmation of that doc counts. Never add a verification on your own judgement or in a run with nobody present, and never write a `human:` entry by hand. Build `<docsDir>` from the shard's `workPath` joined with the root's `path`, never from `path`: from a worktree that would send the edits to the main checkout.
    - `generic`: follow the conventions the existing files already use. Keep the change small and say what you changed.
 
 7. **Report** what was written where, and what was skipped and why.

@@ -5,7 +5,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 
 export function tempDir(): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "globu-test-")));
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "globu-test-")));
 }
 
 export function write(root: string, relPath: string, content: string): string {
@@ -43,13 +43,13 @@ export function commitAll(root: string, message = "update"): void {
 
 export function addWorktree(repo: string, dir: string, branch: string): string {
   git(repo, "worktree", "add", "-q", "-b", branch, dir);
-  return fs.realpathSync(dir);
+  return fs.realpathSync.native(dir);
 }
 
 export function bareWorktree(repo: string, bareDir: string, dir: string): string {
   git(repo, "clone", "-q", "--bare", repo, bareDir);
   git(bareDir, "worktree", "add", "-q", "-b", "work", dir);
-  return fs.realpathSync(dir);
+  return fs.realpathSync.native(dir);
 }
 
 export function baseIndex(name: string, description = ""): string {
@@ -97,4 +97,16 @@ export function serveGit(root: string, authorization: string | null): Promise<Gi
       });
     });
   });
+}
+
+export function native(text: string): string {
+  return text.replaceAll("/", path.sep);
+}
+
+export function posix(file: string): string {
+  return file.split(path.sep).join("/");
+}
+
+export function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

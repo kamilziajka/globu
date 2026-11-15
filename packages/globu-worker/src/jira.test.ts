@@ -153,6 +153,23 @@ describe("jiraClient", () => {
     ]);
   });
 
+  it("creates an issue by issue type name or id and links two issues", async () => {
+    const { fetchFn, calls } = fakeFetch({
+      "POST /issue": { status: 201, body: { id: "10100", key: "MR-9" } },
+      "POST /issueLink": { status: 201 }
+    });
+    const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
+    const named = { project: "MR", issueType: "Task", summary: "Do more", description: "Later." };
+    expect(await client.createIssue(named)).toBe("MR-9");
+    expect(await client.createIssue({ ...named, issueType: "10002" })).toBe("MR-9");
+    await client.linkIssues("Relates", "MR-7", "MR-9");
+    expect(calls.map((call) => call.body)).toEqual([
+      { fields: { project: { key: "MR" }, issuetype: { name: "Task" }, summary: "Do more", description: "Later." } },
+      { fields: { project: { key: "MR" }, issuetype: { id: "10002" }, summary: "Do more", description: "Later." } },
+      { type: { name: "Relates" }, inwardIssue: { key: "MR-7" }, outwardIssue: { key: "MR-9" } }
+    ]);
+  });
+
   it("removes a label and sets a text or option field after reading its type", async () => {
     const { fetchFn, calls } = fakeFetch({
       "PUT /issue/MR-7": {},

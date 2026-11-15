@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { mergedIssues, mergedRun, saveMerged } from "./merged.js";
 
 export type RunState = "claimed" | "resolving" | "prepared" | "running" | "pushing" | "handed-back" | "released";
 export type RunDriver = "worker" | "session";
@@ -23,6 +24,7 @@ export type RunRecord = {
   identity: { jira: string; github: string | null };
   repairOf?: string;
   followUp?: FollowUp;
+  followUpIssues?: string[];
   environment?: boolean;
   denied?: string[];
   durationMs?: number;
@@ -146,7 +148,9 @@ export function prunableRuns(runs: StoredRun[], keep: number, now: Date): Stored
 }
 
 export function pruneRuns(home: string, keep: number, now: Date): string[] {
-  const pruned = prunableRuns(loadRuns(home), keep, now);
+  const runs = loadRuns(home);
+  const pruned = prunableRuns(runs, keep, now);
+  if (pruned.some(mergedRun)) saveMerged(home, mergedIssues(home, runs));
   for (const { dir } of pruned) removeTree(dir);
   return pruned.map(({ record }) => record.id);
 }

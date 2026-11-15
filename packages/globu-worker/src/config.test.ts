@@ -50,6 +50,7 @@ describe("loadWorkerConfig", () => {
     expect(config.jira.blockedLabel).toBe("agent-blocked");
     expect(config.jira.eligibleLabel).toBe("agent-eligible");
     expect(config.jira.blockingLinks).toEqual(["Blocks"]);
+    expect(config.jira.followUps).toBeUndefined();
     expect(config.shards.companion).toEqual([]);
     expect(config.poll.every).toBe(60_000);
     expect(config.limits).toEqual({
@@ -129,6 +130,27 @@ github:
     expect(jira.priorityLabel).toBe("agent-next");
   });
 
+  it("reads follow-up issues as opt in, with the issue type per project and the defaults", () => {
+    const single = write(
+      tempDir(),
+      "worker.yaml",
+      `${MINIMAL.replace("jira:\n", "jira:\n  followUps:\n    issueType: Task\n")}`
+    );
+    expect(loadWorkerConfig(single).jira.followUps).toEqual({ issueType: "Task", linkType: "Relates", max: 10 });
+    const mapped = write(
+      tempDir(),
+      "worker.yaml",
+      `${MINIMAL.replace("jira:\n", "jira:\n  followUps:\n    issueType:\n      MR: Story\n    linkType: Relates to\n    max: 3\n")}`
+    );
+    expect(loadWorkerConfig(mapped).jira.followUps).toEqual({
+      issueType: { MR: "Story" },
+      linkType: "Relates to",
+      max: 3
+    });
+    const untyped = write(tempDir(), "worker.yaml", `${MINIMAL.replace("jira:\n", "jira:\n  followUps: {}\n")}`);
+    expect(() => loadWorkerConfig(untyped)).toThrow(/jira.followUps.issueType/);
+  });
+
   it("rejects a status map without entries", () => {
     const file = write(tempDir(), "worker.yaml", MINIMAL.replace("claimedStatus: Delivery", "claimedStatus: {}"));
     expect(() => loadWorkerConfig(file)).toThrow(/jira.claimedStatus: name at least one project or a default/);
@@ -145,7 +167,9 @@ github:
 
   it("reports a missing file and an empty one", () => {
     const dir = tempDir();
-    expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(`no worker configuration at ${dir}/worker.yaml`);
+    expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(
+      `no worker configuration at ${path.join(dir, "worker.yaml")}`
+    );
     expect(() => loadWorkerConfig(write(dir, "worker.yaml", ""))).toThrow(/root: /);
   });
 });
@@ -184,7 +208,7 @@ describe("secrets.env", () => {
       warnings: []
     });
     fs.chmodSync(file, 0o644);
-    expect(withSecretsFile({}, home).warnings).toEqual([`${file} is readable by others, run chmod 600 on it`]);
+    expect(withSecretsFile({}, home, "linux").warnings).toEqual([`${file} is readable by others, run chmod 600 on it`]);
     expect(withSecretsFile({}, home, "win32").warnings).toEqual([]);
   });
 });
@@ -218,15 +242,18 @@ describe("scrubbedEnv", () => {
   });
 });
 
+const W = path.resolve("/tmp/w");
+const C = path.resolve("/tmp/c");
+
 describe("sessionHomes", () => {
   it("uses the session's own homes, the interactive ones by default", () => {
     expect(sessionHomes({})).toEqual({
       home: path.join(os.homedir(), ".globu"),
       claudeConfigDir: path.join(os.homedir(), ".claude")
     });
-    expect(sessionHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: "/tmp/c" })).toEqual({
-      home: "/tmp/w",
-      claudeConfigDir: "/tmp/c"
+    expect(sessionHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C })).toEqual({
+      home: W,
+      claudeConfigDir: C
     });
   });
 });
@@ -236,7 +263,7 @@ describe("ownHomes", () => {
     expect(() => ownHomes({ GLOBU_HOME: path.join(os.homedir(), ".globu") })).toThrow(
       `GLOBU_HOME points at ${path.join(os.homedir(), ".globu")}`
     );
-    expect(() => ownHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: path.join(os.homedir(), ".claude") })).toThrow(
+    expect(() => ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: path.join(os.homedir(), ".claude") })).toThrow(
       "CLAUDE_CONFIG_DIR points at"
     );
   });
@@ -246,10 +273,10 @@ describe("ownHomes", () => {
       home: path.join(os.homedir(), ".globu/worker"),
       claudeConfigDir: path.join(os.homedir(), ".globu/worker/claude")
     });
-    expect(ownHomes({ GLOBU_HOME: "/tmp/w" })).toEqual({ home: "/tmp/w", claudeConfigDir: "/tmp/w/claude" });
-    expect(ownHomes({ GLOBU_HOME: "/tmp/w", CLAUDE_CONFIG_DIR: "/tmp/c" })).toEqual({
-      home: "/tmp/w",
-      claudeConfigDir: "/tmp/c"
+    expect(ownHomes({ GLOBU_HOME: W })).toEqual({ home: W, claudeConfigDir: path.join(W, "claude") });
+    expect(ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C })).toEqual({
+      home: W,
+      claudeConfigDir: C
     });
   });
 });
