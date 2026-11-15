@@ -20,6 +20,8 @@ npm run verify
 
 A linked git worktree, such as the ones Claude Code sessions run in under `.claude/worktrees`, needs its own install. Run `npm ci` there before the first build. A build that stops with `Could not resolve "commander"` means the worktree's `node_modules` is missing or incomplete. The shell that commits needs the Node version from `.nvmrc` as well, because the pre-commit hook runs `npm run verify`.
 
+The hook runs on a commit, not on a rebase. When `main` moved while a branch was in work, as it does with several sessions pushing to it, rebase the branch and run `npm run verify` by hand before pushing: the commits were verified against the old `main`, and a change that landed in between can break them without a conflict.
+
 ## Commands
 
 | Command | What it does |
