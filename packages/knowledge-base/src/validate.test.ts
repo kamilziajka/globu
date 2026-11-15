@@ -33,6 +33,22 @@ describe("validateBase", () => {
     expect(errors).toHaveLength(5);
   });
 
+  it("warns about malformed optional fields without failing the base", () => {
+    const root = tempDir();
+    write(root, "docs/index.md", baseIndex("demo"));
+    write(root, "docs/fresh.md", '---\ntype: "Note"\nstale_after: 2027-04-01T00:00:00Z\n---\n');
+    write(root, "docs/old.md", '---\ntype: "Note"\nstatus: final\nverified: "2026-10-09"\n---\n');
+    write(root, "docs/untyped.md", "---\nstale_after: soon\n---\n");
+    const result = validateBase(path.join(root, "docs"));
+    expect(basenames(result.errors)).toEqual(["untyped.md: missing or empty required `type` field"]);
+    expect(basenames(result.warnings)).toEqual([
+      'old.md: `verified` should be a mapping or a list of `{ by, at }`, got "2026-10-09"',
+      'old.md: `status` should be draft, stable or deprecated, got "final"',
+      'untyped.md: `stale_after` should be an ISO 8601 datetime with an offset, such as 2026-11-05T08:00:00Z, got "soon"'
+    ]);
+    expect(validateRepo(root).warnings).toHaveLength(3);
+  });
+
   it("reports a missing index", () => {
     const docsDir = path.join(tempDir(), "docs");
     expect(basenames(validateBase(docsDir).errors)).toEqual(["index.md: missing required index.md"]);
@@ -58,6 +74,10 @@ describe("validateRepo", () => {
 
   it("fails when there is no base", () => {
     const root = tempDir();
-    expect(validateRepo(root)).toEqual({ results: [], errors: [{ file: root, message: "no OKF bases found" }] });
+    expect(validateRepo(root)).toEqual({
+      results: [],
+      errors: [{ file: root, message: "no OKF bases found" }],
+      warnings: []
+    });
   });
 });
