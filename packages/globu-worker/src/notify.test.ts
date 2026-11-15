@@ -4,6 +4,7 @@ import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner, RunOptions, RunResult } from "./exec.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
 import { issueUrl, type Notice, notify } from "./notify.js";
+import { NO_SHELL } from "./shell.js";
 
 type Entry = { level: string; msg: string; fields?: Record<string, unknown> };
 
@@ -119,8 +120,8 @@ describe("notify", () => {
       ["warn", "exited with 7: no route"],
       ["warn", "could not start sh: not found on PATH"],
       ["warn", "spawn exploded"],
-      ["warn", "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"],
-      ["info", undefined]
+      ["warn", NO_SHELL],
+      process.platform === "win32" ? ["warn", NO_SHELL] : ["info", undefined]
     ]);
   });
 });

@@ -20,6 +20,7 @@ import { fileFollowUps, followUpSection } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
+import { mergedIssues, recordMerged } from "./merged.js";
 import { issueUrl, type NotifyEvent, notify } from "./notify.js";
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
@@ -396,14 +397,20 @@ export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: W
 }
 
 function blockers(deps: WorkerDeps, issue: JiraIssue, stored: StoredRun[]): Blocker[] {
-  return blockersOf(issue, deps.config.jira.blockingLinks).map((blocker) => {
+  const found = blockersOf(issue, deps.config.jira.blockingLinks);
+  if (found.length === 0) return [];
+  const merged = mergedIssues(deps.home, stored);
+  return found.map((blocker) => {
     const own = stored
       .map(({ record }) => record)
       .filter(
         (record) => record.key === blocker.key && record.repairOf === undefined && record.state === "handed-back"
       );
-    const merged = own.some((record) => record.followUp?.state === "merged");
-    return { ...blocker, pullRequests: own.flatMap((record) => record.pullRequests), resolved: blocker.done || merged };
+    const known = merged[blocker.key];
+    const pullRequests = [
+      ...new Set([...own.flatMap((record) => record.pullRequests), ...(known?.pullRequests ?? [])])
+    ];
+    return { ...blocker, pullRequests, resolved: blocker.done || known !== undefined };
   });
 }
 
@@ -770,6 +777,7 @@ async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[],
   await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
   log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
   for (const pull of pulls) deleteBranch(record, pull, token);
+  if (merged) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
   persist(deps, dir, record);
 }
 
