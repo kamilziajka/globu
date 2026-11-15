@@ -125,7 +125,3 @@ export function renderTable(list: SessionList, view: TableView): string {
   });
   return `${header}\n\n${lines.join("\n")}\n\n${footer}\n`;
 }
-
-export function rowLine(row: Row, now: Date): string {
-  return `${now.toISOString()} ${row.key} ${row.state}${row.detail === "" ? "" : `: ${row.detail}`}`;
-}

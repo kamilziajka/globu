@@ -42,6 +42,8 @@ function prepare(): string {
   return root;
 }
 
+const STAMP = "2026-11-15T20:30:12.000Z";
+const AT = new Date(STAMP);
 const INIT = JSON.stringify({ type: "system", subtype: "init", model: "m", skills: ["globu:issue-deliver"] });
 const RESULT = JSON.stringify({ type: "result", is_error: false, result: "OK", total_cost_usd: 0.08 });
 
@@ -470,8 +472,11 @@ describe("globu-worker", () => {
     const signals = new EventEmitter();
     const auto = captureIo(root);
     const jira = idleJira(() => signals.emit("SIGTERM"));
-    expect(await workerMain(["start"], auto, withGithub(), { jira, signals, run: healthy })).toBe(0);
-    expect(auto.stdout.trim().split("\n").at(-1)).toBe("stopping after the current cycle");
+    expect(await workerMain(["start"], auto, withGithub(), { jira, signals, run: healthy, now: () => AT })).toBe(0);
+    expect(auto.stdout.trim().split("\n").slice(-2)).toEqual([
+      `${STAMP} stopping after the current cycle`,
+      `${STAMP} nothing eligible`
+    ]);
   });
 
   it("says which issues the next cycle takes in a dry run", async () => {
@@ -507,8 +512,11 @@ describe("globu-worker", () => {
     for (const argv of [["run"], ["start", "--mode", "auto"]]) {
       const io = captureIo(root);
       const overrides = { ...quiet(), jira: sessionJira(), run: claudeless };
-      expect(await workerMain(argv, io, withGithub(), overrides)).toBe(69);
-      expect(io.stderr).toContain("globu-worker: stopping, the machine needs fixing first: could not start claude");
+      expect(await workerMain(argv, io, withGithub(), { ...overrides, now: () => AT })).toBe(69);
+      expect(io.stderr).toContain(
+        `${STAMP} globu-worker: stopping, the machine needs fixing first: could not start claude`
+      );
+      expect(io.stdout).toContain(`${STAMP} MR-1\tclaimed\n`);
     }
   });
 
@@ -554,17 +562,22 @@ describe("globu-worker", () => {
     const signals = new EventEmitter();
     const during = captureIo(root);
     const jira = idleJira(() => signals.emit("SIGINT"));
-    expect(await workerMain(["run"], during, withGithub(), { jira, signals, run: healthy })).toBe(0);
-    expect(during.stdout.split("\n").slice(5).join("\n")).toBe("stopping after the current cycle\nnothing eligible\n");
+    expect(await workerMain(["run"], during, withGithub(), { jira, signals, run: healthy, now: () => AT })).toBe(0);
+    expect(during.stdout.split("\n").slice(5).join("\n")).toBe(
+      `${STAMP} stopping after the current cycle\n${STAMP} nothing eligible\n`
+    );
 
     const later = new EventEmitter();
     const paused = captureIo(root);
     const started = Date.now();
-    const pending = workerMain(["run"], paused, withGithub(), { jira: idleJira(), signals: later, run: healthy });
+    const overrides = { jira: idleJira(), signals: later, run: healthy, now: () => AT };
+    const pending = workerMain(["run"], paused, withGithub(), overrides);
     setTimeout(() => later.emit("SIGTERM"), 50);
     expect(await pending).toBe(0);
     expect(Date.now() - started).toBeLessThan(900);
-    expect(paused.stdout.split("\n").slice(5).join("\n")).toBe("nothing eligible\nstopping after the current cycle\n");
+    expect(paused.stdout.split("\n").slice(5).join("\n")).toBe(
+      `${STAMP} nothing eligible\n${STAMP} stopping after the current cycle\n`
+    );
   });
 
   it.each([["run"], ["start", "--mode", "auto"]])(

@@ -353,7 +353,9 @@ describe("globu-worker run", () => {
       const code = await ended;
       if (!WINDOWS) {
         expect(code).toBe(0);
-        expect(output.trim().split("\n").at(-1)).toBe("stopping after the current cycle");
+        expect(output.trim().split("\n").at(-1)).toMatch(
+          /^\d{4}-\d{2}-\d{2}T[\d:.]+Z stopping after the current cycle$/
+        );
       }
     } finally {
       worker.kill("SIGKILL");

@@ -159,26 +159,35 @@ export async function workerMain(
     .addHelpText("after", FOOTER);
   let exitCode = 0;
   const untilStopped = async (deps: WorkerDeps): Promise<boolean> => {
+    const at = (line: string) => `${deps.now().toISOString()} ${line}`;
+    const timed = {
+      ...deps.io,
+      out: (line: string) => deps.io.out(at(line)),
+      err: (line: string) => deps.io.err(at(line))
+    };
     let stopped = false;
     let wake: (() => void) | null = null;
     const stop = () => {
       stopped = true;
-      io.out("stopping after the current cycle");
+      io.out(at("stopping after the current cycle"));
       wake?.();
     };
     overrides.signals.once("SIGINT", stop);
     overrides.signals.once("SIGTERM", stop);
-    return await loop(deps, {
-      stopped: () => stopped,
-      sleep: (ms) =>
-        new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, ms);
-          wake = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-        })
-    });
+    return await loop(
+      { ...deps, io: timed },
+      {
+        stopped: () => stopped,
+        sleep: (ms) =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, ms);
+            wake = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          })
+      }
+    );
   };
   const global = () => program.opts<Global>();
   const ownDeps = (): WorkerDeps => {

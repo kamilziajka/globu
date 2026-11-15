@@ -1,6 +1,6 @@
 import { type Check, checksLine } from "./check.js";
 import { loadRuns, spentOn } from "./runs.js";
-import { OPEN_PULL_STATES, type Row, renderTable, rowLine, sessionList } from "./session.js";
+import { OPEN_PULL_STATES, renderTable, sessionList } from "./session.js";
 import { currentUsage, usageLine } from "./subscription.js";
 import { CLEAR, clip, gray, HIDE_CURSOR, type Screen, SHOW_CURSOR, widthOf } from "./tui.js";
 import { followUps, once, type WorkerDeps } from "./worker.js";
@@ -28,20 +28,19 @@ export function parseMode(value: string): Mode {
 
 /** Runs the session list; true when auto mode stopped for a problem of the machine. */
 export async function start(deps: WorkerDeps, options: StartOptions): Promise<boolean> {
+  const { mode } = options;
+  const one = { ...deps.config, limits: { ...deps.config.limits, concurrent: 1 } };
+  if (options.screen === undefined) return await options.untilStopped({ ...deps, config: one });
+  const screen = options.screen;
   const list = sessionList();
-  const { screen, mode } = options;
   let notice = "";
   let status = "";
   let selected: string | null = null;
   const title = `globu-worker in ${mode} mode on ${deps.config.jira.site}, one issue at a time`;
   const checks = options.checks ?? [];
   const access = (width: number) => (checks.length === 0 ? "" : `\n${gray(clip(checksLine(checks), width))}`);
-  const show = (changed: Row[]) => {
+  const show = () => {
     const now = deps.now();
-    if (screen === undefined) {
-      for (const row of changed) deps.io.out(rowLine(row, now));
-      return;
-    }
     const spent = spentOn(loadRuns(deps.home), now).toFixed(2);
     const extra = [status, notice].filter((text) => text !== "").map((text) => ` ${text}`);
     const pulls = list.pullRequests();
@@ -58,17 +57,25 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<bo
   };
   const worker: WorkerDeps = {
     ...deps,
-    config: { ...deps.config, limits: { ...deps.config.limits, concurrent: 1 } },
+    config: one,
     io: { ...deps.io, out: () => {} },
-    onPlan: (plan) => show(list.plan(plan)),
-    onRun: (record) => show(list.run(record)),
-    onFollowUps: (rows) => show(list.followUps(rows))
+    onPlan: (plan) => {
+      list.plan(plan);
+      show();
+    },
+    onRun: (record) => {
+      list.run(record);
+      show();
+    },
+    onFollowUps: (rows) => {
+      list.followUps(rows);
+      show();
+    }
   };
   if (mode === "auto") return await options.untilStopped(worker);
 
   const readKey = options.readKey as ReadKey;
   const wait = options.wait ?? never;
-  const pickScreen = screen as Screen;
   let pending: Promise<Key> | null = null;
   let tick: Promise<"tick"> | null = null;
   const nextEvent = async (): Promise<Key | "tick"> => {
@@ -90,11 +97,11 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<bo
       notice = `${label}: ${(err as Error).message}`;
     }
   };
-  pickScreen.write(HIDE_CURSOR);
+  screen.write(HIDE_CURSOR);
   try {
     for (;;) {
       status = "Polling Jira and GitHub...";
-      show([]);
+      show();
       await attempt(refresh, "Polling failed");
       status = "";
       for (;;) {
@@ -102,7 +109,7 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<bo
         const keys = rows.map((row) => row.key);
         const at = Math.max(keys.indexOf(selected as string), 0);
         selected = keys.length === 0 ? null : keys[at];
-        show([]);
+        show();
         const key = await nextEvent();
         if (key === "tick") {
           await attempt(refresh, "Polling failed");
@@ -115,7 +122,7 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<bo
           const chosen = rows[at];
           const url = chosen.url;
           status = url === undefined ? `Running ${chosen.key}...` : `Repairing ${chosen.key}...`;
-          show([]);
+          show();
           const options = url === undefined ? { issue: chosen.key } : { repair: url };
           await attempt(() => once(worker, options), chosen.key);
           break;
@@ -126,6 +133,6 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<bo
       }
     }
   } finally {
-    pickScreen.write(SHOW_CURSOR);
+    screen.write(SHOW_CURSOR);
   }
 }

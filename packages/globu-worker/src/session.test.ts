@@ -1,7 +1,7 @@
 import { stripVTControlCharacters as plain } from "node:util";
 import { describe, expect, it } from "vitest";
 import { newRun, type RunRecord } from "./runs.js";
-import { renderTable, rowLine, sessionList } from "./session.js";
+import { renderTable, sessionList } from "./session.js";
 
 const NOW = new Date("2026-11-13T10:42:00.000Z");
 
@@ -111,7 +111,7 @@ describe("pull request rows", () => {
   });
 });
 
-describe("renderTable and rowLine", () => {
+describe("renderTable", () => {
   it("aligns columns, clips long summaries and marks the selection in pick mode", () => {
     const empty = sessionList();
     expect(plain(renderTable(empty, { header: "head", footer: "foot" }))).toBe(
@@ -133,14 +133,5 @@ describe("renderTable and rowLine", () => {
     expect(pick[4]).toBe(`● MR-3   Third${" ".repeat(43)}  available  b (1 references resolved)`);
     const none = plain(renderTable(list, { header: "head", footer: "foot", selected: null })).split("\n");
     expect(none[4].startsWith("○ MR-3")).toBe(true);
-  });
-
-  it("prints one line per state change", () => {
-    expect(rowLine({ key: "MR-1", summary: "s", state: "released", detail: "why" }, NOW)).toBe(
-      "2026-11-13T10:42:00.000Z MR-1 released: why"
-    );
-    expect(rowLine({ key: "MR-1", summary: "s", state: "preparing", detail: "" }, NOW)).toBe(
-      "2026-11-13T10:42:00.000Z MR-1 preparing"
-    );
   });
 });

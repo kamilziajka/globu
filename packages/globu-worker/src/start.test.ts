@@ -129,15 +129,10 @@ describe("start", () => {
     expect(() => parseMode("fast")).toThrow('invalid mode "fast", use pick or auto');
   });
 
-  it("in auto mode without a terminal runs one issue per cycle and prints a line per state change", async () => {
+  it("in auto mode without a terminal runs one issue per cycle and prints the cycle's own lines, as run does", async () => {
     const { worker, io } = deps(jira([issue("MR-1", "First"), issue("MR-2", "Second")]));
     await start(worker, { mode: "auto", untilStopped: cycleOnce });
-    const lines = io.stdout.trim().split("\n");
-    expect(lines[0]).toBe("2026-11-13T10:42:00.000Z MR-1 preparing");
-    expect(lines.at(-1)).toBe("2026-11-13T10:42:00.000Z MR-1 released: the run made no commits");
-    expect(io.stdout).toContain("MR-1 running: since 10:42 UTC");
-    expect(io.stdout).not.toContain("MR-2");
-    expect(io.stdout).not.toContain("claimed");
+    expect(io.stdout.trim().split("\n")).toEqual(["MR-1\tclaimed", "MR-1\treleased: the run made no commits"]);
   });
 
   it("in auto mode on a terminal redraws the table with the day's spend", async () => {

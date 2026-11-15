@@ -226,11 +226,12 @@ describe("why", () => {
     expect(io.stdout).toContain("marker\tnotes, not a deliverable shard\n");
     expect(io.stdout).toContain("assignee\tsomeone\n");
     expect(io.stdout).toContain("blockers\twaiting on MR-0 (In Review)\n");
-    expect(io.stdout).toContain("verdict\tthe next cycle leaves it\n");
+    expect(io.stdout).toContain("verdict\tthe next cycle leaves it: it does not match jira.jql\n");
 
     const unmarked = await why(worker, "MR-2");
     expect(unmarked).toMatchObject({ matches: true, shard: null, deliverable: false, holds: [], picked: false });
     expect(io.stdout).toContain("marker\tnone\n");
+    expect(io.stdout).toContain("verdict\tthe next cycle leaves it: would release: no deliverable marker\n");
   });
 
   it("names the day cap, the subscription limit, the open pull request cap and repairs that take the slots", async () => {
@@ -255,9 +256,17 @@ describe("why", () => {
         detail: `the subscription's five-hour window is at 81 %, the limit is 70 %, it resets at ${resetsAt.slice(0, 16).replace("T", " ")} UTC`
       },
       { limit: "openPullRequests", detail: "2 pull requests are open, the cap is 2" },
-      { limit: "concurrent", detail: "limits.concurrent is 1 and 1 repairs come first" }
+      { limit: "concurrent", detail: "limits.concurrent is 1 and 1 repair comes first" }
     ]);
     expect(report.picked).toBe(false);
+
+    config.limits = { ...config.limits, concurrent: 2 };
+    const both = { [review]: pull(review, "CONFLICTING"), [conflict]: pull(conflict, "CONFLICTING") };
+    const crowded = await why(deps(root, config, jira, both).worker, "MR-1");
+    expect(crowded.holds.at(-1)).toEqual({
+      limit: "concurrent",
+      detail: "limits.concurrent is 2 and 2 repairs come first"
+    });
   });
 
   it("walks the queue ahead of the issue as a cycle would, for the concurrency and per-shard limits", async () => {
@@ -272,10 +281,18 @@ describe("why", () => {
       issue("MR-6", { labels: frontend }),
       issue("MR-7")
     ]);
-    const { worker } = deps(root, config, jira);
+    const { worker, io } = deps(root, config, jira);
+    expect((await why(worker, "MR-1")).holds).toEqual([]);
+    expect(io.stdout).toContain("verdict\tthe next cycle leaves it: it is assigned\n");
+    expect((await why(worker, "MR-2")).holds).toEqual([]);
+    expect(io.stdout).toContain("limits\tnone hold it\n");
+    expect(io.stdout).toContain("verdict\tthe next cycle leaves it: it waits on MR-0 (In Review)\n");
     expect((await why(worker, "MR-4")).holds).toEqual([
-      { limit: "perShard", detail: "limits.perShard is 1 and MR-3 come first in backend" }
+      { limit: "perShard", detail: "limits.perShard is 1 and MR-3 comes first in backend" }
     ]);
+    expect(io.stdout).toContain(
+      "verdict\tthe next cycle leaves it: limits.perShard is 1 and MR-3 comes first in backend\n"
+    );
     expect((await why(worker, "MR-5")).picked).toBe(true);
     expect((await why(worker, "MR-6")).holds).toEqual([
       { limit: "concurrent", detail: "limits.concurrent is 2 and MR-3, MR-5 come first" }

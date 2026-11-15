@@ -56,7 +56,12 @@ async function ahead(deps: WorkerDeps, key: string, slots: number, stored: Store
   return taken;
 }
 
-async function holds(deps: WorkerDeps, key: string, shard: string | null, matches: boolean): Promise<Hold[]> {
+function comeFirst(keys: string[], repairs = 0): string {
+  const ahead = [...(repairs > 0 ? [`${repairs} ${repairs === 1 ? "repair" : "repairs"}`] : []), ...keys];
+  return `${ahead.join(", ")} ${keys.length + repairs === 1 ? "comes" : "come"} first`;
+}
+
+async function holds(deps: WorkerDeps, key: string, shard: string | null, queued: boolean): Promise<Hold[]> {
   const { limits } = deps.config;
   const stored = loadRuns(deps.home);
   const found: Hold[] = [];
@@ -79,25 +84,31 @@ async function holds(deps: WorkerDeps, key: string, shard: string | null, matche
       detail: `${open} pull requests are open, the cap is ${limits.openPullRequests}`
     });
   }
-  if (!matches) return found;
+  if (!queued) return found;
   const repairs = Math.min(rows.filter((row) => row.repairable).length, limits.concurrent);
   const slots = limits.concurrent - repairs;
   const taken = await ahead(deps, key, slots, stored);
   const same = taken.filter((entry) => entry.shard === shard);
   if (taken.length >= slots) {
-    const first = [...(repairs > 0 ? [`${repairs} repairs`] : []), ...taken.map((entry) => entry.key)];
+    const keys = taken.map((entry) => entry.key);
     found.push({
       limit: "concurrent",
-      detail: `limits.concurrent is ${limits.concurrent} and ${first.join(", ")} come first`
+      detail: `limits.concurrent is ${limits.concurrent} and ${comeFirst(keys, repairs)}`
     });
   } else if (shard !== null && same.length >= limits.perShard) {
-    const keys = same.map((entry) => entry.key).join(", ");
     found.push({
       limit: "perShard",
-      detail: `limits.perShard is ${limits.perShard} and ${keys} come first in ${shard}`
+      detail: `limits.perShard is ${limits.perShard} and ${comeFirst(same.map((entry) => entry.key))} in ${shard}`
     });
   }
   return found;
+}
+
+function leftBecause(report: WhyReport, waiting: string): string {
+  if (!report.matches) return "it does not match jira.jql";
+  if (report.assignee !== null) return "it is assigned";
+  if (waiting !== "") return `it waits on ${waiting}`;
+  return report.holds.length > 0 ? report.holds[0].detail : report.action;
 }
 
 function whyLines(report: WhyReport, blockedLabel: string): string[] {
@@ -115,7 +126,7 @@ function whyLines(report: WhyReport, blockedLabel: string): string[] {
     `blockers\t${waiting === "" ? "none open" : `waiting on ${waiting}`}`,
     `limits\t${report.holds.length === 0 ? "none hold it" : report.holds.map((hold) => hold.detail).join("; ")}`,
     `outcome\t${report.action}`,
-    `verdict\t${report.picked ? "the next cycle claims it" : "the next cycle leaves it"}`
+    `verdict\t${report.picked ? "the next cycle claims it" : `the next cycle leaves it: ${leftBecause(report, waiting)}`}`
   ];
 }
 
@@ -129,7 +140,7 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
     key: blocker.key,
     status: blocker.status
   }));
-  const held = await holds(deps, issue.key, shard, matches);
+  const held = await holds(deps, issue.key, shard, matches && waiting.length === 0);
   const action = dryRunAction(deps, { issue, shardId: shard });
   const report: WhyReport = {
     key: issue.key,
