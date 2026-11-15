@@ -89,11 +89,13 @@ A branch that presents a feature on the site ahead of a release leaves `content`
 
 Skip when the globu-knowledge-base `docs/log.md` has the entry.
 
-Find the shard `globu-knowledge-base` with `globu list --json` and work in a worktree of it at `origin/main`. Add a `base log` entry for today: `Globu <version> released on <date>` with the release commit, the pin commit, the tag, the Release run id or ids, the site commit and anything the run needed by hand. Mark backlog items that shipped with a history line, then `base validate`, commit and push to `main`.
+Find the shard `globu-knowledge-base` with `globu list --json` and work in a worktree of it at `origin/main`. Add a `base log` entry for today: `Globu <version> released on <date>` with the release commit, the pin commit, the tag, the Release run id or ids, the site commit and anything the run needed by hand. Then `base validate`, commit and push to `main`.
+
+The work items are issues in the Jira project GLOBU on `kazet.atlassian.net`, created and changed with `twg` as the knowledge base's `backlog.md` describes. For each GLOBU item that shipped, add a dated comment with the version, the commit and anything left open: `TWG_AGENT_DEFAULTS=1 twg jira workitem comment create --issue-id GLOBU-<n> --site kazet --body "<what shipped>" --body-format markdown`. When the item is now done, move it: `TWG_AGENT_DEFAULTS=1 twg jira workitem transition --id GLOBU-<n> --site kazet --transition-id Done`. An item that shipped but is still open, for example because it waits to be seen live, keeps its status and gets only the comment.
 
 ## 8. Report
 
-One short report: the version and the packages on npm, the Release run, the tag and the GitHub release, the site commit and that globu.kazet.blog serves the version, the knowledge base entry, and every step that needed the user or a retry. The Stop hook `.claude/hooks/site-drift.mjs` reports a release left half done at the end of later sessions until it is finished.
+One short report: the version and the packages on npm, the Release run, the tag and the GitHub release, the site commit and that globu.kazet.blog serves the version, the knowledge base entry, the GLOBU issues commented on or moved to Done, and every step that needed the user or a retry. The Stop hook `.claude/hooks/site-drift.mjs` reports a release left half done at the end of later sessions until it is finished.
 
 ## Guardrails
 
