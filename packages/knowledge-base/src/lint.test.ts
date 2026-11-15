@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { baseIndex, initRepo, tempDir, write } from "../../testing/index.js";
+import { baseIndex, initRepo, posix, tempDir, write } from "../../testing/index.js";
 import { descriptionOverlap, type LintWarning, lintBase, lintRepo } from "./lint.js";
 
 function doc(description: string, body = ""): string {
@@ -11,7 +11,7 @@ function doc(description: string, body = ""): string {
 function summary(docsDir: string, warnings: LintWarning[]): string[] {
   return warnings.map((warning) => {
     const where = warning.line === null ? "" : `:${warning.line}`;
-    return `${warning.kind} ${path.relative(docsDir, warning.file)}${where} ${warning.message}`;
+    return `${warning.kind} ${posix(path.relative(docsDir, warning.file))}${where} ${warning.message}`;
   });
 }
 

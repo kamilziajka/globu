@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { baseIndex, captureIo, tempDir, write } from "../../testing/index.js";
+import { baseIndex, captureIo, native, tempDir, write } from "../../testing/index.js";
 import { globuMain } from "./globu.js";
 
 let root: string;
+
+const pkg = native("pkg/docs");
+
+function file(name: string): string {
+  return native(`pkg/docs/${name}`);
+}
 
 function run(argv: string[]) {
   const io = captureIo(root);
@@ -27,12 +33,12 @@ describe("globu base lint", () => {
       code: 0,
       out: [
         "OK    docs",
-        "WARN  pkg/docs",
-        "      pkg/docs/a.md:6: broken link: ./gone.md does not resolve",
-        "      pkg/docs/index.md:8: index drift: entry for ./a.md does not match its description: " +
+        `WARN  ${pkg}`,
+        `      ${file("a.md")}:6: broken link: ./gone.md does not resolve`,
+        `      ${file("index.md")}:8: index drift: entry for ./a.md does not match its description: ` +
           '"heating zones" against "The release workflow."',
-        "      pkg/docs/index.md:9: broken link: ./a|b.md does not resolve",
-        "      pkg/docs/lonely.md: orphan: no other doc or index links here",
+        `      ${file("index.md")}:9: broken link: ./a|b.md does not resolve`,
+        `      ${file("lonely.md")}: orphan: no other doc or index links here`,
         ""
       ].join("\n"),
       err: ""
@@ -51,16 +57,16 @@ describe("globu base lint", () => {
         "| Base | Broken links | Orphans | Index drift |",
         "| --- | --: | --: | --: |",
         "| `docs` | 0 | 0 | 0 |",
-        "| `pkg/docs` | 2 | 1 | 1 |",
+        `| \`${pkg}\` | 2 | 1 | 1 |`,
         "",
-        "### `pkg/docs`",
+        `### \`${pkg}\``,
         "",
         "| Where | Check | Finding |",
         "| --- | --- | --- |",
-        "| `pkg/docs/a.md:6` | broken link | ./gone.md does not resolve |",
-        '| `pkg/docs/index.md:8` | index drift | entry for ./a.md does not match its description: "heating zones" against "The release workflow." |',
-        "| `pkg/docs/index.md:9` | broken link | ./a\\|b.md does not resolve |",
-        "| `pkg/docs/lonely.md` | orphan | no other doc or index links here |",
+        `| \`${file("a.md")}:6\` | broken link | ./gone.md does not resolve |`,
+        `| \`${file("index.md")}:8\` | index drift | entry for ./a.md does not match its description: "heating zones" against "The release workflow." |`,
+        `| \`${file("index.md")}:9\` | broken link | ./a\\|b.md does not resolve |`,
+        `| \`${file("lonely.md")}\` | orphan | no other doc or index links here |`,
         ""
       ].join("\n")
     );
