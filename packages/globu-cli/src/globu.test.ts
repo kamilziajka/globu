@@ -533,7 +533,9 @@ describe("globu hook guard", () => {
     expect(bash(`rm ${sh}/a.md`)).toEqual(silent);
     delete process.env.CLAUDE_PROJECT_DIR;
     expect(bash(`ls ${sh}`)).toEqual(silent);
-    expect(bash(`D=${sh}; rm $D/a.md`).out).toContain(`this command writes to ${path.join(repo, "a.md")}`);
+    expect(JSON.parse(bash(`D=${sh}; rm $D/a.md`).out).hookSpecificOutput.permissionDecisionReason).toContain(
+      `this command writes to ${path.join(repo, "a.md")}`
+    );
   });
 
   it("stays out of the way when it has nothing to check", () => {
