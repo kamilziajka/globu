@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register, resolveAll } from "../../globu-core/src/index.js";
-import { initRepo, tempDir, write } from "../../testing/index.js";
+import { escapeRegExp, initRepo, tempDir, write } from "../../testing/index.js";
 import { bootstrapShards } from "./bootstrap.js";
 import { loadWorkerConfig } from "./config.js";
 
@@ -72,7 +72,10 @@ describe("bootstrapShards", () => {
     backend: ${missing}
 `;
     expect(() => bootstrapShards(config(shards), process.env.GLOBU_HOME as string)).toThrow(
-      new RegExp(`^could not clone ${missing} for shard backend: .*\\nA private repository needs GLOBU_GIT_TOKEN`, "s")
+      new RegExp(
+        `^could not clone ${escapeRegExp(missing)} for shard backend: .*\\nA private repository needs GLOBU_GIT_TOKEN`,
+        "s"
+      )
     );
   });
 });

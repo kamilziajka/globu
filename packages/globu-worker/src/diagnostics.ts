@@ -51,7 +51,10 @@ export async function writeDiagnostics(deps: DiagnosticsDeps, out: string): Prom
     const config = path.join(deps.home, "worker.yaml");
     if (fs.existsSync(config)) put("worker.yaml", fs.readFileSync(config, "utf8"));
     put("environment.txt", await environment(deps));
-    const packed = await deps.run("tar", ["-czf", out, "-C", staging, ...included], { env: deps.env });
+    const packed = await deps.run("tar", ["-czf", path.basename(out), "-C", staging, ...included], {
+      cwd: path.dirname(out),
+      env: deps.env
+    });
     if (packed.code !== 0) throw new Error(`tar failed: ${packed.stderr.trim()}`);
     return included;
   } finally {

@@ -5,16 +5,21 @@ import { tempDir, write } from "../../testing/index.js";
 import { findOnPath, setupShell } from "./shell.js";
 
 describe("findOnPath", () => {
-  it("looks through PATH with PATHEXT on Windows and plain names elsewhere", () => {
+  it("looks through PATH with PATHEXT on Windows", () => {
     const root = tempDir();
     const npm = write(root, "npm/npm.cmd", "");
-    const tool = write(root, "bin/tool", "");
-    fs.mkdirSync(path.join(root, "bin/folder.exe"));
+    fs.mkdirSync(path.join(root, "bin/folder.exe"), { recursive: true });
     expect(findOnPath("npm", { Path: `;${root}/bin;${root}/npm`, PATHEXT: ".EXE;.CMD" }, "win32")).toBe(npm);
     expect(findOnPath("npm", { PATH: `${root}/npm` }, "win32")).toBe(npm);
     expect(findOnPath("folder", { PATH: `${root}/bin` }, "win32")).toBeNull();
-    expect(findOnPath("tool", { PATH: `${root}/npm:${root}/bin` }, "darwin")).toBe(tool);
     expect(findOnPath("tool", {}, "linux")).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")("looks through a colon separated PATH elsewhere", () => {
+    const root = tempDir();
+    write(root, "npm/npm.cmd", "");
+    const tool = write(root, "bin/tool", "");
+    expect(findOnPath("tool", { PATH: `${root}/npm:${root}/bin` }, "darwin")).toBe(tool);
     expect(findOnPath("tool", { PATH: `${"x".repeat(5000)}:${root}/bin` }, "linux")).toBe(tool);
   });
 });
