@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register, updateShard } from "../../globu-core/src/index.js";
@@ -874,6 +875,24 @@ describe("once", () => {
     expect(cycle.io.stdout).toContain(`MR-8\t${held}`);
     expect(blocked.transitions).toEqual([]);
     expect(fs.existsSync(lock)).toBe(true);
+  });
+
+  it("runs inside a hold of a process above it without waiting on that process or deleting its lock", async () => {
+    const world = setup();
+    world.config.limits.exclusive = ["gpu"];
+    const dir = process.env.GLOBU_LOCK_DIR as string;
+    fs.mkdirSync(dir, { recursive: true });
+    const above = { pid: process.ppid, host: os.hostname(), holder: "globu-worker hold (npm run render)" };
+    const lock = path.join(dir, "gpu.lock");
+    fs.writeFileSync(lock, JSON.stringify(above));
+    const calls: Calls = { gh: [], claude: [] };
+    const jira = fakeJira([issue("MR-7")]);
+    const { worker } = deps(world, jira, fakeRunner({ commit: true }, calls));
+    worker.env = { ...worker.env, GLOBU_LOCK_PIDS: `${process.ppid},${process.pid}` };
+    expect((await once(worker, { dryRun: true })).plan[0].action).toMatch(/^would claim and run in backend/);
+    expect((await once(worker)).runs[0].state).toBe("handed-back");
+    expect(calls.claude[0].env.GLOBU_LOCK_PIDS).toBe(`${process.ppid},${process.pid}`);
+    expect(JSON.parse(fs.readFileSync(lock, "utf8"))).toEqual(above);
   });
 
   it("files the two follow-ups of a handback as linked issues and lists their keys on the issue", async () => {
