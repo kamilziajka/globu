@@ -461,7 +461,7 @@ To look at a run on another machine, run `globu-worker --log-level debug start` 
 
 ## Running it
 
-By hand, `globu-worker start` in a terminal. As a service, `globu-worker start --mode auto` or `globu-worker run`; on a Mac under launchd, with the secrets in the job's environment or in `secrets.env`. In a container, a Cloud Run job or a cron entry runs the bootstrap against an empty `GLOBU_HOME` and then `globu-worker once`; a second invocation while one is running on the same home exits 1, see below. No endpoint is exposed, because the trigger is the poll. Two workers on one Jira project are not supported: the claim is a read-back after assign and transition, which is enough for one.
+By hand, `globu-worker start` in a terminal. As a service, `globu-worker start --mode auto` or `globu-worker run`; on a Mac under launchd, with the secrets in the job's environment or in `secrets.env`, and on Windows [as a scheduled task](#as-a-scheduled-task-on-windows). In a container, a Cloud Run job or a cron entry runs the bootstrap against an empty `GLOBU_HOME` and then `globu-worker once`; a second invocation while one is running on the same home exits 1, see below. No endpoint is exposed, because the trigger is the poll. Two workers on one Jira project are not supported: the claim is a read-back after assign and transition, which is enough for one.
 
 A service manager can tell a stop for a machine problem by its exit code, 69, and should not restart into it: under systemd `Restart=on-failure` with `RestartPreventExitStatus=69`. Under launchd a `KeepAlive` dictionary with `SuccessfulExit` set to false restarts on any non-zero exit, 69 included, so a job that should stay down runs the worker from a script that exits 0 on 69.
 
@@ -483,3 +483,53 @@ The worker runs on Windows with Git for Windows, Node and `claude`, installed na
 - **`diagnostics`** runs `tar` in the directory of the archive and names the archive without its drive, since the GNU `tar` that Git for Windows can put on `PATH` reads `C:\...` as a remote host.
 
 The test suite runs on a Windows runner in CI, see [tests on Windows](./development.md#tests-on-windows).
+
+### As a scheduled task on Windows
+
+Windows has no systemd or launchd. Task Scheduler keeps `globu-worker run` going in the session of the person who is logged on, which is where a run finds the GPU, the `PATH` of that person and their Claude login. A task set to run "whether the user is logged on or not" starts in a session without a desktop and without the GPU.
+
+The task starts a small script, because Task Scheduler cannot redirect output. `run-worker.cmd` in the worker's home:
+
+```bat
+@echo off
+cd /d "%USERPROFILE%\.globu\worker"
+call globu-worker run >> logs\service.out 2>&1
+exit /b %ERRORLEVEL%
+```
+
+Register it from PowerShell:
+
+```powershell
+$worker = "$env:USERPROFILE\.globu\worker"
+$action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless cmd /c `"$worker\run-worker.cmd`"" -WorkingDirectory $worker
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "globu-worker" -Action $action -Principal $principal -Settings $settings
+```
+
+```powershell
+Start-ScheduledTask -TaskName "globu-worker"
+```
+
+What each part is for:
+
+| Setting | Why |
+|---|---|
+| `-LogonType Interactive` | The task runs in the console session of the logged-on user, with the GPU and that user's environment |
+| `-ExecutionTimeLimit ([TimeSpan]::Zero)` | No time limit. The default stops a task after three days |
+| `-MultipleInstances IgnoreNew` | A second start while the worker runs does nothing. A second worker would be refused by `worker.lock` anyway |
+| `conhost.exe --headless` | Gives the worker a console without a window on the desktop. Git, `gh` and `claude` are console programs and need one |
+| `>> logs\service.out 2>&1` | Appends what `run` prints, each line with its time, see [the service log](#the-service-log) |
+| No restart on failure | Leave `-RestartCount` and `-RestartInterval` unset. Task Scheduler cannot tell exit code 69, a stop for a machine problem, from any other failure, and a restart into that problem repeats it. After such a stop the task's last result is 69 (`0x45`); fix the machine and start the task again |
+
+Add `-Trigger (New-ScheduledTaskTrigger -AtLogOn)` to `Register-ScheduledTask` to start the worker with the session.
+
+**Stopping.** Stop the worker, not the task. `Stop-ScheduledTask` ends `conhost.exe` only: the `cmd.exe` below it and the worker keep running without a console, and every program they start from then on fails with exit code `0xC0000142`. End the worker and what it started, and the task ends by itself:
+
+```powershell
+taskkill /T /F /PID (Get-Content "$env:USERPROFILE\.globu\worker\worker.lock" | ConvertFrom-Json).pid
+```
+
+Windows has no `SIGTERM` to send, so this is a hard stop. Between runs it costs nothing. During a run it ends Claude as well: at its next start the worker finds the unfinished run, removes its worktree and gives the issue back with "the worker restarted while this issue was claimed", and the lock file left behind is stale by its pid and is taken over.
+
+Do not replace `run` with a loop of `globu-worker once` in the script. A loop whose console is taken away keeps spinning with every `once` failing at once, where a single `run` is one process to stop.

@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [globu-worker](./worker.md#as-a-scheduled-task-on-windows): a scheduled task recipe for Windows: `globu-worker run` under `conhost.exe --headless` with an Interactive logon, no time limit, one instance and no restart on failure, its output appended to `logs\service.out`, and how to stop it, since `Stop-ScheduledTask` ends only the console host.
 * [globu-worker](./worker.md#the-outcome): the handback starts with `Outcome: met`, `partial` or `not met`, which the `issue-deliver` [skill](./skills.md) writes against the issue's acceptance criteria, and the worker shows the word in the line of a hand back, the session list, the notification's message and `run.json`.
 * [globu-worker](./worker.md#the-service-log): `run` and `start --mode auto` without a terminal print the same lines, each cycle's output with the time in front; the headless `start` no longer prints a line per state change of its own. `why` ends its verdict with the first reason an issue is left, leaves the queue limits out for an issue that waits on a blocker and says "comes first" for one issue.
 * [globu-worker](./worker.md#a-run): the brief gives a referenced file of the target shard or a companion inside the run's worktree instead of the shard's shared clone, and says that the other locations are for reading.
