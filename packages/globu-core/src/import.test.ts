@@ -200,7 +200,7 @@ describe("import conflicts", () => {
 
   it("explains missing files, unknown contexts and misuse", () => {
     expect(() => run("missing.yaml")).toThrow(/no manifest at .*missing\.yaml/);
-    expect(() => run(sandbox)).toThrow(/no manifest at .*\.globu\/manifest\.yaml/);
+    expect(() => run(sandbox)).toThrow(/no manifest at .*\.globu[/\\]manifest\.yaml/);
     expect(() => run(undefined)).toThrow(/nothing to import/);
     expect(() => run(undefined, { file: "x" })).toThrow(/--file needs a path or a repo URL/);
 

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { baseIndex, captureIo, read, tempDir, write } from "../../testing/index.js";
+import { baseIndex, captureIo, native, read, tempDir, write } from "../../testing/index.js";
 import { globuMain } from "./globu.js";
 
 let root: string;
@@ -31,17 +31,17 @@ describe("globu base setup", () => {
     const result = run(["base", "setup", "--name", "demo", "--description", "Demo"]);
     expect(result).toEqual({
       code: 0,
-      out: "base: wiki\n  created   wiki/index.md\n  created   wiki/log.md\n",
+      out: native("base: wiki\n  created   wiki/index.md\n  created   wiki/log.md\n"),
       err: ""
     });
-    expect(run(["base", "setup"]).out).toBe("base: wiki\n  unchanged wiki/index.md\n  unchanged wiki/log.md\n");
+    expect(run(["base", "setup"]).out).toBe(native("base: wiki\n  unchanged wiki/index.md\n  unchanged wiki/log.md\n"));
   });
 
   it("creates the base in the directory named by --dir", () => {
     expect(run(["base", "setup", "--dir", "docs", "--name", "demo"]).out).toBe(
-      "base: docs\n  created   docs/index.md\n  created   docs/log.md\n"
+      native("base: docs\n  created   docs/index.md\n  created   docs/log.md\n")
     );
-    expect(run(["base", "setup"]).out).toBe("base: docs\n  unchanged docs/index.md\n  unchanged docs/log.md\n");
+    expect(run(["base", "setup"]).out).toBe(native("base: docs\n  unchanged docs/index.md\n  unchanged docs/log.md\n"));
   });
 
   it("reports validation errors and exits 1", () => {
@@ -49,8 +49,8 @@ describe("globu base setup", () => {
     write(root, "pkg/docs/bad.md", "bare\n");
     const result = run(["base", "setup", "pkg"]);
     expect(result.code).toBe(1);
-    expect(result.out).toContain("  updated   pkg/docs/index.md\n");
-    expect(result.out).toContain("  invalid   pkg/docs/bad.md: missing YAML frontmatter block\n");
+    expect(result.out).toContain(native("  updated   pkg/docs/index.md\n"));
+    expect(result.out).toContain(native("  invalid   pkg/docs/bad.md: missing YAML frontmatter block\n"));
     expect(JSON.parse(run(["base", "setup", "pkg", "--json"]).out).validation.errors).toHaveLength(1);
   });
 });
@@ -59,12 +59,14 @@ describe("globu base validate", () => {
   it("prints one line per base", () => {
     write(root, "docs/index.md", baseIndex("root"));
     write(root, "pkg/docs/index.md", baseIndex("pkg"));
-    expect(run(["base", "validate"])).toEqual({ code: 0, out: "OK    docs\nOK    pkg/docs\n", err: "" });
+    expect(run(["base", "validate"])).toEqual({ code: 0, out: native("OK    docs\nOK    pkg/docs\n"), err: "" });
 
     write(root, "pkg/docs/bad.md", "bare\n");
     const failed = run(["base", "validate", "."]);
     expect(failed.code).toBe(1);
-    expect(failed.out).toBe("OK    docs\nFAIL  pkg/docs\n      pkg/docs/bad.md: missing YAML frontmatter block\n");
+    expect(failed.out).toBe(
+      native("OK    docs\nFAIL  pkg/docs\n      pkg/docs/bad.md: missing YAML frontmatter block\n")
+    );
     expect(JSON.parse(run(["base", "validate", "--json"]).out).errors).toHaveLength(1);
   });
 
@@ -80,9 +82,9 @@ describe("globu base list and owner", () => {
     write(root, "pkg/docs/index.md", baseIndex("pkg"));
     write(root, "pkg/src/a.ts", "");
 
-    expect(run(["base", "list"]).out).toBe("root\tdocs\npkg\tpkg/docs\n");
+    expect(run(["base", "list"]).out).toBe(native("root\tdocs\npkg\tpkg/docs\n"));
     expect(JSON.parse(run(["base", "list", "pkg", "--json"]).out)).toHaveLength(1);
-    expect(run(["base", "owner", "pkg/src/a.ts"])).toEqual({ code: 0, out: "pkg/docs\n", err: "" });
+    expect(run(["base", "owner", "pkg/src/a.ts"])).toEqual({ code: 0, out: native("pkg/docs\n"), err: "" });
     expect(JSON.parse(run(["base", "owner", "pkg/src/a.ts", "--json"]).out).docsDir).toBe(path.join(root, "pkg/docs"));
   });
 
@@ -95,7 +97,7 @@ describe("globu base list and owner", () => {
 describe("globu base log", () => {
   it("appends entries", () => {
     run(["base", "setup"]);
-    expect(run(["base", "log", "wiki", "2026-01-01", "one", "two"]).out).toBe("updated wiki/log.md\n");
+    expect(run(["base", "log", "wiki", "2026-01-01", "one", "two"]).out).toBe(native("updated wiki/log.md\n"));
     expect(read(root, "wiki/log.md")).toContain("## 2026-01-01\n* one\n* two\n");
     expect(JSON.parse(run(["base", "log", "wiki", "2026-01-02", "three", "--json"]).out).logPath).toBe(
       path.join(root, "wiki/log.md")
@@ -105,9 +107,11 @@ describe("globu base log", () => {
   it("opens a titled section with --title and joins it on the next call", () => {
     run(["base", "setup"]);
     expect(run(["base", "log", "wiki", "2026-10-26", "one", "--title", "what changed"]).out).toBe(
-      "updated wiki/log.md\n"
+      native("updated wiki/log.md\n")
     );
-    expect(run(["base", "log", "wiki", "2026-10-26", "two", "--title", "ignored"]).out).toBe("updated wiki/log.md\n");
+    expect(run(["base", "log", "wiki", "2026-10-26", "two", "--title", "ignored"]).out).toBe(
+      native("updated wiki/log.md\n")
+    );
     expect(read(root, "wiki/log.md")).toBe(
       "# Knowledge base update log\n\n## 2026-10-26 (what changed)\n* two\n* one\n"
     );

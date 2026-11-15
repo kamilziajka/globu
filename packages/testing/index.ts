@@ -98,3 +98,15 @@ export function serveGit(root: string, authorization: string | null): Promise<Gi
     });
   });
 }
+
+export function native(text: string): string {
+  return text.replaceAll("/", path.sep);
+}
+
+export function posix(file: string): string {
+  return file.split(path.sep).join("/");
+}
+
+export function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

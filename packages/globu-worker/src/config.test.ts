@@ -145,7 +145,9 @@ github:
 
   it("reports a missing file and an empty one", () => {
     const dir = tempDir();
-    expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(`no worker configuration at ${dir}/worker.yaml`);
+    expect(() => loadWorkerConfig(workerConfigPath(dir))).toThrow(
+      `no worker configuration at ${path.join(dir, "worker.yaml")}`
+    );
     expect(() => loadWorkerConfig(write(dir, "worker.yaml", ""))).toThrow(/root: /);
   });
 });

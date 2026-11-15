@@ -7,6 +7,7 @@ for (const name of Object.keys(process.env)) {
   if (name.startsWith("GIT_")) delete process.env[name];
 }
 process.env.GIT_TERMINAL_PROMPT = "0";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 beforeEach(() => {
   const sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "globu-home-")));
