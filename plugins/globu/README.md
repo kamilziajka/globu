@@ -9,7 +9,7 @@ Claude Code plugin that keeps [OKF](https://github.com/GoogleCloudPlatform/open-
 - `/globu:issue-fix` runs that check and rewrites the broken references in the issue after the user confirms the edit.
 - `/globu:issue-deliver` implements an issue from a brief that names the issue, the worktree and the referenced files, and writes a handback, stamping `generated` on the knowledge it wrote. The `globu-worker` program runs it unattended.
 - `/globu:issue-work` claims one issue with `globu-worker claim`, implements it here with the person watching and hands back with `globu-worker finish` on a yes.
-- `/globu:issue-watch` polls a project with `globu-worker poll`, claims up to the configured cap and delivers each issue through a subagent.
+- `/globu:issue-watch` polls the projects of your manifest with `globu-worker poll`, claims up to the configured cap and delivers each issue through a subagent.
 - A session hook tells Claude which shards exist on this machine and when to consult them.
 - A guard hook blocks edits to read-only shards and makes Claude Code ask before edits to shards in `ask` mode. It covers the file tools and, best effort, shell commands.
 - An edit hook validates a base right after Claude edits a file in it. Errors block the edit; warnings about OKF fields such as `status`, `verified` or `stale_after` are passed to Claude without blocking.

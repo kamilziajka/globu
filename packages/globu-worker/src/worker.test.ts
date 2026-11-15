@@ -1491,6 +1491,52 @@ describe("a worker that serves two projects", () => {
     expect(calls.claude).toEqual([]);
   });
 
+  it("lets a session poll and claim where only some projects have usable clones", async () => {
+    const world = setupProjects();
+    updateShard("product", { mode: "ask" });
+    const manifest = loadManifest();
+    saveManifest({
+      ...manifest,
+      shards: [
+        ...manifest.shards,
+        {
+          id: "unsynced",
+          source: { type: "git", repo: "https://example.com/unsynced.git" },
+          format: "generic",
+          roots: [{ path: "." }],
+          description: "",
+          useWhen: ""
+        }
+      ],
+      projects: {
+        ...manifest.projects,
+        other: { shards: ["unsynced"], jira: "OT", worker: { statuses: { claimed: "Doing", released: "Open" } } }
+      }
+    });
+    world.config = loadWorkerConfig(path.join(world.root, "worker.yaml"));
+    const issues = [issue("MR-7"), issue("OT-1", UNMARKED), issue("SB-1", UNMARKED)];
+    const headless = deps(world, fakeJira(issues), fakeRunner({}, { gh: [], claude: [] }));
+    await expect(once(headless.worker, { dryRun: true })).rejects.toThrow(
+      'shard "product" of project mercastra must be in write mode'
+    );
+
+    const jira = fakeJira(issues);
+    const { worker } = deps(world, jira, fakeRunner({}, { gh: [], claude: [] }));
+    worker.session = true;
+    const { plan } = await once(worker, { dryRun: true });
+    expect(plan.map((entry) => entry.action)).toEqual([
+      "would claim and run in backend (1 references resolved)",
+      `skipped, shard "unsynced" needs an editable clone, run \`globu register <url> --path <dir>\` in ${world.home}`,
+      "would claim and run in sandbox (0 references resolved)"
+    ]);
+    await expect(claimIssue(worker, "OT-1")).rejects.toThrow('shard "unsynced" needs an editable clone');
+    expect(jira.store.get("OT-1")?.assignee).toBeNull();
+    const claimed = await claimIssue(worker, "MR-7");
+    expect(claimed.record).toMatchObject({ state: "prepared", shard: "backend", driver: "session" });
+    expect(claimed.companions.map((other) => other.id)).toEqual(["product"]);
+    expect((await releaseRun(worker, claimed.record.id, "enough")).state).toBe("released");
+  });
+
   it("wants every shard of a project with several in write mode", () => {
     const world = setupProjects();
     expect(() => checkShards(world.config, world.home)).not.toThrow();

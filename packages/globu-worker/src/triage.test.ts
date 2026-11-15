@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { loadManifest, register, saveManifest } from "../../globu-core/src/index.js";
+import { loadManifest, register, saveManifest, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
@@ -374,6 +374,20 @@ describe("why and delegate with projects", () => {
     jira.search = async () => [];
     expect((await why(worker, "ZZ-1")).reasons).toEqual(["ZZ is not a project this worker serves"]);
     expect((await why(worker, "SB-1")).reasons).toEqual([]);
+  });
+
+  it("checks only the issue's project in a session", async () => {
+    const { root, config } = setupProjects();
+    const jira = fakeJira([issue("SB-1", { labels: ["agent-eligible"] }), issue("ZZ-1")]);
+    const { worker } = deps(root, config, jira);
+    worker.session = true;
+    updateShard("backend", { mode: "read" });
+    expect((await why(worker, "SB-1")).picked).toBe(true);
+    expect((await why(worker, "ZZ-1")).action).toBe("skipped, ZZ is not a project this worker serves");
+    updateShard("frontend", { mode: "read" });
+    await expect(why(worker, "SB-1")).rejects.toThrow('shard "frontend" is read-only on this machine');
+    worker.session = false;
+    await expect(why(worker, "ZZ-1")).rejects.toThrow('shard "backend" is read-only on this machine');
   });
 
   it("delegates without a repository when the project has one shard", async () => {

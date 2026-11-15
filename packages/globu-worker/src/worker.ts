@@ -70,6 +70,7 @@ export type WorkerDeps = {
   now: () => Date;
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  session?: boolean;
   onRun?: (record: RunRecord) => void;
   onPlan?: (plan: PlanEntry[]) => void;
   onFollowUps?: (rows: FollowUpRow[]) => void;
@@ -189,25 +190,39 @@ function refLine(result: RefResult): string {
   return `- ${result.ref}: ${result.reason}${candidates === "" ? "" : ` (perhaps ${candidates})`}`;
 }
 
+export function projectProblem(
+  project: ServedProject,
+  shards: ResolvedShard[],
+  home: string,
+  session = false
+): string | null {
+  const { targets, secondary } = layoutOf(project, shards);
+  for (const id of new Set([...targets, ...secondary])) {
+    const shard = shards.find((candidate) => candidate.id === id);
+    if (shard === undefined) return `shard "${id}" is not registered in ${home}`;
+    if (!shard.present || shard.owner !== "user") {
+      return `shard "${id}" needs an editable clone, run \`globu register <url> --path <dir>\` in ${home}`;
+    }
+    if (shard.mode === "read") return `shard "${id}" is read-only on this machine, the worker cannot write to it`;
+    if (!session && secondary.includes(id) && shard.mode !== "write") {
+      const role =
+        project.legacy === undefined ? `shard "${id}" of project ${project.name}` : `companion shard "${id}"`;
+      return `${role} must be in write mode, run \`globu set ${id} --mode write\``;
+    }
+  }
+  return null;
+}
+
 export function checkShards(config: WorkerConfig, home: string): void {
   const { shards } = resolveAll();
   for (const project of config.projects) {
-    const { targets, secondary } = layoutOf(project, shards);
-    for (const id of new Set([...targets, ...secondary])) {
-      const shard = shards.find((candidate) => candidate.id === id);
-      if (shard === undefined) throw new Error(`shard "${id}" is not registered in ${home}`);
-      if (!shard.present || shard.owner !== "user") {
-        throw new Error(`shard "${id}" needs an editable clone, run \`globu register <url> --path <dir>\` in ${home}`);
-      }
-      if (shard.mode === "read")
-        throw new Error(`shard "${id}" is read-only on this machine, the worker cannot write to it`);
-      if (secondary.includes(id) && shard.mode !== "write") {
-        const role =
-          project.legacy === undefined ? `shard "${id}" of project ${project.name}` : `companion shard "${id}"`;
-        throw new Error(`${role} must be in write mode, run \`globu set ${id} --mode write\``);
-      }
-    }
+    const problem = projectProblem(project, shards, home);
+    if (problem !== null) throw new Error(problem);
   }
+}
+
+function sessionProblem(deps: WorkerDeps, project: ServedProject): string | null {
+  return projectProblem(project, resolveAll().shards, deps.home, true);
 }
 
 export function markerShard(issue: JiraIssue, config: WorkerConfig): string | null {
@@ -719,14 +734,15 @@ function pullNumber(record: RunRecord): string {
 }
 
 export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {
-  const { config, jira, io, home } = deps;
-  checkShards(config, home);
+  const { jira, io, home } = deps;
   const me = await jira.myself();
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: await githubLogin(deps) };
   const issue = await jira.issue(key);
   const candidate = candidateOf(deps, issue);
   const { project } = candidate;
   if (project === null) throw new Error(`no project this worker serves has the Jira key ${projectOf(key)}`);
+  const unusable = sessionProblem(deps, project);
+  if (unusable !== null) throw new Error(unusable);
   if (!(await claim(deps, issue, me))) throw new Error(`${key} is claimed by someone else`);
   const record = newRun(key, deps.now(), identity, "session");
   const dir = path.join(runsDir(home), record.id);
@@ -1165,7 +1181,7 @@ export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise
 
 async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds): Promise<OnceResult> {
   const { config, jira, io, home } = deps;
-  checkShards(config, home);
+  if (!deps.session) checkShards(config, home);
   const me = await jira.myself();
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: null as string | null };
   const dryRun = options.dryRun === true;
@@ -1239,9 +1255,12 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds
     const entry: PlanEntry = { key, summary: issue.summary, shard: candidate.shardId, action: "" };
     plan.push(entry);
     const waiting = waitingOn(deps, issue, stored);
+    const unusable = deps.session && project !== null ? sessionProblem(deps, project) : null;
     if (project === null) {
       entry.action = unserved(key);
       log().info("skipped", { key, reason: "its project is not served" });
+    } else if (unusable !== null) {
+      entry.action = `skipped, ${unusable}`;
     } else if (options.issue === undefined && issue.assignee !== null) {
       entry.action = "skipped, already assigned";
     } else if (options.issue === undefined && waiting.length > 0) {

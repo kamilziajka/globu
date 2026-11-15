@@ -92,7 +92,8 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
     run: loggedRunner(overrides.run ?? spawnRunner, logger),
     io,
     now,
-    env
+    env,
+    session: homes.session
   };
 }
 

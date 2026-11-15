@@ -13,7 +13,7 @@ This repo ships one Claude Code plugin, **[globu](plugins/globu/README.md)**, wi
 - `/globu:issue-fix` runs the same check and corrects the broken references in the issue once you confirm the edit.
 - `/globu:issue-deliver` implements an issue from a brief in the worktree it runs in and writes a handback for the reviewer.
 - `/globu:issue-work` takes one issue in the current session: claims it, implements it with you watching and hands back through a pull request on your yes.
-- `/globu:issue-watch` watches a Jira project from the current session and delivers the eligible issues through subagents, up to a concurrency cap.
+- `/globu:issue-watch` watches the Jira projects of your manifest from the current session and delivers the eligible issues through subagents, up to a concurrency cap.
 
 Hooks index the registered shards at session start, guard edits to shards that are read-only or ask-first and validate a base right after an edit. Nothing needs a registered shard: inside one repo the bases work on their own.
 

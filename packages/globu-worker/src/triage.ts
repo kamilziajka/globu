@@ -15,6 +15,7 @@ import {
   once,
   prioritized,
   projectHolds,
+  projectProblem,
   SEARCH_LIMIT,
   type WorkerDeps,
   waitingOn
@@ -172,10 +173,15 @@ function whyLines(report: WhyReport, blockedLabel: string, search: string): stri
 
 export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
   const { config, jira, home } = deps;
-  checkShards(config, home);
+  if (!deps.session) checkShards(config, home);
   const issue = await jira.issue(key);
   const matches = await matchesJql(deps, issue.key);
   const candidate = candidateOf(deps, issue);
+  const unusable =
+    deps.session && candidate.project !== null
+      ? projectProblem(candidate.project, resolveAll().shards, home, true)
+      : null;
+  if (unusable !== null) throw new Error(unusable);
   const shard = markerShard(issue, config);
   const target = candidate.project === null ? null : candidate.shardId;
   const reasons = matches ? [] : await searchReasons(deps, issue, candidate.project);

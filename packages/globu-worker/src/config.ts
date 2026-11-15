@@ -469,7 +469,7 @@ export function scrubbedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 export type ClaudeHome = "own" | "user";
-export type Homes = { home: string; claudeHome: (setting: ClaudeHome) => string };
+export type Homes = { home: string; session: boolean; claudeHome: (setting: ClaudeHome) => string };
 
 function ownHome(name: string, value: string, shared: string, hint = ""): string {
   const resolved = path.resolve(value);
@@ -483,6 +483,7 @@ export function sessionHomes(env: NodeJS.ProcessEnv): Homes {
   const claudeConfigDir = path.resolve(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
   return {
     home: path.resolve(env.GLOBU_HOME || path.join(os.homedir(), ".globu")),
+    session: true,
     claudeHome: () => claudeConfigDir
   };
 }
@@ -496,6 +497,7 @@ export function ownHomes(env: NodeJS.ProcessEnv): Homes {
   const given = env.CLAUDE_CONFIG_DIR;
   return {
     home,
+    session: false,
     claudeHome: (setting) =>
       setting === "user"
         ? path.resolve(given || user)

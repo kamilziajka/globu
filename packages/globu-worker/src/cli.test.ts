@@ -207,6 +207,31 @@ describe("globu-worker", () => {
     expect(searched).toEqual([
       '((project = "MR" AND statusCategory != Done)) AND labels = "agent-eligible" AND labels != "agent-blocked" AND assignee is EMPTY ORDER BY created ASC'
     ]);
+    const manifest = loadManifest();
+    saveManifest({
+      ...manifest,
+      shards: [
+        ...manifest.shards,
+        {
+          id: "unsynced",
+          source: { type: "git", repo: "https://example.com/unsynced.git" },
+          format: "generic",
+          roots: [{ path: "." }],
+          description: "",
+          useWhen: ""
+        }
+      ],
+      projects: {
+        ...manifest.projects,
+        other: { shards: ["unsynced"], jira: "OT", worker: { statuses: { claimed: "Doing", released: "Open" } } }
+      }
+    });
+    const headless = captureIo(root);
+    expect(await workerMain(["why", "MR-1"], headless, env(), { ...quiet(), jira })).toBe(1);
+    expect(headless.stderr).toContain('shard "unsynced" needs an editable clone');
+    const session = captureIo(root);
+    expect(await workerMain(["poll"], session, env(), { ...quiet(), jira })).toBe(0);
+    expect(session).toMatchObject({ stdout: "nothing eligible\n", stderr: "" });
     write(home, "worker.yaml", "version: 2\njira: { site: https://acme.atlassian.net }\nprojects: [ghost]\n");
     const bad = captureIo(root);
     expect(await workerMain(["once", "--dry-run"], bad, env(), { ...quiet(), jira })).toBe(1);
