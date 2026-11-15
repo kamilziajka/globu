@@ -220,6 +220,12 @@ function resolveIssue(issue: JiraIssue, shard: PresentShard, reg: Registry) {
   return { gating, informational, failing: gating.filter((result) => !result.ok) };
 }
 
+function inRunTree(result: RefResult, worktrees: Worktree[]): RefResult {
+  const worktree = worktrees.find((entry) => entry.shard.id === result.shard);
+  if (worktree === undefined || result.location === null) return result;
+  return { ...result, location: path.join(worktree.tree, path.relative(worktree.shard.path, result.location)) };
+}
+
 function footer(record: RunRecord, now: Date): string {
   const github = record.identity.github === null ? "" : `, GitHub ${record.identity.github}`;
   const elapsed = minutes(now.getTime() - new Date(record.startedAt).getTime());
@@ -504,8 +510,8 @@ async function prepare(
       tree: target.tree,
       branch,
       companions,
-      refs: resolved.gating,
-      informational: resolved.informational,
+      refs: resolved.gating.map((result) => inRunTree(result, worktrees)),
+      informational: resolved.informational.map((result) => inRunTree(result, worktrees)),
       blockers: blockers(deps, issue, loadRuns(deps.home)),
       allowedTools: config.claude.allowedTools,
       handbackFile,

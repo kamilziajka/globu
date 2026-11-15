@@ -111,7 +111,7 @@ export function renderBrief(input: BriefInput): string {
     "",
     "## Referenced files",
     "",
-    "Checked against the default branch of their repositories. Locations are on this machine.",
+    "Checked against the default branch of their repositories. A file of the target shard or of a companion is given in this run's worktree: read it and change it there, never in the shard's own checkout. The other locations are checkouts on this machine, for reading.",
     "",
     ...(input.refs.length > 0 ? input.refs.map(refLine) : ["- none"]),
     ...(input.informational.length > 0
