@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register } from "../../globu-core/src/index.js";
+import { VERSION } from "../../knowledge-base/src/index.js";
 import { captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { checkAccess, checkNames, checksLine, formatCheck } from "./check.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -215,6 +216,62 @@ describe("checkAccess", () => {
     const chosen = deps({ ...setup, config }, { replies: { claude: { stdout: `${plain}\n${RESULT}\n` } } });
     expect(detail(await checkAccess(chosen.worker), "claude")).toBe(
       "m answers in /claude with the issue-deliver skill (0.08 USD)"
+    );
+  });
+
+  it("fails when the globu plugin a run loads is not the worker's version, and says how to update it", async () => {
+    const setup = world();
+    const withPlugins = (plugins: unknown[]) =>
+      `${JSON.stringify({ type: "system", subtype: "init", model: "m", skills: ["globu:issue-deliver"], plugins })}\n${RESULT}\n`;
+    const stale = { name: "globu", version: "0.0.1", source: "globu@globu" };
+    const installed = deps(setup, { replies: { claude: { stdout: withPlugins([{ name: "other" }, stale]) } } });
+    expect(detail(await checkAccess(installed.worker), "claude")).toBe(
+      `the globu plugin in /claude is 0.0.1 and the worker is ${VERSION}, update it with \`claude plugin marketplace update\` and \`claude plugin update globu@globu\`, both with CLAUDE_CONFIG_DIR=/claude`
+    );
+    const unnamed = deps(setup, {
+      replies: { claude: { stdout: withPlugins([{ name: "globu", version: "0.0.1" }]) } }
+    });
+    expect(detail(await checkAccess(unnamed.worker), "claude")).toContain("`claude plugin update globu`");
+    const config = configOf(`${CONFIG}claude:\n  pluginDir: /plugin\n`);
+    const checkout = deps({ ...setup, config }, { replies: { claude: { stdout: withPlugins([stale]) } } });
+    expect(detail(await checkAccess(checkout.worker), "claude")).toBe(
+      `the globu plugin in /plugin is 0.0.1 and the worker is ${VERSION}, point claude.pluginDir at the plugin of the worker's version`
+    );
+    for (const plugins of [
+      [{ name: "globu" }],
+      [{ name: "globu", version: VERSION }],
+      [{ name: "mine", version: "9" }]
+    ]) {
+      const { worker } = deps(setup, { replies: { claude: { stdout: withPlugins(plugins) } } });
+      expect((await checkAccess(worker)).find((check) => check.name === "claude")?.ok).toBe(true);
+    }
+  });
+
+  it("lists what a run loads from the Claude home: plugins, MCP servers, hooks and allow rules", async () => {
+    const setup = world();
+    const init = {
+      type: "system",
+      subtype: "init",
+      model: "m",
+      skills: ["globu:issue-deliver"],
+      plugins: [{ name: "globu", version: VERSION }, { name: "legal" }],
+      mcp_servers: [{ name: "atlassian" }, { name: "slack" }]
+    };
+    const claudeConfigDir = tempDir();
+    write(
+      claudeConfigDir,
+      "settings.json",
+      JSON.stringify({ hooks: { Stop: [], SessionStart: [] }, permissions: { allow: ["Bash(npm *)", "WebFetch"] } })
+    );
+    const { worker } = deps(setup, { replies: { claude: { stdout: `${JSON.stringify(init)}\n${RESULT}\n` } } });
+    expect(detail(await checkAccess({ ...worker, claudeConfigDir }), "claude")).toBe(
+      `m (the default, set claude.model to choose) answers in ${claudeConfigDir} with the issue-deliver skill (0.08 USD), a run loads plugins globu ${VERSION}, legal; MCP servers atlassian, slack; settings.json hooks on Stop, SessionStart; 2 settings.json allow rules on top of claude.allowedTools (Bash(npm *), WebFetch)`
+    );
+    write(claudeConfigDir, "settings.json", "{}");
+    const bare = { ...init, plugins: undefined, mcp_servers: undefined };
+    const quiet = deps(setup, { replies: { claude: { stdout: `${JSON.stringify(bare)}\n${RESULT}\n` } } });
+    expect(detail(await checkAccess({ ...quiet.worker, claudeConfigDir }), "claude")).toBe(
+      `m (the default, set claude.model to choose) answers in ${claudeConfigDir} with the issue-deliver skill (0.08 USD)`
     );
   });
 

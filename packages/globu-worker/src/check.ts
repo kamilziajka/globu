@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
+import { VERSION } from "../../knowledge-base/src/index.js";
 import {
   DEFAULT_PROJECT,
   type FollowUpSettings,
@@ -68,8 +70,58 @@ async function githubProbe(deps: WorkerDeps): Promise<Found> {
   return { detail: `as ${name}, ${targets.length} deliverable repositories readable`, short: name };
 }
 
-type InitEvent = { type: string; subtype?: string; skills?: string[]; model?: string };
+type LoadedPlugin = { name: string; version?: string; source?: string };
+type InitEvent = {
+  type: string;
+  subtype?: string;
+  skills?: string[];
+  model?: string;
+  plugins?: LoadedPlugin[];
+  mcp_servers?: { name: string }[];
+};
 type ResultEvent = { type: string; is_error: boolean; result: string; total_cost_usd: number };
+
+const PLUGIN = "globu";
+
+const ClaudeSettings = z.object({
+  hooks: z.record(z.string(), z.unknown()).default({}),
+  permissions: z.object({ allow: z.array(z.string()).default([]) }).prefault({})
+});
+
+function claudeSettings(dir: string): z.infer<typeof ClaudeSettings> {
+  try {
+    return ClaudeSettings.parse(JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8")));
+  } catch {
+    return ClaudeSettings.parse({});
+  }
+}
+
+function outdatedPlugin(deps: WorkerDeps, plugin: LoadedPlugin): string {
+  const { pluginDir } = deps.config.claude;
+  const fix =
+    pluginDir === undefined
+      ? `update it with \`claude plugin marketplace update\` and \`claude plugin update ${plugin.source ?? plugin.name}\`, both with CLAUDE_CONFIG_DIR=${deps.claudeConfigDir}`
+      : "point claude.pluginDir at the plugin of the worker's version";
+  const where = pluginDir ?? deps.claudeConfigDir;
+  return `the ${PLUGIN} plugin in ${where} is ${plugin.version} and the worker is ${VERSION}, ${fix}`;
+}
+
+function loadedWith(deps: WorkerDeps, init: InitEvent): string {
+  const plugins = (init.plugins ?? []).map((plugin) => [plugin.name, plugin.version].filter(Boolean).join(" "));
+  const servers = (init.mcp_servers ?? []).map((server) => server.name);
+  const settings = claudeSettings(deps.claudeConfigDir);
+  const hooks = Object.keys(settings.hooks);
+  const { allow } = settings.permissions;
+  const parts = [
+    ...(plugins.length > 0 ? [`plugins ${plugins.join(", ")}`] : []),
+    ...(servers.length > 0 ? [`MCP servers ${servers.join(", ")}`] : []),
+    ...(hooks.length > 0 ? [`settings.json hooks on ${hooks.join(", ")}`] : []),
+    ...(allow.length > 0
+      ? [`${allow.length} settings.json allow rules on top of claude.allowedTools (${allow.join(", ")})`]
+      : [])
+  ];
+  return parts.length === 0 ? "" : `, a run loads ${parts.join("; ")}`;
+}
 
 async function claudeProbe(deps: WorkerDeps): Promise<Found> {
   const { claude } = deps.config;
@@ -99,15 +151,19 @@ async function claudeProbe(deps: WorkerDeps): Promise<Found> {
     const reason = end === undefined ? result.stderr.trim() || `exit code ${result.code}` : end.result;
     throw new Error(`claude -p failed in ${deps.claudeConfigDir}: ${reason}`);
   }
-  const skills = init?.skills ?? [];
-  if (!skills.some((skill) => skill === claude.skill || skill.endsWith(`:${claude.skill}`))) {
+  const skill = (init?.skills ?? []).find((name) => name === claude.skill || name.endsWith(`:${claude.skill}`));
+  if (init === undefined || skill === undefined) {
     throw new Error(`the ${claude.skill} skill is not loaded, install the globu plugin or set claude.pluginDir`);
   }
+  const plugin = (init.plugins ?? []).find((entry) => skill === `${entry.name}:${claude.skill}`);
+  if (plugin?.name === PLUGIN && plugin.version !== undefined && plugin.version !== VERSION) {
+    throw new Error(outdatedPlugin(deps, plugin));
+  }
   const cost = end.total_cost_usd.toFixed(2);
-  const model = (init as InitEvent).model as string;
+  const model = init.model as string;
   const chosen = claude.model === undefined ? `${model} (the default, set claude.model to choose)` : model;
   return {
-    detail: `${chosen} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)`,
+    detail: `${chosen} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)${loadedWith(deps, init)}`,
     short: model
   };
 }

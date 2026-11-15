@@ -128,6 +128,7 @@ const WorkerConfigSchema = z.object({
     .prefault({}),
   claude: z
     .object({
+      configDir: z.enum(["own", "user"]).default("own"),
       skill: z.string().min(1).default("issue-deliver"),
       model: z.string().min(1).optional(),
       pluginDir: z.string().min(1).optional(),
@@ -230,25 +231,37 @@ export function scrubbedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return copy;
 }
 
-export type Homes = { home: string; claudeConfigDir: string };
+export type ClaudeHome = WorkerConfig["claude"]["configDir"];
+export type Homes = { home: string; claudeHome: (setting: ClaudeHome) => string };
 
-function ownHome(name: string, value: string, shared: string): string {
+function ownHome(name: string, value: string, shared: string, hint = ""): string {
   const resolved = path.resolve(value);
-  if (resolved === shared) throw new Error(`${name} points at ${shared}, which belongs to interactive sessions`);
+  if (resolved === shared) {
+    throw new Error(`${name} points at ${shared}, which belongs to interactive sessions${hint}`);
+  }
   return resolved;
 }
 
 export function sessionHomes(env: NodeJS.ProcessEnv): Homes {
+  const claudeConfigDir = path.resolve(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"));
   return {
     home: path.resolve(env.GLOBU_HOME || path.join(os.homedir(), ".globu")),
-    claudeConfigDir: path.resolve(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"))
+    claudeHome: () => claudeConfigDir
   };
 }
+
+const USER_HINT = ", set claude.configDir to user in worker.yaml to run in it on purpose";
 
 export function ownHomes(env: NodeJS.ProcessEnv): Homes {
   const globu = path.join(os.homedir(), ".globu");
   const home = ownHome("GLOBU_HOME", env.GLOBU_HOME || path.join(globu, "worker"), globu);
-  const claude = path.join(os.homedir(), ".claude");
-  const claudeConfigDir = ownHome("CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR || path.join(home, "claude"), claude);
-  return { home, claudeConfigDir };
+  const user = path.join(os.homedir(), ".claude");
+  const given = env.CLAUDE_CONFIG_DIR;
+  return {
+    home,
+    claudeHome: (setting) =>
+      setting === "user"
+        ? path.resolve(given || user)
+        : ownHome("CLAUDE_CONFIG_DIR", given || path.join(home, "claude"), user, USER_HINT)
+  };
 }

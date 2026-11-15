@@ -41,6 +41,7 @@ const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the
 const FOOTER = `
 once, run and retry start Claude headless in a home of the worker's own: GLOBU_HOME defaults to ~/.globu/worker and
 CLAUDE_CONFIG_DIR to <GLOBU_HOME>/claude, and neither may be ~/.globu or ~/.claude. worker.yaml lives in GLOBU_HOME.
+claude.configDir: user in worker.yaml runs Claude in the user's own ~/.claude instead, see the worker docs.
 why and delegate read that home too, or the session's with --session.
 poll, claim, finish and release serve a Claude Code session that does the implementing itself: they use the
 session's own home, ~/.globu unless GLOBU_HOME says otherwise, and its worker.yaml and runs directory.
@@ -56,7 +57,6 @@ const NON_INTERACTIVE = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
 
 function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes: Homes, global: Global): WorkerDeps {
   process.env.GLOBU_HOME = homes.home;
-  process.env.CLAUDE_CONFIG_DIR = homes.claudeConfigDir;
   const loaded = withSecretsFile(given, homes.home);
   const env: NodeJS.ProcessEnv = withLockPid({ ...loaded.env, ...NON_INTERACTIVE }, process.pid);
   Object.assign(process.env, NON_INTERACTIVE);
@@ -73,13 +73,15 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
     io.err(`globu-worker: ${warning}`);
   }
   const config = loadWorkerConfig(workerConfigPath(homes.home));
+  const claudeConfigDir = homes.claudeHome(config.claude.configDir);
+  process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const secrets = readSecrets(env);
   useGitHubToken(secrets.githubToken);
   return {
     config,
     secrets,
     home: homes.home,
-    claudeConfigDir: homes.claudeConfigDir,
+    claudeConfigDir,
     jira:
       overrides.jira ?? jiraClient(config.jira.site, secrets.jiraEmail, secrets.jiraToken, loggedFetch(fetch, logger)),
     run: loggedRunner(overrides.run ?? spawnRunner, logger),

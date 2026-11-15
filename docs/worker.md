@@ -14,7 +14,7 @@ This page follows the `main` branch and can describe what is not released yet. T
 
 ## Its own homes
 
-The worker never uses the `~/.globu` and `~/.claude` of the person on the machine. `GLOBU_HOME` defaults to `~/.globu/worker` and `CLAUDE_CONFIG_DIR` to `claude` inside it; either can be set to another directory, and the worker refuses to start when one of them is `~/.globu` or `~/.claude`. Inside `GLOBU_HOME`:
+By default the worker never uses the `~/.globu` and `~/.claude` of the person on the machine. `GLOBU_HOME` defaults to `~/.globu/worker` and `CLAUDE_CONFIG_DIR` to `claude` inside it; either can be set to another directory, and the worker refuses to start when one of them is `~/.globu` or `~/.claude`. The one exception is opted into: `claude.configDir: user` runs Claude in the person's own `~/.claude`, see [the user's Claude home](#the-users-claude-home). Inside `GLOBU_HOME`:
 
 | Path | Holds |
 |---|---|
@@ -57,6 +57,21 @@ globu claude sync
 Repeat the `register --path` step for every shard under `deliverable` and `companion` in `worker.yaml`. The other shards are cloned read-only by `sync`. Install the plugin into the worker's Claude config dir with `claude plugin marketplace add` and `claude plugin install`, or point `claude.pluginDir` in `worker.yaml` at the plugin in a checkout of this repo, which the unattended runs guide describes as `--plugin-dir`. `globu-worker once` checks before every cycle that each deliverable shard has an editable clone that is not read-only and each companion is in `write` mode, and refuses to poll otherwise.
 
 Keeping the homes apart costs a second clone of each repository on a laptop. In return the worker's modes are its own policy, the person's checkouts and worktrees are never touched by a run, and a laptop and a container run the same way. A home nested inside `~/.globu` is still a separate home: nothing in Globu reads a parent directory.
+
+### The user's Claude home
+
+A Claude home of the worker's own has a price on a machine that a person also works on: it needs its own login, its own install of the plugin, which stays behind when the worker is upgraded, and it does not have the person's global `CLAUDE.md`, so a run misses the rules every other session there follows. `claude.configDir` in `worker.yaml` chooses:
+
+| Value | Claude runs in | What that means |
+|---|---|---|
+| `own`, the default | `<GLOBU_HOME>/claude`, or `CLAUDE_CONFIG_DIR` when set, never `~/.claude` | Nothing of the person's setup reaches a run. The plugin, the login and any `CLAUDE.md` are installed there by hand and kept up to date by hand. Right for a server, a container and CI |
+| `user` | `~/.claude`, or `CLAUDE_CONFIG_DIR` when set | A run has the person's login, plugins, global `CLAUDE.md`, hooks and MCP servers. Right for a worker on the desk of the person whose issues it delivers |
+
+`GLOBU_HOME` stays the worker's own under both, with its registry, clones and runs.
+
+With `user`, a run is not held to `claude.allowedTools` alone. Claude Code adds the allow rules of the home's `settings.json` to the `--allowedTools` it is given, also under `--permission-mode dontAsk`, so a rule such as `Bash(npm *)` that the person granted their own sessions is granted to a run as well. The worker's deny list (`git push`, `git stash`, `gh`, `curl`, `wget`) still wins over them, and the guard still keeps writes inside the target shard. `check` names every such rule, so read its `claude` line before the first run and remove what a run should not have.
+
+The worker writes into that home too: the directories of its shards go into `permissions.additionalDirectories` of `settings.json`, next to the person's own, as `globu claude sync` does.
 
 ## Configuration
 
@@ -101,6 +116,7 @@ limits:
   subscription: 70
   exclusive: [gpu]
 claude:
+  configDir: own
   skill: issue-deliver
   model: claude-sonnet-5-5
   maxTurns: 80
@@ -157,6 +173,7 @@ notify:
 | `limits.keepRuns` | How many run directories to keep, newest first by start time. At the start of every cycle the worker deletes the older ones that are settled. A run that is not in a final state, a handed-back run whose pull requests are still followed, its repairs and every run started today are always kept, the last so that the day cap still counts them. Pruning never touches `merged.json` or `followups.json`, so a merged run that is pruned still resolves the issues it [blocks](#issues-that-wait) | 100 |
 | `limits.subscription` | A percentage: when a window of the Claude subscription is used this much, the worker keeps polling but claims and repairs nothing until that window resets. See [the subscription limit](#the-subscription-limit) | 70 |
 | `limits.exclusive` | Machine-wide resources a run needs to itself, by name: letters, digits, dots, dashes and underscores. The worker takes a lock file for each before it claims or repairs and holds them until the cycle's runs end; see [exclusive resources](#exclusive-resources) | none |
+| `claude.configDir` | `own` or `user`: whether Claude runs in a home of the worker's own or in the person's `~/.claude`, see [the user's Claude home](#the-users-claude-home). Not a flag either | `own` |
 | `claude.skill` | The skill the run is told to use, the one key under `claude` that is not a flag | `issue-deliver` |
 | `claude.model` | Passed as `--model` when set | Claude Code's default |
 | `claude.pluginDir` | Passed as `--plugin-dir` when set: the plugin from a checkout of this repo, for a test of an unreleased plugin or a machine without a marketplace | the plugins installed in `CLAUDE_CONFIG_DIR` |
@@ -169,7 +186,7 @@ notify:
 | `notify.timeout` | The notification command is killed when it lasts longer | `30s` |
 | `github.draft`, `github.labels` | Passed to `gh pr create`: `draft: true` opens draft pull requests instead of ones ready for review. A label must exist in the repository | `false`, none |
 
-Every key under `claude` except `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
+Every key under `claude` except `configDir` and `skill` is a `claude -p` flag in camelCase and goes through untouched. `limits` holds what the worker enforces on its own. Claude Code has no settings key for the turn cap or the budget, which is why they are flags here rather than entries in a settings file.
 
 ### Several projects
 
@@ -208,7 +225,7 @@ The variables: `JIRA_EMAIL` and `JIRA_API_TOKEN` for Jira, `GH_TOKEN` (or `GITHU
 | Command | Purpose |
 |---|---|
 | `start [--mode pick\|auto]` | The way to run the worker by hand: shard bootstrap, `check`, then issues one at a time with a session list. `pick`, the default on a terminal, lists the eligible issues: ↑ and ↓ (or `k` and `j`) move the selection, Enter runs the selected issue, or repairs the selected pull request, and polls again, `r` polls Jira and GitHub again, `q`, Esc or Ctrl+C quits. On a terminal, `globu-worker` without a command runs `start`. Pick mode also polls in the background every `poll.every` and redraws; it never claims or repairs without Enter, but it does move merged issues to `doneStatus`. `auto`, the default without a terminal, is the `run` loop. `limits.concurrent` is held at 1 whatever `worker.yaml` says |
-| `check [--smoke]` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; the setup shell is found and finds the first program of each `setup` command (`command -v`), with a note on Windows when `core.longpaths` is off; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill, naming the model and, when `claude.model` is unset, that it is the config dir's default. With `jira.followUps` set, one more line checks [follow-up issues](#follow-up-issues): the link type exists, and in each project that an `issueType` map names or that the JQL matches now (up to 50 issues), the project's issue type exists, by name or by all-digit id, and the worker's account holds the Create issues and Link issues permissions (Jira's `mypermissions`); it names the issue type and id it resolved in each project, and says when no project is known yet. Jira, the follow-ups, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache. `--smoke` then runs the [smoke test](#the-smoke-test) when every check passed, one more line per deliverable shard, and says it skipped it otherwise |
+| `check [--smoke]` | Shard bootstrap, then one line per check with `ok` or `FAIL` and exit code 1 on a failure: `worker.yaml` and the secrets load; every deliverable and companion shard has an editable clone; the setup shell is found and finds the first program of each `setup` command (`command -v`), with a note on Windows when `core.longpaths` is off; Jira answers for the account and runs the JQL; `gh api user` answers with `GH_TOKEN` and every deliverable repository can be read with it (`git ls-remote`); a one-turn `claude -p` answers in the worker's Claude config dir and lists the configured skill, naming the model and, when `claude.model` is unset, that it is the config dir's default. That check fails when the `globu` plugin it loaded is not the worker's version, and says which commands update it: `npm install -g` upgrades the worker and leaves the plugin of its Claude home where it was. Its line also names what a run loads from that home: the plugins with their versions, the MCP servers, the hook events and the allow rules of its `settings.json`. With `jira.followUps` set, one more line checks [follow-up issues](#follow-up-issues): the link type exists, and in each project that an `issueType` map names or that the JQL matches now (up to 50 issues), the project's issue type exists, by name or by all-digit id, and the worker's account holds the Create issues and Link issues permissions (Jira's `mypermissions`); it names the issue type and id it resolved in each project, and says when no project is known yet. Jira, the follow-ups, GitHub and Claude are checked at the same time; on a terminal each line shows a spinner until its check ends in a green ✔ or a red ✖. The Claude check costs a few cents (about 0.08 USD measured), since a fresh session primes its cache. `--smoke` then runs the [smoke test](#the-smoke-test) when every check passed, one more line per deliverable shard, and says it skipped it otherwise |
 | `diagnostics [--out <file>]` | A `.tar.gz` with the log files, the `run.json` of the 20 runs started last, `worker.yaml`, `merged.json`, `subscription.json` and `followups.json`, each when it exists, and `environment.txt` (worker, Node, OS, `claude`, `git` and `gh` versions), every secret value replaced with `[redacted]`. Never `secrets.env`, a brief, a handback or a Claude stream. Written to `globu-worker-diagnostics-<time>.tar.gz` in the current directory by default |
 | `once [--dry-run] [--issue <key>] [--repair <url>] [--json]` | One cycle: poll, claim up to the free slots, run each to the end, exit. `--dry-run` prints what it would claim and why, touching nothing. `--issue` takes that issue instead of polling, also when it is already assigned, which is how the whole path is tested. `--repair` repairs that pull request of the worker now, also when it is past `limits.repairs`. `--json` adds the run records and the plan |
 | `retry <key> [--json]` | Removes `jira.blockedLabel` from the issue when it carries it, then does what `once --issue <key>` does. The way to try a released issue again once its problem is fixed |

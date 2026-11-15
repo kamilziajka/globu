@@ -66,6 +66,7 @@ describe("loadWorkerConfig", () => {
       exclusive: []
     });
     expect(config.claude).toEqual({
+      configDir: "own",
       skill: "issue-deliver",
       maxTurns: 80,
       maxBudgetUsd: 5,
@@ -248,37 +249,39 @@ const W = path.resolve("/tmp/w");
 const C = path.resolve("/tmp/c");
 
 describe("sessionHomes", () => {
-  it("uses the session's own homes, the interactive ones by default", () => {
-    expect(sessionHomes({})).toEqual({
-      home: path.join(os.homedir(), ".globu"),
-      claudeConfigDir: path.join(os.homedir(), ".claude")
-    });
-    expect(sessionHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C })).toEqual({
-      home: W,
-      claudeConfigDir: C
-    });
+  it("uses the session's own homes, the interactive ones by default, whatever claude.configDir says", () => {
+    const defaults = sessionHomes({});
+    expect(defaults.home).toBe(path.join(os.homedir(), ".globu"));
+    expect(defaults.claudeHome("own")).toBe(path.join(os.homedir(), ".claude"));
+    const given = sessionHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C });
+    expect(given.home).toBe(W);
+    expect(given.claudeHome("user")).toBe(C);
   });
 });
 
 describe("ownHomes", () => {
+  const USER = path.join(os.homedir(), ".claude");
+
   it("refuses the homes of interactive sessions", () => {
     expect(() => ownHomes({ GLOBU_HOME: path.join(os.homedir(), ".globu") })).toThrow(
-      `GLOBU_HOME points at ${path.join(os.homedir(), ".globu")}`
+      `GLOBU_HOME points at ${path.join(os.homedir(), ".globu")}, which belongs to interactive sessions`
     );
-    expect(() => ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: path.join(os.homedir(), ".claude") })).toThrow(
-      "CLAUDE_CONFIG_DIR points at"
+    expect(() => ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: USER }).claudeHome("own")).toThrow(
+      `CLAUDE_CONFIG_DIR points at ${USER}, which belongs to interactive sessions, set claude.configDir to user in worker.yaml to run in it on purpose`
     );
   });
 
   it("defaults to a worker directory inside the Globu home and a claude directory inside that", () => {
-    expect(ownHomes({})).toEqual({
-      home: path.join(os.homedir(), ".globu/worker"),
-      claudeConfigDir: path.join(os.homedir(), ".globu/worker/claude")
-    });
-    expect(ownHomes({ GLOBU_HOME: W })).toEqual({ home: W, claudeConfigDir: path.join(W, "claude") });
-    expect(ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C })).toEqual({
-      home: W,
-      claudeConfigDir: C
-    });
+    const defaults = ownHomes({});
+    expect(defaults.home).toBe(path.join(os.homedir(), ".globu/worker"));
+    expect(defaults.claudeHome("own")).toBe(path.join(os.homedir(), ".globu/worker/claude"));
+    expect(ownHomes({ GLOBU_HOME: W }).claudeHome("own")).toBe(path.join(W, "claude"));
+    expect(ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C }).claudeHome("own")).toBe(C);
+  });
+
+  it("runs Claude in the user's own home when claude.configDir is user, unless CLAUDE_CONFIG_DIR names another", () => {
+    expect(ownHomes({ GLOBU_HOME: W }).claudeHome("user")).toBe(USER);
+    expect(ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: USER }).claudeHome("user")).toBe(USER);
+    expect(ownHomes({ GLOBU_HOME: W, CLAUDE_CONFIG_DIR: C }).claudeHome("user")).toBe(C);
   });
 });

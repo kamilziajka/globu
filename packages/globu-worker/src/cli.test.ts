@@ -132,6 +132,30 @@ describe("globu-worker", () => {
     expect(missing.stderr).toContain("globu-worker: no worker configuration at");
   });
 
+  it("runs Claude in the user's home only when claude.configDir says user", async () => {
+    const root = prepare();
+    const home = process.env.GLOBU_HOME as string;
+    const user = path.join(os.homedir(), ".claude");
+    const refused = captureIo(root);
+    expect(await workerMain(["once"], refused, { ...env(), CLAUDE_CONFIG_DIR: user }, quiet())).toBe(1);
+    expect(refused.stderr).toContain(
+      `globu-worker: CLAUDE_CONFIG_DIR points at ${user}, which belongs to interactive sessions, set claude.configDir to user`
+    );
+
+    write(home, "worker.yaml", `${CONFIG}claude:\n  configDir: user\n`);
+    const shared = tempDir();
+    const homes: (string | undefined)[] = [];
+    const run: Runner = async (command, args, options) => {
+      if (command === "claude") homes.push(options?.env?.CLAUDE_CONFIG_DIR);
+      return await healthy(command, args, options);
+    };
+    const io = captureIo(root);
+    const overrides = { ...quiet(), jira: idleJira(), run };
+    expect(await workerMain(["check"], io, { ...withGithub(), CLAUDE_CONFIG_DIR: shared }, overrides)).toBe(0);
+    expect(homes).toEqual([shared]);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(shared);
+  });
+
   it("reads the registry from the default home when GLOBU_HOME is unset", async () => {
     const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GLOBU_HOME: process.env.GLOBU_HOME };
     const fakeHome = tempDir();
