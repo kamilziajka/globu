@@ -18,8 +18,9 @@ import {
 } from "./config.js";
 import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
-import { hold, POLL_MS, withLockPid } from "./hold.js";
+import { hold, POLL_MS } from "./hold.js";
 import { jiraClient } from "./jira.js";
+import { withLockPid } from "./lock.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
