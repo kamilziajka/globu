@@ -4,6 +4,7 @@ import path from "node:path";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import type { Runner } from "./exec.js";
 import { redact } from "./logger.js";
+import { MERGED_FILE } from "./merged.js";
 import { latestRuns, loadRuns } from "./runs.js";
 
 export type DiagnosticsDeps = { home: string; env: NodeJS.ProcessEnv; run: Runner; secrets: string[] };
@@ -48,8 +49,10 @@ export async function writeDiagnostics(deps: DiagnosticsDeps, out: string): Prom
     for (const { dir, record } of runs) {
       put(`runs/${path.basename(dir)}.json`, `${JSON.stringify(record, null, 2)}\n`);
     }
-    const config = path.join(deps.home, "worker.yaml");
-    if (fs.existsSync(config)) put("worker.yaml", fs.readFileSync(config, "utf8"));
+    for (const name of ["worker.yaml", MERGED_FILE]) {
+      const file = path.join(deps.home, name);
+      if (fs.existsSync(file)) put(name, fs.readFileSync(file, "utf8"));
+    }
     put("environment.txt", await environment(deps));
     const packed = await deps.run("tar", ["-czf", path.basename(out), "-C", staging, ...included], {
       cwd: path.dirname(out),
