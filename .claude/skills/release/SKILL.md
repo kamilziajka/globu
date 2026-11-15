@@ -42,6 +42,7 @@ Skip when the tag exists. Otherwise compare what changed since the last tag with
 
 * `git diff --stat <last tag>..origin/main -- packages plugins mods` for the code and `git log <last tag>..origin/main -- docs` for the docs.
 * A changed command, flag, config key, skill or hook needs its doc (`docs/globu-cli.md`, `docs/worker.md`, `docs/skills.md`, `docs/knowledge-base.md`, `docs/architecture.md`) and, where it is user facing, `README.md`. Read the diffs and the docs; do not trust a commit message.
+* When `mods/globu-status` changed since the last tag and the `version` in its `.claude-plugin/plugin.json` did not, bump that version (patch for fixes, minor for new behaviour) in the same commit. The mod is versioned on its own, an installed copy updates only when the version changes and the site's packages page shows this version.
 * Fix what is missing, add the `base log docs <today>` entry, run `npm run verify`, commit (`Docs for <version>`) and push to `main`. The site takes its docs from this commit, so this is the last chance to correct them before the release.
 
 ## 4. Bump
@@ -77,13 +78,13 @@ git -C <workPath> worktree add .claude/worktrees/globu-release-<version> -b glob
 
 Unless the site's main already has the version in `release.json`:
 
-1. From this repo at the tag, run `node scripts/release-site.ts <site worktree>`. It writes `release.json` with today's date, replaces the docs snapshot in `content` with `docs/*.md` (all but `index.md` and `log.md`) and adds the release entry to the site's `docs/log.md`. Exit code 2 means a doc is new or gone: add `fromContent("<slug>")` for a new one to the right group in `src/docs/nav.ts`, or remove a gone one, then run the script again.
-2. In the site worktree: `npm install`, `npm run verify`, `npm run build:prod`, `npm run verify:prerender`, and check that `dist/version.json` reports the version.
+1. From this repo at the tag, run `node scripts/release-site.ts <site worktree>`. It writes `release.json` with the version, today's date and `artefacts`, the CLI, the worker, the plugin and the status mod, each with the version from its own manifest (`scripts/artefacts.ts`). It refuses to run when the CLI, the worker or the plugin is not at the release version, which happens before the pin, so run it at the tag. It also replaces the docs snapshot in `content` with `docs/*.md` (all but `index.md` and `log.md`) and adds the release entry to the site's `docs/log.md`. Exit code 2 means a doc is new or gone: add `fromContent("<slug>")` for a new one to the right group in `src/docs/nav.ts`, or remove a gone one, then run the script again.
+2. In the site worktree: `npm install`, `npm run verify`, `npm run build:prod`, `npm run verify:prerender`, and check that `dist/version.json` reports the version. `verify:prerender` also checks that the packages page shows every artefact's version from `release.json`; a new artefact in `scripts/artefacts.ts` needs its row in the site's `src/packages.ts` first, and the site's `npm run verify` fails until it has one.
 3. Commit as `Globu <version>: release.json and the docs snapshot`, `git fetch origin && git merge origin/main` (other sessions push to the site; a conflict in the day's section of `docs/log.md` resolves by keeping both sides, the release entry first), re-run the three checks when the merge brought anything, and `git push origin HEAD:main`.
 
 Remove the worktree (`git -C <workPath> worktree remove .claude/worktrees/globu-release-<version>`). Cloudflare Workers Builds deploys `main` on its own: poll `https://globu.kazet.blog/version.json` every 30 seconds for up to ten minutes until it reports the version. If it does not, look at the deploy (`gh api repos/kamilziajka/globu-website/commits/<sha>/check-runs`) and report rather than retry.
 
-A branch that presents a feature on the site ahead of a release leaves `content` and `release.json` alone; this step is the only writer of both.
+A branch that presents a feature on the site ahead of a release leaves `content` and `release.json` alone; this step is the only writer of both. A status mod change has no site step of its own: the marketplace serves the mod from `stable`, which only the Release workflow moves, so the mod reaches users with the next Globu release and that release writes its version.
 
 ## 7. The knowledge base
 
