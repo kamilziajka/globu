@@ -18,7 +18,7 @@ The gist describes three layers and three operations. The layers are the raw sou
 | The schema in `CLAUDE.md` | The authoring guide inside `index.md`. It travels with the base, so any agent that opens the directory finds it. |
 | Ingest | The `update-knowledge` skill. It writes what a session learned into the base that owns it. |
 | Query, reading the index first | The shard index at the start of every session, then each shard's entry file. |
-| Lint | `globu base validate`, which checks structure, the edit hook that runs it after every change and `globu base lint`, which reports broken links, orphan pages and index entries that drifted from their page. |
+| Lint | `globu base validate`, which checks structure, the edit hook that runs it after every change and `globu base lint`, which reports broken links, orphan pages, index entries that drifted from their page, pages past their `stale_after` and links to deprecated pages. |
 | `index.md` and `log.md` | The same two files, as OKF reserved files. |
 
 ## What Globu adds
@@ -34,7 +34,7 @@ The gist describes one wiki. Globu is built for the case where the knowledge liv
 
 Two parts of the gist have no counterpart in Globu yet.
 
-- **Content lint.** `globu base lint` finds broken links, orphan pages and index drift, all of it by rule. Nothing yet looks for contradictions between pages or claims that have gone stale, which needs a model reading the pages. That is on the roadmap.
+- **Content lint.** `globu base lint` finds broken links, orphan pages, index drift, pages past their `stale_after` and links to deprecated pages, all of it by rule. Nothing yet looks for contradictions between pages or claims that have gone stale without a `stale_after`, which needs a model reading the pages. That is on the roadmap.
 - **Ingesting outside sources.** `update-knowledge` writes what a session learned. There is no skill yet that takes an article, a paper or a transcript and folds it into a base. That is on the roadmap too.
 
 ## If you already keep an LLM wiki

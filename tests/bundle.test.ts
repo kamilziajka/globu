@@ -205,7 +205,7 @@ function unclaimedJira(claims: string[]): JiraClient {
 }
 
 describe("globu-worker hold", () => {
-  it("makes a worker cycle on the same machine wait on gpu until the command ends", async () => {
+  it("makes a worker cycle on the same machine wait on gpu until the command ends, unless it runs inside the hold", async () => {
     const root = tempDir();
     const home = process.env.GLOBU_HOME as string;
     const remote = initRepo(path.join(root, "remotes/backend"), { "README.md": "backend\n" });
@@ -233,6 +233,13 @@ describe("globu-worker hold", () => {
     );
     expect(holder.holder).toMatch(/^globu-worker hold \(.+ -e .+\.\.\.\)$/);
     expect(claims).toEqual([]);
+
+    const inside = captureIo(root);
+    const nested = { ...env, GLOBU_LOCK_PIDS: String(render.pid) };
+    expect(await workerMain(["once", "--dry-run"], inside, nested, overrides)).toBe(0);
+    const plan = inside.stdout.split("\n").find((entry) => entry.startsWith("MR-1\t"));
+    expect(plan).toMatch(/^MR-1\twould claim and run in backend /);
+    expect(JSON.parse(fs.readFileSync(lock, "utf8"))).toEqual(holder);
 
     fs.writeFileSync(go, "");
     expect(await ended).toBe(0);

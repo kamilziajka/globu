@@ -6,8 +6,18 @@ type Rel = (target: string) => string;
 const LABELS: Record<LintKind, string> = {
   "broken-link": "broken link",
   orphan: "orphan",
-  "index-drift": "index drift"
+  "index-drift": "index drift",
+  stale: "stale",
+  "deprecated-link": "deprecated link"
 };
+
+const COLUMNS: [LintKind, string][] = [
+  ["broken-link", "Broken links"],
+  ["orphan", "Orphans"],
+  ["index-drift", "Index drift"],
+  ["stale", "Stale"],
+  ["deprecated-link", "Deprecated links"]
+];
 
 function where(rel: Rel, warning: LintWarning): string {
   return warning.line === null ? rel(warning.file) : `${rel(warning.file)}:${warning.line}`;
@@ -41,8 +51,7 @@ function markdownReport(lint: RepoLint, rel: Rel): string {
     return [heading, "", ...lint.errors.map((err) => `\`${rel(err.file)}\`: ${err.message}`)].join("\n");
   }
   const totals = lint.results.map(
-    (result) =>
-      `| \`${rel(result.docsDir)}\` | ${count(result.warnings, "broken-link")} | ${count(result.warnings, "orphan")} | ${count(result.warnings, "index-drift")} |`
+    (result) => `| \`${rel(result.docsDir)}\` | ${COLUMNS.map(([kind]) => count(result.warnings, kind)).join(" | ")} |`
   );
   const sections = lint.results
     .filter((result) => result.warnings.length > 0)
@@ -61,8 +70,8 @@ function markdownReport(lint: RepoLint, rel: Rel): string {
     "",
     `${plural(lint.warnings.length, "warning")} in ${plural(lint.results.length, "base")}. Warnings never fail the job.`,
     "",
-    "| Base | Broken links | Orphans | Index drift |",
-    "| --- | --: | --: | --: |",
+    `| Base | ${COLUMNS.map(([, title]) => title).join(" | ")} |`,
+    `| --- | ${COLUMNS.map(() => "--:").join(" | ")} |`,
     ...totals,
     ...sections
   ].join("\n");

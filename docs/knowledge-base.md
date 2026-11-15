@@ -29,7 +29,7 @@ The `base` group of the [globu CLI](./globu-cli.md). Add `--json` to any command
 | `base validate [path]` | Structural check of one base or of every base under a directory. Exit code 1 on errors. Malformed [optional OKF fields](./okf.md#what-validate-checks) are warnings: the base prints `WARN` and the exit code stays 0. |
 | `base stale [path]` | List the concept docs past `stale_after` or with `status: deprecated` in every base under a directory, with the reason. Exit code 0 whatever it finds, 1 when there is no base. |
 | `base stamp <files...> [--verified]` | Set `generated` to this version and the current time on each concept doc, or with `--verified` append a `human:<git user.name>` verification. See [stamping trust](./okf.md#stamping-trust). |
-| `base lint [path] [--format text\|markdown]` | Content check of one base or of every base under a directory: broken links, orphan docs and index drift. Warnings only, exit code 0. See [lint](#lint). |
+| `base lint [path] [--format text\|markdown]` | Content check of one base or of every base under a directory: broken links, orphan docs, index drift, stale docs and links to deprecated docs. Warnings only, exit code 0. See [lint](#lint). |
 | `base list [path]` | List every base under a directory. |
 | `base owner <file>` | Print the base that owns a file. |
 | `base log <docsDir> <YYYY-MM-DD> <entry...> [--title <text>]` | Add entries to a base's `log.md`, newest first. The day's section is the first heading that is `## <date>`, with or without a parenthesised title after it, such as `## 2026-10-26 (what changed)`. The date must match whole: `## 2026-10-2` and `## 2026-10-26-notes` are other sections. When the day has no section one is opened at the top, as `## <date> (<text>)` with `--title` and bare without it. `--title` does nothing when the day already has a section. |
@@ -41,21 +41,23 @@ Because `log.md` is newest first, two branches that each add an entry for the sa
 
 ## Lint
 
-`base lint` reads the prose that `validate` leaves alone and reports three kinds of warning. None of them fails the command, because OKF §6 says a consumer must tolerate broken links and §8 only says an index entry should carry the description. Exit code 1 means only that no base was found.
+`base lint` reads the prose that `validate` leaves alone and reports five kinds of warning. None of them fails the command, because OKF §6 says a consumer must tolerate broken links and §8 only says an index entry should carry the description. Exit code 1 means only that no base was found.
 
 - **Broken link.** An inline link, an image or a reference definition such as `[id]: ./x.md` whose relative or bundle-relative (`/topics/x.md`) target does not exist. The query and fragment are dropped and the path is URL-decoded before the check, so `./a.md#part` and `./with%20space.md` resolve. Links with a scheme (`https:`, `mailto:`), `//host` links, same-page `#anchors`, footnotes and links inside fenced code or code spans are not checked. Neither are links that leave the git repository holding the base, such as `../../other-repo/docs/x.md`: whether they resolve depends on what else is checked out, so a CI runner and a laptop would disagree.
 - **Orphan.** A concept doc that no other doc or index file in the base links to. A link to a directory counts for the docs directly in it when that directory has no `index.md`; when it has one, that index has to list them.
 - **Index drift.** An entry in any `index.md` of the base, a list item that starts with `[Title](target)`, followed by nothing or by a `-`, `:` or dash and its text, whose text no longer matches the `description` of the doc it links to. The match is deliberately loose, since indexes usually carry a shortened description: the words of three letters or more are cut to their first five letters, and the entry drifts when fewer than half of its words appear in the description. An entry with no text for a doc that has a description is reported too. An entry that lists several docs on one line, or has text without a separator, is skipped.
+- **Stale.** A concept doc whose `stale_after` has passed, reported once at the doc whether or not anything links to it. It reads `stale_after` with the same functions as [`base stale`](./okf.md#stale-docs), so a value that does not parse never makes a doc stale.
+- **Deprecated link.** A link to a concept doc with `status: deprecated`, reported at the link. Only links that present the doc as current count: links from other concept docs that are not deprecated themselves. An `index.md` lists what the base holds, deprecated docs included, so its entries are not reported, and neither are links from `log.md` or a doc's links to itself. A deprecated doc nothing links to gets no warning. A link whose own text calls the doc deprecated is still reported, since the check reads no prose.
 
 `log.md` is history: its links are neither checked nor counted as links to a doc, so a log entry about a doc that was removed later is not a warning and a doc linked only from the log is still an orphan. A base nested inside another is linted on its own and left out of the outer one.
 
-`--format markdown` prints a report for a CI job summary: a table of counts per base and a table of findings per base with warnings. `--json` prints `{ results, warnings, errors }`, each warning carrying `kind` (`broken-link`, `orphan` or `index-drift`), `file`, `line` (null for an orphan), `target` and `message`, and wins over `--format`. A GitHub Actions step:
+`--format markdown` prints a report for a CI job summary: a table of counts per base and a table of findings per base with warnings. `--json` prints `{ results, warnings, errors }`, each warning carrying `kind` (`broken-link`, `orphan`, `index-drift`, `stale` or `deprecated-link`), `file`, `line` (null for an orphan or a stale doc), `target` and `message`, and wins over `--format`. A GitHub Actions step:
 
 ```yaml
 - run: npx --yes @kazet/globu base lint --format markdown | tee -a "$GITHUB_STEP_SUMMARY"
 ```
 
-Not checked yet: anchors inside the target doc, links between shards and the lifecycle fields (`deprecated`, `stale_after`) that the OKF trust and lifecycle work will read.
+Not checked yet: anchors inside the target doc and links between shards.
 
 ## Hook
 

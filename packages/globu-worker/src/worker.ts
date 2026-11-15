@@ -959,7 +959,7 @@ export function dryRunAction(deps: WorkerDeps, candidate: Candidate): string {
 }
 
 export function workerHold(deps: WorkerDeps, holder: string): Hold {
-  return exclusiveHold(deps.config.limits.exclusive, lockDir(), holder, deps.now);
+  return exclusiveHold(deps.config.limits.exclusive, lockDir(), holder, deps.now, deps.env);
 }
 
 export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise<OnceResult> {

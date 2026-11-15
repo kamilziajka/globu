@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 
 export const RESOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const LOCK_PIDS = "GLOBU_LOCK_PIDS";
 
 const LockSchema = z.object({
   pid: z.number().int().positive(),
@@ -21,6 +22,19 @@ export function lockDir(env: NodeJS.ProcessEnv = process.env): string {
 
 export function lockFile(dir: string, name: string): string {
   return path.join(dir, `${name}.lock`);
+}
+
+export function withLockPid(env: NodeJS.ProcessEnv, pid: number): NodeJS.ProcessEnv {
+  const before = env[LOCK_PIDS];
+  return { ...env, [LOCK_PIDS]: before ? `${before},${pid}` : String(pid) };
+}
+
+function pidsAbove(env: NodeJS.ProcessEnv): string[] {
+  return (env[LOCK_PIDS] ?? "").split(",").filter((pid) => pid !== String(process.pid));
+}
+
+function heldAbove(lock: Lock | null, above: string[]): boolean {
+  return lock !== null && lock.host === os.hostname() && above.includes(String(lock.pid));
 }
 
 export function readLock(file: string): Lock | null {
@@ -68,7 +82,14 @@ function acquire(name: string, file: string, content: string): string | null {
   return acquire(name, file, content);
 }
 
-export function exclusiveHold(names: string[], dir: string, holder: string, now: () => Date): Hold {
+export function exclusiveHold(
+  names: string[],
+  dir: string,
+  holder: string,
+  now: () => Date,
+  env: NodeJS.ProcessEnv
+): Hold {
+  const above = pidsAbove(env);
   const taken: string[] = [];
   let answer: string | null | undefined;
   const release = () => {
@@ -82,6 +103,7 @@ export function exclusiveHold(names: string[], dir: string, holder: string, now:
       if (answer !== undefined) return answer;
       answer = null;
       for (const name of names) {
+        if (heldAbove(readLock(lockFile(dir, name)), above)) continue;
         fs.mkdirSync(dir, { recursive: true });
         const lock: Lock = { pid: process.pid, host: os.hostname(), holder, since: now().toISOString() };
         const problem = acquire(name, lockFile(dir, name), `${JSON.stringify(lock)}\n`);
@@ -99,7 +121,7 @@ export function exclusiveHold(names: string[], dir: string, holder: string, now:
         const file = lockFile(dir, name);
         if (!fs.existsSync(file)) continue;
         const lock = readLock(file);
-        if (!isStale(lock)) return heldBy(name, file, lock);
+        if (!heldAbove(lock, above) && !isStale(lock)) return heldBy(name, file, lock);
       }
       return null;
     },

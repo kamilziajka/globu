@@ -1,19 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { INDEX_FILENAME, LOG_FILENAME, RESERVED_FILENAMES } from "./constants.js";
-import { parseFrontmatter, textOf } from "./frontmatter.js";
+import { type Frontmatter, parseFrontmatter, textOf } from "./frontmatter.js";
 import { findBases, isInside, readBaseIndex } from "./scan.js";
+import { type StaleDoc, staleDocOf } from "./stale.js";
 import type { ValidationError } from "./validate.js";
 
-export type LintKind = "broken-link" | "orphan" | "index-drift";
+export type LintKind = "broken-link" | "orphan" | "index-drift" | "stale" | "deprecated-link";
 export type LintWarning = { kind: LintKind; file: string; line: number | null; target: string | null; message: string };
 export type BaseLint = { docsDir: string; warnings: LintWarning[] };
 export type RepoLint = { results: BaseLint[]; warnings: LintWarning[]; errors: ValidationError[] };
 
 type Link = { line: number; target: string; resolved: string | null };
 type Entry = Link & { text: string };
-type Doc = { file: string; description: string; links: Link[]; entries: Entry[] };
-type Bundle = { docsDir: string; repoRoot: string | null };
+type Doc = { file: string; description: string; lifecycle: StaleDoc | null; links: Link[]; entries: Entry[] };
+type Bundle = { docsDir: string; repoRoot: string | null; now: number };
 
 export const INDEX_DRIFT_THRESHOLD = 0.5;
 
@@ -77,11 +78,11 @@ function resolveTarget(bundle: Bundle, file: string, target: string): string | n
   return bundle.repoRoot === null || isInside(bundle.repoRoot, resolved) ? resolved : null;
 }
 
-function readDescription(raw: string): string {
+function readFrontmatter(raw: string): Frontmatter {
   try {
-    return textOf(parseFrontmatter(raw).data.description).trim();
+    return parseFrontmatter(raw).data;
   } catch {
-    return "";
+    return {};
   }
 }
 
@@ -120,7 +121,9 @@ function readDoc(bundle: Bundle, file: string): Doc {
       entries.push({ ...link(line, hrefOf(entry[1])), text: (entryText[1] ?? "").trim() });
     }
   }
-  return { file, description: readDescription(raw), links, entries };
+  const data = readFrontmatter(raw);
+  const lifecycle = RESERVED_FILENAMES.has(path.basename(file)) ? null : staleDocOf(file, data, bundle.now);
+  return { file, description: textOf(data.description).trim(), lifecycle, links, entries };
 }
 
 function words(text: string): Set<string> {
@@ -190,6 +193,29 @@ function indexDrift(index: Doc, byFile: Map<string | null, Doc>): LintWarning[] 
   });
 }
 
+function isDeprecated(doc: Doc | undefined): boolean {
+  return doc?.lifecycle?.reasons.includes("deprecated") === true;
+}
+
+function stale(doc: Doc): LintWarning[] {
+  const staleAfter = doc.lifecycle?.staleAfter;
+  if (!staleAfter) return [];
+  return [{ kind: "stale", file: doc.file, line: null, target: null, message: `past stale_after ${staleAfter}` }];
+}
+
+function deprecatedLinks(doc: Doc, byFile: Map<string | null, Doc>): LintWarning[] {
+  if (RESERVED_FILENAMES.has(path.basename(doc.file)) || isDeprecated(doc)) return [];
+  return doc.links
+    .filter((found) => found.resolved !== doc.file && isDeprecated(byFile.get(found.resolved)))
+    .map((found) => ({
+      kind: "deprecated-link",
+      file: doc.file,
+      line: found.line,
+      target: found.target,
+      message: `${found.target} is deprecated`
+    }));
+}
+
 function lineOf(warning: LintWarning): number {
   return warning.line ?? 0;
 }
@@ -198,8 +224,8 @@ function byPosition(a: LintWarning, b: LintWarning): number {
   return a.file.localeCompare(b.file) || lineOf(a) - lineOf(b);
 }
 
-export function lintBase(docsDir: string): BaseLint {
-  const bundle = { docsDir: path.resolve(docsDir), repoRoot: findRepoRoot(path.resolve(docsDir)) };
+export function lintBase(docsDir: string, now: number = Date.now()): BaseLint {
+  const bundle = { docsDir: path.resolve(docsDir), repoRoot: findRepoRoot(path.resolve(docsDir)), now };
   const docs = listBundle(bundle.docsDir)
     .sort()
     .map((file) => readDoc(bundle, file));
@@ -207,17 +233,19 @@ export function lintBase(docsDir: string): BaseLint {
   const warnings = [
     ...docs.filter((doc) => !isLog(doc)).flatMap(brokenLinks),
     ...orphans(docs),
-    ...docs.filter((doc) => path.basename(doc.file) === INDEX_FILENAME).flatMap((doc) => indexDrift(doc, byFile))
+    ...docs.filter((doc) => path.basename(doc.file) === INDEX_FILENAME).flatMap((doc) => indexDrift(doc, byFile)),
+    ...docs.flatMap(stale),
+    ...docs.flatMap((doc) => deprecatedLinks(doc, byFile))
   ].sort(byPosition);
   return { docsDir, warnings };
 }
 
-export function lintRepo(rootPath: string): RepoLint {
+export function lintRepo(rootPath: string, now: number = Date.now()): RepoLint {
   const resolved = path.resolve(rootPath);
   const docsDirs = findBases(resolved).map((base) => base.docsDir);
   if (docsDirs.length === 0) {
     return { results: [], warnings: [], errors: [{ file: resolved, message: "no OKF bases found" }] };
   }
-  const results = docsDirs.map(lintBase);
+  const results = docsDirs.map((docsDir) => lintBase(docsDir, now));
   return { results, warnings: results.flatMap((result) => result.warnings), errors: [] };
 }
