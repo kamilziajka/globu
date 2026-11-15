@@ -2,6 +2,6 @@
   "name": "globu-plugin",
   "private": true,
   "dependencies": {
-    "@kazet/globu": "1.2.0"
+    "@kazet/globu": "1.3.0"
   }
 }
