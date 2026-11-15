@@ -41,10 +41,18 @@ export const DEFAULT_ALLOWED_TOOLS = [
   "Bash(cat *)",
   "Bash(head *)",
   "Bash(tail *)",
-  "Bash(wc *)"
+  "Bash(wc *)",
+  "Bash(node *globu.mjs* base stamp *)"
 ];
 
-export const DENIED_TOOLS = ["Bash(git push*)", "Bash(git stash*)", "Bash(gh *)", "Bash(curl *)", "Bash(wget *)"];
+export const DENIED_TOOLS = [
+  "Bash(git push*)",
+  "Bash(git stash*)",
+  "Bash(gh *)",
+  "Bash(curl *)",
+  "Bash(wget *)",
+  "Bash(node *globu.mjs* base stamp *--verified*)"
+];
 
 const RepositorySchema = z.union([
   z.object({ labelPrefix: z.string().min(1) }),

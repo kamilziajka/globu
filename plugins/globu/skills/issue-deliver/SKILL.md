@@ -21,15 +21,21 @@ The skill works in the worktree it is started in and writes one file outside it,
 
 5. **Implement in the worktree.** Change only the target repository. If the brief lists a companion worktree and the issue requires a knowledge change in that shard, make it there, on the same branch name, and nowhere else. Keep the change as small as the acceptance criteria allow.
 
-6. **Verify.** Run the repository's own verification, usually `npm run verify` or whatever its guidance names. Fix what the change broke. Do not disable tests, lower thresholds or add ignore directives to pass.
+6. **Stamp the knowledge you wrote.** For every concept doc of an OKF base that the change created or changed in substance, in the target repository or in a companion worktree, set the `generated` stamp:
+   ```bash
+   node <plugin-root>/node_modules/@kazet/globu/dist/globu.mjs base stamp <doc> [<doc> ...]
+   ```
+   The plugin root is two directories above this file. Run it as a command of its own, not joined to another with `&&` or `;`. A concept doc is a Markdown file in a base other than `index.md` and `log.md`, and the command refuses anything else. In substance means a new or corrected fact, decision or procedure, as in the `update-knowledge` skill (`../update-knowledge/SKILL.md`): leave out docs where you only fixed a typo, a link or formatting, and docs you did not edit. Never pass `--verified` and never write `verified` by hand: a verification records a person who read the doc and confirmed it, and this skill confirms nothing. In a worker run `--verified` is denied anyway. When the stamp command itself is refused, for example by a worker allowlist of its own that leaves it out, do not write `generated` by hand; name the docs left unstamped under Knowledge base in the handback.
 
-7. **Commit.** Small commits, each message starting with the issue key, in the repository's own style. Do not add attribution lines unless the repository's guidance asks for them. Never push.
+7. **Verify.** Run the repository's own verification, usually `npm run verify` or whatever its guidance names. Fix what the change broke. Do not disable tests, lower thresholds or add ignore directives to pass.
 
-8. **Write the handback** to the path the brief gives, with these headings in this order:
+8. **Commit.** Small commits, each message starting with the issue key, in the repository's own style. Do not add attribution lines unless the repository's guidance asks for them. Never push.
+
+9. **Write the handback** to the path the brief gives, with these headings in this order:
    - `## Summary`: two or three sentences on what was done and whether the acceptance criteria are met.
    - `## Changes`: the files changed and why, as a list.
    - `## Verification`: the exact commands run and their results.
-   - `## Knowledge base`: what the governing knowledge base now needs to say and where, or the companion branch that already says it, or "nothing".
+   - `## Knowledge base`: what the governing knowledge base now needs to say and where, or the companion branch that already says it, or "nothing". Name the docs you stamped, and any you could not.
    - `## Open points`: decisions a reviewer must take, questions the issue left open, anything suspicious in the issue text.
    - `## Not done`: parts of the issue left out and why.
    - `## Follow-ups`, only when there is work that should become an issue of its own: one bullet per issue, its first line the summary and its further lines, indented, the description. The worker may file each bullet as a Jira issue linked to this one, so write the summary as an issue title and leave out anything that is not a separate piece of work.

@@ -40,8 +40,8 @@ function bashRules(allowedTools: string[]): string {
   const allowed =
     prefixes.length === 0
       ? "Bash is not allowed in this run."
-      : `Bash runs only these commands, matched by prefix: ${prefixes.map((prefix) => `\`${prefix}\``).join(", ")}.`;
-  return `${allowed} Every part of a command joined with \`;\`, \`&&\`, \`||\` or \`|\` is checked on its own, so run one command per call and read or change files with Read, Edit, Write, Grep and Glob rather than through the shell. \`git stash\` is denied because the stash is shared with every other worktree of this clone: make a work-in-progress commit instead.`;
+      : `Bash runs only the commands that match these patterns, in which \`*\` stands for any text: ${prefixes.map((prefix) => `\`${prefix}\``).join(", ")}.`;
+  return `${allowed} Every part of a command joined with \`;\`, \`&&\`, \`||\` or \`|\` is checked on its own, so run one command per call and read or change files with Read, Edit, Write, Grep and Glob rather than through the shell. \`git stash\` is denied because the stash is shared with every other worktree of this clone: make a work-in-progress commit instead. \`globu base stamp --verified\` is denied because a verification needs a person.`;
 }
 
 function earlierAttempts(issue: JiraIssue): string[] {

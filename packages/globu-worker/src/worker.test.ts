@@ -496,13 +496,15 @@ describe("once", () => {
     ]);
     expect(claude.args).toContain("--allowedTools");
     expect(claude.args).toContain("Bash(git commit *)");
+    expect(claude.args).toContain("Bash(node *globu.mjs* base stamp *)");
     expect(claude.args.slice(claude.args.indexOf("--disallowedTools"), claude.args.indexOf("--add-dir"))).toEqual([
       "--disallowedTools",
       "Bash(git push*)",
       "Bash(git stash*)",
       "Bash(gh *)",
       "Bash(curl *)",
-      "Bash(wget *)"
+      "Bash(wget *)",
+      "Bash(node *globu.mjs* base stamp *--verified*)"
     ]);
     expect(claude.env.JIRA_API_TOKEN).toBeUndefined();
     expect(claude.env.GH_TOKEN).toBeUndefined();
