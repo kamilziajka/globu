@@ -50,6 +50,7 @@ describe("loadWorkerConfig", () => {
     expect(config.jira.blockedLabel).toBe("agent-blocked");
     expect(config.jira.eligibleLabel).toBe("agent-eligible");
     expect(config.jira.blockingLinks).toEqual(["Blocks"]);
+    expect(config.jira.followUps).toBeUndefined();
     expect(config.shards.companion).toEqual([]);
     expect(config.poll.every).toBe(60_000);
     expect(config.limits).toEqual({
@@ -127,6 +128,27 @@ github:
     expect(jira.releasedStatus).toEqual({ KLAYBOY: "To Do", default: "To do" });
     expect(jira.doneStatus).toEqual({ SANDBOX: "Done" });
     expect(jira.priorityLabel).toBe("agent-next");
+  });
+
+  it("reads follow-up issues as opt in, with the issue type per project and the defaults", () => {
+    const single = write(
+      tempDir(),
+      "worker.yaml",
+      `${MINIMAL.replace("jira:\n", "jira:\n  followUps:\n    issueType: Task\n")}`
+    );
+    expect(loadWorkerConfig(single).jira.followUps).toEqual({ issueType: "Task", linkType: "Relates", max: 10 });
+    const mapped = write(
+      tempDir(),
+      "worker.yaml",
+      `${MINIMAL.replace("jira:\n", "jira:\n  followUps:\n    issueType:\n      MR: Story\n    linkType: Relates to\n    max: 3\n")}`
+    );
+    expect(loadWorkerConfig(mapped).jira.followUps).toEqual({
+      issueType: { MR: "Story" },
+      linkType: "Relates to",
+      max: 3
+    });
+    const untyped = write(tempDir(), "worker.yaml", `${MINIMAL.replace("jira:\n", "jira:\n  followUps: {}\n")}`);
+    expect(() => loadWorkerConfig(untyped)).toThrow(/jira.followUps.issueType/);
   });
 
   it("rejects a status map without entries", () => {

@@ -16,6 +16,7 @@ import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
 import { notStarted, type Runner, runOrThrow } from "./exec.js";
+import { fileFollowUps, followUpSection } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
 import { log, tail } from "./logger.js";
@@ -489,7 +490,8 @@ async function prepare(
       informational: resolved.informational,
       blockers: blockers(deps, issue, loadRuns(deps.home)),
       allowedTools: config.claude.allowedTools,
-      handbackFile
+      handbackFile,
+      followUps: config.jira.followUps !== undefined
     })
   );
   record.state = "prepared";
@@ -587,8 +589,15 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
     record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token));
   }
+  const filed = await fileFollowUps(jira, config, issue.key, record.id, handback);
+  const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
+  if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
-  await jira.comment(issue.key, `${handback}\n\n---\n\nPull requests:\n${links}\n\n${footer(record, deps.now())}`);
+  const section = followUpSection(filed);
+  await jira.comment(
+    issue.key,
+    `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`
+  );
   for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
   record.state = "handed-back";
   record.endedAt = deps.now().toISOString();

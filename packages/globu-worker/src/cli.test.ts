@@ -76,7 +76,9 @@ function idleJira(onSearch: () => void = () => {}): JiraClient {
     addLabel: async () => {},
     removeLabel: async () => {},
     setField: async () => {},
-    remoteLink: async () => {}
+    remoteLink: async () => {},
+    createIssue: async () => "MR-100",
+    linkIssues: async () => {}
   };
 }
 

@@ -94,7 +94,9 @@ function fakeJira(issues: JiraIssue[]): FakeJira {
       edits.push(`${key} ${field}=${value}`);
       get(key).fields[field] = value;
     },
-    remoteLink: async () => {}
+    remoteLink: async () => {},
+    createIssue: async () => "MR-100",
+    linkIssues: async () => {}
   };
 }
 

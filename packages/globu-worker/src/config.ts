@@ -83,7 +83,14 @@ const WorkerConfigSchema = z.object({
     eligibleLabel: z.string().min(1).default("agent-eligible"),
     blockedLabel: z.string().min(1).default("agent-blocked"),
     blockingLinks: z.array(z.string().min(1)).default(["Blocks"]),
-    repository: RepositorySchema
+    repository: RepositorySchema,
+    followUps: z
+      .object({
+        issueType: StatusSetting,
+        linkType: z.string().min(1).default("Relates"),
+        max: z.number().int().min(1).default(10)
+      })
+      .optional()
   }),
   shards: z.object({
     deliverable: z.array(z.string().min(1)).min(1),

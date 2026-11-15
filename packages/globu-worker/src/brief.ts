@@ -15,6 +15,7 @@ export type BriefInput = {
   blockers: Blocker[];
   allowedTools: string[];
   handbackFile: string;
+  followUps?: boolean;
 };
 
 const RELEASED = "Released by the Globu worker: ";
@@ -83,7 +84,7 @@ export function renderBrief(input: BriefInput): string {
     "",
     `Write the handback to ${input.handbackFile} when done. Do not push, do not open pull requests and do not call Jira or GitHub; the worker does that after you finish.`,
     "",
-    "The worker owns the issue tracker and the pull requests. Do not move the issue, comment on it or create issues, even when the repository's own instructions ask for that: this run has no tracker access. Put work that should become an issue of its own in a `## Follow-ups` section of the handback, which the worker posts on the issue.",
+    `The worker owns the issue tracker and the pull requests. Do not move the issue, comment on it or create issues, even when the repository's own instructions ask for that: this run has no tracker access. Put work that should become an issue of its own in a \`## Follow-ups\` section of the handback, one bullet per follow-up whose first line is its summary and whose further lines, indented, are its description. ${input.followUps ? "The worker files each bullet as an issue linked to this one and lists the new keys on this issue." : "The worker posts the section on the issue."}`,
     "",
     bashRules(input.allowedTools),
     "",
