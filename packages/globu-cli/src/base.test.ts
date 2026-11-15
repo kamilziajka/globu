@@ -102,7 +102,9 @@ describe("globu base validate", () => {
     const both = run(["base", "validate"]);
     expect(both.code).toBe(1);
     expect(both.out).toContain(
-      "FAIL  pkg/docs\n      pkg/docs/bad.md: missing or empty required `type` field\n      pkg/docs/bad.md: warning: `status` should be"
+      native(
+        "FAIL  pkg/docs\n      pkg/docs/bad.md: missing or empty required `type` field\n      pkg/docs/bad.md: warning: `status` should be"
+      )
     );
     expect(JSON.parse(run(["base", "validate", "--json"]).out).warnings).toHaveLength(2);
   });
