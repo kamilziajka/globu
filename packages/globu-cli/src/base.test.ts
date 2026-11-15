@@ -61,7 +61,7 @@ describe("globu base setup", () => {
     expect(run(["base", "setup"])).toMatchObject({
       code: 0,
       out: expect.stringContaining(
-        '  warning   wiki/old.md: `status` should be draft, stable or deprecated, got "final"\n'
+        native('  warning   wiki/old.md: `status` should be draft, stable or deprecated, got "final"\n')
       )
     });
   });
@@ -94,7 +94,9 @@ describe("globu base validate", () => {
     write(root, "pkg/docs/bad.md", '---\ngenerated: { by: "globu/1.2.0" }\nstatus: open\n---\n');
     expect(run(["base", "validate", "docs"])).toEqual({
       code: 0,
-      out: 'WARN  docs\n      docs/old.md: warning: `stale_after` should be an ISO 8601 datetime with an offset, such as 2026-11-05T08:00:00Z, got "2027-04-01"\n',
+      out: native(
+        'WARN  docs\n      docs/old.md: warning: `stale_after` should be an ISO 8601 datetime with an offset, such as 2026-11-05T08:00:00Z, got "2027-04-01"\n'
+      ),
       err: ""
     });
     const both = run(["base", "validate"]);
@@ -117,7 +119,9 @@ describe("globu base stale", () => {
     write(root, "pkg/wiki/gone.md", '---\ntype: "Note"\nstatus: deprecated\nstale_after: 2021-01-01T00:00:00Z\n---\n');
     expect(run(["base", "stale"])).toEqual({
       code: 0,
-      out: "docs/old.md\tstale since 2020-01-01T00:00:00Z\npkg/wiki/gone.md\tstale since 2021-01-01T00:00:00Z, deprecated\n",
+      out: native(
+        "docs/old.md\tstale since 2020-01-01T00:00:00Z\npkg/wiki/gone.md\tstale since 2021-01-01T00:00:00Z, deprecated\n"
+      ),
       err: ""
     });
     expect(JSON.parse(run(["base", "stale", "pkg", "--json"]).out).results[0].docs).toEqual([
@@ -141,7 +145,7 @@ describe("globu base stamp", () => {
     const result = run(["base", "stamp", "wiki/a.md"]);
     expect(result.code).toBe(0);
     const [field, file, by, at] = result.out.trim().split("\t");
-    expect([field, file, by]).toEqual(["generated", "wiki/a.md", `globu/${VERSION}`]);
+    expect([field, file, by]).toEqual(["generated", native("wiki/a.md"), `globu/${VERSION}`]);
     expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(read(root, "wiki/a.md")).toBe(
       `---\ntype: "Note"\ngenerated: { by: "globu/${VERSION}", at: ${at} }\n---\n\nBody.\n`

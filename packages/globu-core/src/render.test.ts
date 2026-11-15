@@ -102,7 +102,7 @@ describe("renderIndex", () => {
       "/elsewhere"
     );
     expect(text).toContain(
-      `  - Entry: product: ${repo}/docs/index.md\n  - Stale: 2 docs are past stale_after or deprecated, read them with caution. \`globu base stale ${repo}\` lists them\n`
+      `  - Entry: product: ${path.join(repo, "docs/index.md")}\n  - Stale: 2 docs are past stale_after or deprecated, read them with caution. \`globu base stale ${repo}\` lists them\n`
     );
     expect(text.match(/- Stale:/g)).toHaveLength(1);
     expect(text).not.toContain("old.md");
