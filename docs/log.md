@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-15
+* [Development](./development.md#releasing): the release's record step comments on every GLOBU Jira issue that shipped and moves it to Done when nothing is left open, through `twg`; the work items moved from files in globu-knowledge-base to the Jira project GLOBU on `kazet.atlassian.net`. The release skill says the same.
 * [globu-worker](./worker.md#from-a-session): `poll`, `claim`, `finish` and `release` read the projects from the manifest of the session's home, so a person's home needs no `worker.yaml` beyond `version: 2` and the Jira site. In a session only the project of the issue at hand is checked: its shards must be editable, `ask` mode is enough, and `poll` lists an issue whose project has no usable clone as skipped instead of refusing to poll. The `issue-work` and `issue-watch` skills in [plugin skills](./skills.md) say where the projects come from, that the poll covers every project with a Jira key and what the other worktrees of a claim are.
 * [Development](./development.md#setup): a rebase does not run the pre-commit hook, so a branch rebased onto a `main` that moved is verified by hand before it is pushed.
 * [globu-worker](./worker.md#following-its-pull-requests): while a cycle's runs are in progress the worker reads its pull requests every `poll.every` and settles the ones merged or closed in the meantime, so a merged issue is done and its dependants are free without waiting for a long run to end. Repairs still wait for the next cycle.
