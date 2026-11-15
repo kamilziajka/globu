@@ -41,7 +41,8 @@ import {
   runsDir,
   type StoredRun,
   saveRun,
-  spentOn
+  spentOn,
+  type UnpostedComment
 } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
 import { currentUsage, holdReason, overLimit, recordUsage } from "./subscription.js";
@@ -751,15 +752,16 @@ async function reconcile(deps: WorkerDeps, me: JiraUser): Promise<void> {
     removeTree(path.join(dir, "tree"));
     removeTree(path.join(dir, "companions"));
     const issue = await jira.issue(record.key);
+    const restarted = (what: string) => (record.reason === null ? what : `${record.reason} (then ${what})`);
     if (record.repairOf !== undefined) {
       record.state = "released";
-      record.reason = "the worker restarted during this repair";
+      record.reason = restarted("the worker restarted during this repair");
       endRun(record, deps.now());
     } else if (issue.assignee === me.accountId && sameStatus(issue, statusOf(config, "claimedStatus", record.key))) {
-      await release(deps, record, "the worker restarted while this issue was claimed");
+      await release(deps, record, restarted("the worker restarted while this issue was claimed"));
     } else {
       record.state = "released";
-      record.reason = "the worker restarted and the issue was no longer claimed";
+      record.reason = restarted("the worker restarted and the issue was no longer claimed");
       endRun(record, deps.now());
     }
     persist(deps, dir, record);
@@ -928,6 +930,38 @@ async function noteRepair(deps: WorkerDeps, url: string, token: string, body: st
   if (label !== undefined) await deps.run("gh", ["pr", "edit", url, "--add-label", label], { env });
 }
 
+async function postComments(
+  deps: WorkerDeps,
+  record: RunRecord,
+  token: string,
+  comments: UnpostedComment[]
+): Promise<void> {
+  const unposted: UnpostedComment[] = [];
+  for (const comment of comments) {
+    try {
+      if (comment.on === "issue") await deps.jira.comment(comment.target, comment.body);
+      else await noteRepair(deps, comment.target, token, comment.body, comment.label);
+    } catch (err) {
+      const error = (err as Error).message;
+      unposted.push(comment);
+      log().warn("comment not posted", { run: record.id, key: record.key, target: comment.target, error });
+      deps.io.err(`globu-worker: could not comment on ${comment.target}, the next cycle tries again: ${error}`);
+    }
+  }
+  if (unposted.length > 0) record.unposted = unposted;
+  else delete record.unposted;
+}
+
+async function postUnposted(deps: WorkerDeps): Promise<void> {
+  const token = deps.secrets.githubToken;
+  if (token === null) return;
+  for (const { dir, record } of loadRuns(deps.home)) {
+    if (record.unposted === undefined) continue;
+    await postComments(deps, record, token, record.unposted);
+    saveRun(dir, record);
+  }
+}
+
 export async function repairPullRequest(
   deps: WorkerDeps,
   url: string,
@@ -965,8 +999,11 @@ export async function repairPullRequest(
   if (problem === null) {
     record.state = "handed-back";
     log().info("repaired", { run: record.id, key: record.key, pullRequest: url });
-    await noteRepair(deps, url, token, `Repaired by the Globu worker.\n\n${run}`);
-    await deps.jira.comment(record.key, `Repaired ${url}.\n\n${run}`);
+    persist(deps, dir, record);
+    await postComments(deps, record, token, [
+      { on: "pull", target: url, body: `Repaired by the Globu worker.\n\n${run}` },
+      { on: "issue", target: record.key, body: `Repaired ${url}.\n\n${run}` }
+    ]);
   } else {
     record.state = "released";
     record.reason = problem;
@@ -977,8 +1014,11 @@ export async function repairPullRequest(
     const body = `The Globu worker could not repair this pull request: ${problem}. ${next}\n\n${run}`;
     original.record.followUp = { repairs, state: exhausted ? "needs-human" : "open" };
     persist(deps, original.dir, original.record);
-    await noteRepair(deps, url, token, body, exhausted ? "needs-human" : undefined);
-    await deps.jira.comment(record.key, body);
+    persist(deps, dir, record);
+    await postComments(deps, record, token, [
+      { on: "pull", target: url, body, ...(exhausted ? { label: "needs-human" } : {}) },
+      { on: "issue", target: record.key, body }
+    ]);
     if (exhausted) await tell(deps, record, "needs-human", url, `${record.key} needs a person: ${url}`);
   }
   persist(deps, dir, record);
@@ -1017,6 +1057,7 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   const dryRun = options.dryRun === true;
   if (!dryRun) {
     await reconcile(deps, me);
+    await postUnposted(deps);
     const pruned = pruneRuns(home, config.limits.keepRuns, deps.now());
     if (pruned.length > 0) log().info("pruned", { runs: pruned, keep: config.limits.keepRuns });
     identity.github = await githubLogin(deps);

@@ -17,7 +17,7 @@ const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
 
 type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout" | "missing";
-type Script = { pulls: Record<string, object | null>; claude?: Claude; viewEnded?: boolean };
+type Script = { pulls: Record<string, object | null>; claude?: Claude; viewEnded?: boolean; commentEnded?: boolean };
 type Calls = {
   gh: string[][];
   claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[];
@@ -38,6 +38,9 @@ function runner(script: Script, calls: Calls): Runner {
         const raw = script.pulls[args[2]];
         if (raw === null) return { code: 1, stdout: "", stderr: "not found", timedOut: false };
         return { code: 0, stdout: JSON.stringify(raw), stderr: "", timedOut: false };
+      }
+      if (script.commentEnded && args[1] === "comment") {
+        return { code: 3221225794, stdout: "", stderr: "", timedOut: false };
       }
       return { code: 0, stdout: "", stderr: "", timedOut: false };
     }
@@ -327,6 +330,46 @@ describe("following pull requests", () => {
     );
   });
 
+  it("keeps a failed repair's reason and its comments when they cannot be posted, and posts them on a later cycle", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n" });
+    const pulls = { [setup.url]: pull(setup.url) };
+    const first = deps(setup, { pulls, claude: "add-only", commentEnded: true });
+    first.jira.comment = async () => {
+      throw new Error("Jira is down");
+    };
+    const record = (await once(first.worker, { repair: setup.url })).runs[0];
+    expect(record).toMatchObject({ state: "released", reason: "the merge was not committed" });
+    const stored = () => loadRun(setup.home, record.id).record;
+    expect(stored().unposted).toEqual([
+      { on: "pull", target: setup.url, body: expect.stringContaining("could not repair this pull request") },
+      { on: "issue", target: "MR-7", body: expect.stringContaining("the merge was not committed") }
+    ]);
+    expect(first.io.stderr).toContain(
+      `globu-worker: could not comment on ${setup.url}, the next cycle tries again: Windows ended gh with status 0xC0000142`
+    );
+    expect(first.io.stderr).toContain(
+      "globu-worker: could not comment on MR-7, the next cycle tries again: Jira is down"
+    );
+    expect(original(setup).followUp).toEqual({ repairs: 1, state: "open" });
+
+    const tokenless = deps(setup, { pulls: {} }, null);
+    await once(tokenless.worker);
+    expect(stored().unposted).toHaveLength(2);
+
+    const second = deps(setup, { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } });
+    await once(second.worker);
+    expect(stored().unposted).toBeUndefined();
+    expect(stored().reason).toBe("the merge was not committed");
+    expect(second.calls.gh).toContainEqual([
+      "pr",
+      "comment",
+      setup.url,
+      "--body",
+      expect.stringContaining("could not repair")
+    ]);
+    expect(second.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
+  });
+
   it("fails a repair that commits nothing", async () => {
     const clean = world({ author: false });
     const failing = { mergeable: "MERGEABLE", statusCheckRollup: [{ name: "test", conclusion: "FAILURE" }] };
@@ -442,11 +485,17 @@ describe("following pull requests", () => {
     stale.repairOf = setup.original.id;
     stale.state = "running";
     saveRun(path.join(setup.home, "runs", stale.id), stale);
+    const failed = { ...stale, id: `${stale.id}-2`, reason: "git worktree add failed" };
+    saveRun(path.join(setup.home, "runs", failed.id), failed);
     const { worker, jira: fake } = deps(setup, { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } });
     expect((await once(worker)).plan).toEqual([]);
     expect(loadRun(setup.home, stale.id).record).toMatchObject({
       state: "released",
       reason: "the worker restarted during this repair"
+    });
+    expect(loadRun(setup.home, failed.id).record).toMatchObject({
+      state: "released",
+      reason: "git worktree add failed (then the worker restarted during this repair)"
     });
     expect(fake.transitions).toEqual([]);
   });
