@@ -188,6 +188,16 @@ describe("hold", () => {
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
+  it("on Windows looks a bare command up on PATH before starting it", async () => {
+    const { deps, io, dir } = setup();
+    const windows = { ...deps, platform: "win32" as const, env: { ...deps.env, PATH: tempDir() } };
+    expect(await hold(windows, "gpu", ["globu-no-such-command"], {})).toBe(NOT_STARTED_EXIT);
+    expect(io.stderr).toBe("globu-worker: could not start globu-no-such-command: not found on PATH\n");
+    expect(fs.existsSync(path.join(dir, "gpu.lock"))).toBe(false);
+    const missing = path.join(tempDir(), "globu-no-such-command");
+    expect(await hold(windows, "gpu", [missing], {})).toBe(NOT_STARTED_EXIT);
+  });
+
   it("counts a lock held by a process named in GLOBU_LOCK_PIDS on this machine as its own", async () => {
     const { deps, io, dir, report } = setup();
     const env = { ...deps.env, [LOCK_PIDS]: `1,${process.ppid}` };

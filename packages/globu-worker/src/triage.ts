@@ -155,12 +155,35 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
 
 export async function retry(deps: WorkerDeps, key: string): Promise<OnceResult> {
   const label = deps.config.jira.blockedLabel;
-  await deps.jira.removeLabel(key, label);
-  deps.io.out(`${key}\tremoved ${label}`);
+  if ((await deps.jira.issue(key)).labels.includes(label)) {
+    await deps.jira.removeLabel(key, label);
+    deps.io.out(`${key}\tremoved ${label}`);
+  }
   return await once(deps, { issue: key });
 }
 
-export async function delegate(deps: WorkerDeps, key: string, shard: string): Promise<DelegateResult> {
+/** How long Jira's search may take to see a label change; it lagged about 20 s on 2026-11-15. */
+export const SEARCH_LAG_MS = 30_000;
+const SEARCH_RETRY_MS = 5_000;
+
+async function matchesSoon(deps: WorkerDeps, key: string, wait: (ms: number) => Promise<void>): Promise<boolean> {
+  for (let waited = 0; ; waited += SEARCH_RETRY_MS) {
+    if (await matchesJql(deps, key)) return true;
+    if (waited >= SEARCH_LAG_MS) return false;
+    if (waited === 0)
+      deps.io.err(`${key}: waiting up to ${SEARCH_LAG_MS / 1000} s for Jira's search to see the labels`);
+    await wait(SEARCH_RETRY_MS);
+  }
+}
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function delegate(
+  deps: WorkerDeps,
+  key: string,
+  shard: string,
+  wait: (ms: number) => Promise<void> = pause
+): Promise<DelegateResult> {
   const { config, jira, io } = deps;
   if (!config.shards.deliverable.includes(shard)) {
     throw new Error(
@@ -179,8 +202,10 @@ export async function delegate(deps: WorkerDeps, key: string, shard: string): Pr
     await jira.setField(issue.key, marker.field, shard);
   }
   await jira.addLabel(issue.key, config.jira.eligibleLabel);
-  const matches = await matchesJql(deps, issue.key);
-  const next = matches ? "matches jira.jql" : `does not match jira.jql yet, \`globu-worker why ${issue.key}\` says why`;
+  const matches = await matchesSoon(deps, issue.key, wait);
+  const next = matches
+    ? "matches jira.jql"
+    : `does not match jira.jql after ${SEARCH_LAG_MS / 1000} s, \`globu-worker why ${issue.key}\` says why`;
   io.out(`${issue.key}\tdelegated to ${shard}, ${next}`);
   return { key: issue.key, shard, matches };
 }

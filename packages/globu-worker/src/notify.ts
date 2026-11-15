@@ -42,9 +42,10 @@ async function attempt(deps: NotifyDeps, command: string, notice: Notice): Promi
   return notStarted(shell, result) ?? `exited with ${result.code}: ${tail(result.stderr.trim())}`;
 }
 
-export async function notify(deps: NotifyDeps, notice: Notice): Promise<void> {
+/** Runs notify.command for the notice: null when it ran or none is set, otherwise why it could not. */
+export async function notify(deps: NotifyDeps, notice: Notice): Promise<string | null> {
   const { command } = deps.config.notify;
-  if (command === undefined) return;
+  if (command === undefined) return null;
   const fields = { event: notice.event, key: notice.key, url: notice.url };
   let problem: string | null;
   try {
@@ -54,4 +55,5 @@ export async function notify(deps: NotifyDeps, notice: Notice): Promise<void> {
   }
   if (problem === null) log().info("notified", fields);
   else log().warn("notify failed", { ...fields, error: problem });
+  return problem;
 }

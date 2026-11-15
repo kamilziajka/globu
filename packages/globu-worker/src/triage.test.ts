@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { register } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -313,6 +313,15 @@ describe("retry", () => {
     expect(result.plan).toEqual([{ key: "MR-1", summary: "Change MR-1", shard: "backend", action: "claimed" }]);
     expect(result.runs[0].reason).toBe("the run made no commits");
   });
+
+  it("says nothing about the label when the issue does not carry it", async () => {
+    const { root, config } = setup();
+    const jira = fakeJira([issue("MR-1")]);
+    const { worker, io } = deps(root, config, jira);
+    await retry(worker, "MR-1");
+    expect(jira.edits).not.toContain("MR-1 -agent-blocked");
+    expect(io.stdout.split("\n")[0]).toBe("MR-1\tclaimed");
+  });
 });
 
 describe("delegate", () => {
@@ -326,16 +335,50 @@ describe("delegate", () => {
     expect(io.stdout).toBe("MR-1\tdelegated to backend, matches jira.jql\n");
   });
 
+  it("pauses for real between searches when no wait is given", async () => {
+    const { root, config } = setup();
+    const jira = fakeJira([issue("MR-1", { labels: [] })]);
+    const search = jira.search;
+    let calls = 0;
+    jira.search = async (jql, max) => (++calls < 2 ? [] : await search(jql, max));
+    const { worker } = deps(root, config, jira);
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const pending = delegate(worker, "MR-1", "backend");
+      await vi.advanceTimersByTimeAsync(5000);
+      expect((await pending).matches).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for Jira's search to see new labels", async () => {
+    const { root, config } = setup();
+    const jira = fakeJira([issue("MR-1", { labels: [] })]);
+    const search = jira.search;
+    let calls = 0;
+    jira.search = async (jql, max) => (++calls < 3 ? [] : await search(jql, max));
+    const { worker, io } = deps(root, config, jira);
+    expect((await delegate(worker, "MR-1", "backend", async () => {})).matches).toBe(true);
+    expect(calls).toBe(3);
+    expect(io.stderr).toBe("MR-1: waiting up to 30 s for Jira's search to see the labels\n");
+  });
+
   it("sets a custom field marker, says when the JQL still leaves the issue out and refuses a foreign shard", async () => {
     const { root, config } = setup();
     config.jira.repository = { field: "customfield_10042" };
     config.jira.eligibleLabel = "ai";
     const jira = fakeJira([issue("MR-1", { labels: ["agent-blocked"] })]);
     const { worker, io } = deps(root, config, jira);
-    expect((await delegate(worker, "MR-1", "frontend")).matches).toBe(false);
+    const waited: number[] = [];
+    const result = await delegate(worker, "MR-1", "frontend", async (ms) => void waited.push(ms));
+    expect(result.matches).toBe(false);
+    expect(waited).toEqual([5000, 5000, 5000, 5000, 5000, 5000]);
+    expect(jira.searches).toHaveLength(7);
     expect(jira.edits).toEqual(["MR-1 customfield_10042=frontend", "MR-1 +ai"]);
+    expect(io.stderr).toBe("MR-1: waiting up to 30 s for Jira's search to see the labels\n");
     expect(io.stdout).toBe(
-      "MR-1\tdelegated to frontend, does not match jira.jql yet, `globu-worker why MR-1` says why\n"
+      "MR-1\tdelegated to frontend, does not match jira.jql after 30 s, `globu-worker why MR-1` says why\n"
     );
     await expect(delegate(worker, "MR-1", "notes")).rejects.toThrow(
       '"notes" is not a deliverable shard, the worker delivers to backend, frontend'

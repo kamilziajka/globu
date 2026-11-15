@@ -449,7 +449,7 @@ describe("following pull requests", () => {
         waits += 1;
         if (waits > 1) await new Promise(() => {});
       },
-      untilStopped: async () => {}
+      untilStopped: async () => false
     });
     const shown = frames.map(plain).join("");
     expect(shown).toContain("○ MR-7 #7  ");

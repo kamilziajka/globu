@@ -239,7 +239,7 @@ describe("globu-worker", () => {
 
     const retried = captureIo(root);
     expect(await workerMain(["retry", "MR-1"], retried, env(), { ...quiet(), jira, run: healthy })).toBe(0);
-    expect(retried.stdout.split("\n")[0]).toBe("MR-1\tremoved agent-blocked");
+    expect(retried.stdout).not.toContain("removed agent-blocked");
     const retriedJson = captureIo(root);
     expect(await workerMain(["retry", "MR-1", "--json"], retriedJson, env(), { ...quiet(), jira, run: healthy })).toBe(
       0
@@ -447,6 +447,44 @@ describe("globu-worker", () => {
     const jira = idleJira(() => signals.emit("SIGTERM"));
     expect(await workerMain(["start"], auto, withGithub(), { jira, signals, run: healthy })).toBe(0);
     expect(auto.stdout.trim().split("\n").at(-1)).toBe("stopping after the current cycle");
+  });
+
+  it("says which issues the next cycle takes in a dry run", async () => {
+    const root = prepare();
+    const io = captureIo(root);
+    expect(await workerMain(["once", "--dry-run"], io, env(), { ...quiet(), jira: sessionJira() })).toBe(0);
+    expect(io.stdout.trim().split("\n").at(-1)).toBe("next cycle takes MR-1 (limits.concurrent 1, limits.perShard 1)");
+  });
+
+  it("refuses to cycle on a home another globu-worker cycles on, and lets a dry run through", async () => {
+    const root = prepare();
+    const home = process.env.GLOBU_HOME as string;
+    const lock = path.join(home, "worker.lock");
+    const holder = { pid: process.pid, host: os.hostname(), holder: "globu-worker start --mode pick" };
+    fs.writeFileSync(lock, JSON.stringify(holder));
+    const refused = captureIo(root);
+    expect(await workerMain(["once"], refused, env(), { ...quiet(), jira: idleJira() })).toBe(1);
+    expect(refused.stderr).toContain(
+      `globu-worker: another globu-worker cycles on ${home}: worker (held by globu-worker start --mode pick, pid ${process.pid}`
+    );
+    expect(await workerMain(["once", "--dry-run"], captureIo(root), env(), { ...quiet(), jira: idleJira() })).toBe(0);
+    fs.rmSync(lock);
+    expect(await workerMain(["once"], captureIo(root), env(), { ...quiet(), jira: idleJira() })).toBe(0);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("exits 69 when run or start --mode auto stops for a problem of the machine", async () => {
+    const root = prepare();
+    const claudeless: Runner = async (command, args, options) =>
+      command === "claude" && args.includes("--permission-mode")
+        ? { code: null as unknown as number, stdout: "", stderr: "", timedOut: false, startError: "ENOENT" }
+        : await healthy(command, args, options);
+    for (const argv of [["run"], ["start", "--mode", "auto"]]) {
+      const io = captureIo(root);
+      const overrides = { ...quiet(), jira: sessionJira(), run: claudeless };
+      expect(await workerMain(argv, io, withGithub(), overrides)).toBe(69);
+      expect(io.stderr).toContain("globu-worker: stopping, the machine needs fixing first: could not start claude");
+    }
   });
 
   it("holds a resource for the length of a command without a worker configuration", async () => {

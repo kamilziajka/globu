@@ -117,6 +117,11 @@ function keys(...presses: Key[]): { readKey: ReadKey; read: () => number } {
   };
 }
 
+const cycleOnce = async (inner: WorkerDeps): Promise<boolean> => {
+  await once(inner);
+  return false;
+};
+
 describe("start", () => {
   it("parses the mode", () => {
     expect(parseMode("pick")).toBe("pick");
@@ -126,7 +131,7 @@ describe("start", () => {
 
   it("in auto mode without a terminal runs one issue per cycle and prints a line per state change", async () => {
     const { worker, io } = deps(jira([issue("MR-1", "First"), issue("MR-2", "Second")]));
-    await start(worker, { mode: "auto", untilStopped: async (inner) => void (await once(inner)) });
+    await start(worker, { mode: "auto", untilStopped: cycleOnce });
     const lines = io.stdout.trim().split("\n");
     expect(lines[0]).toBe("2026-11-13T10:42:00.000Z MR-1 preparing");
     expect(lines.at(-1)).toBe("2026-11-13T10:42:00.000Z MR-1 released: the run made no commits");
@@ -146,7 +151,7 @@ describe("start", () => {
       mode: "auto",
       screen: { ...view, columns: 30 },
       checks,
-      untilStopped: async (inner) => void (await once(inner))
+      untilStopped: cycleOnce
     });
     const last = plain(view.frames.at(-1) as string);
     expect(last.startsWith(plain(CLEAR))).toBe(true);
@@ -158,7 +163,7 @@ describe("start", () => {
 
     const window = { window: "five_hour", utilization: 0.15, resetsAt: "2026-11-13T14:00:00.000Z" };
     recordUsage(worker.home, [window, { ...window, window: "seven_day", utilization: 0.6 }], NOW);
-    await start(worker, { mode: "auto", screen: view, untilStopped: async (inner) => void (await once(inner)) });
+    await start(worker, { mode: "auto", screen: view, untilStopped: cycleOnce });
     expect(plain(view.frames.at(-1) as string)).toContain(
       "Spent today 0.00 of 40.00 USD, subscription five-hour 15 %, seven-day 60 % of 70 %, 0 of 5 pull requests open."
     );
@@ -168,7 +173,7 @@ describe("start", () => {
     const { worker } = deps(jira([issue("MR-1", "First"), issue("MR-2", "Second")]));
     const view = screen();
     const input = keys("other", "down", "down", "up", "enter", "refresh", "quit");
-    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => {} });
+    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => false });
     expect(input.read()).toBe(7);
     expect(view.frames[0]).toBe(HIDE_CURSOR);
     expect(view.frames.at(-1)).toBe(SHOW_CURSOR);
@@ -189,7 +194,7 @@ describe("start", () => {
     const { worker } = deps(jira([]));
     const view = screen();
     const input = keys("enter", "down", "quit");
-    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => {} });
+    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => false });
     expect(input.read()).toBe(3);
     expect(plain(view.frames.at(-2) as string)).toContain("No issues match the JQL right now.");
   });
@@ -209,7 +214,7 @@ describe("start", () => {
     const { worker } = deps(client);
     const view = screen();
     const input = keys("refresh", "enter", "quit");
-    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => {} });
+    await start(worker, { mode: "pick", screen: view, readKey: input.readKey, untilStopped: async () => false });
     const frames = view.frames.map(plain);
     expect(frames.some((frame) => frame.includes("Polling failed: Jira is down"))).toBe(true);
     expect(frames.at(-2)).toContain("MR-1: no permission to assign");

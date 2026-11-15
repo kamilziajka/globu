@@ -14,7 +14,7 @@ export type StartOptions = {
   readKey?: ReadKey;
   checks?: Check[];
   wait?: (ms: number) => Promise<void>;
-  untilStopped: (deps: WorkerDeps) => Promise<void>;
+  untilStopped: (deps: WorkerDeps) => Promise<boolean>;
 };
 
 export const PICK_KEYS = "↑↓ select   ⏎ run or repair   r refresh   q quit";
@@ -26,7 +26,8 @@ export function parseMode(value: string): Mode {
   throw new Error(`invalid mode "${value}", use pick or auto`);
 }
 
-export async function start(deps: WorkerDeps, options: StartOptions): Promise<void> {
+/** Runs the session list; true when auto mode stopped for a problem of the machine. */
+export async function start(deps: WorkerDeps, options: StartOptions): Promise<boolean> {
   const list = sessionList();
   const { screen, mode } = options;
   let notice = "";
@@ -108,7 +109,7 @@ export async function start(deps: WorkerDeps, options: StartOptions): Promise<vo
           continue;
         }
         notice = "";
-        if (key === "quit") return;
+        if (key === "quit") return false;
         if (key === "refresh") break;
         if (key === "enter" && selected !== null) {
           const chosen = rows[at];

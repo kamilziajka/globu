@@ -21,13 +21,13 @@ import { spawnRunner } from "./exec.js";
 import { hold, POLL_MS } from "./hold.js";
 import { jiraClient } from "./jira.js";
 import { LAUNCHER_COMMAND, launcherMain } from "./launcher.js";
-import { withLockPid } from "./lock.js";
+import { exclusiveHold, type Hold, withLockPid } from "./lock.js";
 import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
 import { delegate, retry, why } from "./triage.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
-import { claimIssue, finishRun, loop, once, releaseRun, type WorkerDeps } from "./worker.js";
+import { claimIssue, finishRun, loop, nextCycle, once, releaseRun, type WorkerDeps } from "./worker.js";
 
 export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platform">> & {
   signals: EventEmitter;
@@ -116,6 +116,27 @@ async function verify(io: Io, overrides: Overrides, deps: WorkerDeps, first: Che
 
 const passed = (checks: Check[]) => checks.every((check) => check.ok);
 
+/** The exit code of run and start --mode auto after they stopped for a problem of the machine (EX_UNAVAILABLE). */
+export const MACHINE_EXIT = 69;
+const HOME_LOCK = "worker";
+
+/** Takes <home>/worker.lock for a command that cycles, so two processes never cycle on one home. */
+function ownHome(deps: WorkerDeps, command: string): Hold {
+  const lock = exclusiveHold([HOME_LOCK], deps.home, `globu-worker ${command}`, deps.now, deps.env);
+  const held = lock.take();
+  if (held !== null) throw new Error(`another globu-worker cycles on ${deps.home}: ${held}`);
+  return lock;
+}
+
+async function owning<T>(deps: WorkerDeps, command: string, work: () => Promise<T>): Promise<T> {
+  const lock = ownHome(deps, command);
+  try {
+    return await work();
+  } finally {
+    lock.release();
+  }
+}
+
 export async function workerMain(
   argv: string[],
   io: Io,
@@ -134,7 +155,7 @@ export async function workerMain(
     .option("--log-level <level>", "error, warn, info or debug")
     .addHelpText("after", FOOTER);
   let exitCode = 0;
-  const untilStopped = async (deps: WorkerDeps) => {
+  const untilStopped = async (deps: WorkerDeps): Promise<boolean> => {
     let stopped = false;
     let wake: (() => void) | null = null;
     const stop = () => {
@@ -144,7 +165,7 @@ export async function workerMain(
     };
     overrides.signals.once("SIGINT", stop);
     overrides.signals.once("SIGTERM", stop);
-    await loop(deps, {
+    return await loop(deps, {
       stopped: () => stopped,
       sleep: (ms) =>
         new Promise<void>((resolve) => {
@@ -195,7 +216,11 @@ export async function workerMain(
     .option("--json", "print machine-readable JSON")
     .action(async (options: { dryRun?: boolean; issue?: string; repair?: string; json?: boolean }) => {
       const deps = ownDeps();
-      const result = await once(deps, { dryRun: options.dryRun, issue: options.issue, repair: options.repair });
+      const cycle = () => once(deps, { dryRun: options.dryRun, issue: options.issue, repair: options.repair });
+      const result = options.dryRun ? await cycle() : await owning(deps, "once", cycle);
+      if (options.dryRun && options.issue === undefined && result.plan.length > 0) {
+        io.out(nextCycle(deps.config, result.plan));
+      }
       if (options.json) io.out(JSON.stringify(result, null, 2));
     });
 
@@ -204,7 +229,8 @@ export async function workerMain(
     .description("remove the blocked label from an issue and take it as once --issue does")
     .option("--json", "print machine-readable JSON")
     .action(async (key: string, options: { json?: boolean }) => {
-      const result = await retry(ownDeps(), key);
+      const deps = ownDeps();
+      const result = await owning(deps, "retry", () => retry(deps, key));
       if (options.json) io.out(JSON.stringify(result, null, 2));
     });
 
@@ -279,11 +305,13 @@ export async function workerMain(
     .description("poll and run on the configured interval until SIGINT or SIGTERM")
     .action(async () => {
       const deps = ownDeps();
-      if (!passed(await verify(io, overrides, deps, []))) {
-        exitCode = 1;
-        return;
-      }
-      await untilStopped(deps);
+      await owning(deps, "run", async () => {
+        if (!passed(await verify(io, overrides, deps, []))) {
+          exitCode = 1;
+          return;
+        }
+        if (await untilStopped(deps)) exitCode = MACHINE_EXIT;
+      });
     });
 
   program
@@ -325,18 +353,14 @@ export async function workerMain(
       const mode = parseMode(options.mode ?? (interactive ? "pick" : "auto"));
       if (mode === "pick" && !interactive) throw new Error("pick mode needs a terminal, use --mode auto");
       const deps = ownDeps();
-      const checks = await verify(io, overrides, deps, []);
-      if (!passed(checks)) {
-        exitCode = 1;
-        return;
-      }
-      await start(deps, {
-        mode,
-        screen: overrides.screen,
-        readKey: overrides.readKey,
-        checks,
-        wait: overrides.wait,
-        untilStopped
+      await owning(deps, `start --mode ${mode}`, async () => {
+        const checks = await verify(io, overrides, deps, []);
+        if (!passed(checks)) {
+          exitCode = 1;
+          return;
+        }
+        const options = { mode, screen: overrides.screen, readKey: overrides.readKey, checks, wait: overrides.wait };
+        if (await start(deps, { ...options, untilStopped })) exitCode = MACHINE_EXIT;
       });
     });
 

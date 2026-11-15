@@ -6,6 +6,7 @@ import type { Io } from "../../globu-cli/src/cli/index.js";
 import { parseDuration } from "./config.js";
 import { notStarted } from "./exec.js";
 import { exclusiveHold, type Hold, lockDir, RESOURCE_RE, withLockPid } from "./lock.js";
+import { findOnPath } from "./shell.js";
 
 export const HELD_EXIT = 75;
 export const NOT_STARTED_EXIT = 127;
@@ -50,6 +51,12 @@ export async function hold(deps: HoldDeps, resources: string, argv: string[], op
   const names = parseResources(resources);
   const waitMs = options.wait === undefined ? null : parseDuration(options.wait);
   const [command, ...args] = argv;
+  // On Windows cross-spawn hands an unknown command to cmd.exe, which prints its own "is not recognized" first.
+  const bare = !/[\\/]/.test(command);
+  if (deps.platform === "win32" && bare && findOnPath(command, deps.env, deps.platform) === null) {
+    deps.io.err(`globu-worker: ${notStarted(command, { startError: "ENOENT" })}`);
+    return NOT_STARTED_EXIT;
+  }
   const dir = lockDir(deps.env);
   const holder = holderOf(argv);
   let stopped: NodeJS.Signals | null = null;

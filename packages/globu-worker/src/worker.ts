@@ -239,7 +239,21 @@ async function tell(deps: WorkerDeps, record: RunRecord, event: NotifyEvent, url
   if (record.driver === "worker") await notify(deps, { event, key: record.key, url, message });
 }
 
-async function release(deps: WorkerDeps, record: RunRecord, reason: string): Promise<RunRecord> {
+function readHandback(file: string): string | null {
+  const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
+  return text === "" ? null : text;
+}
+
+function handbackPart(handback: string | null): string {
+  return handback === null ? "" : `The run's handback:\n\n${handback}\n\n---\n\n`;
+}
+
+async function release(
+  deps: WorkerDeps,
+  record: RunRecord,
+  reason: string,
+  handback: string | null = null
+): Promise<RunRecord> {
   const { jira, config, io } = deps;
   record.state = "released";
   record.reason = reason;
@@ -254,7 +268,7 @@ async function release(deps: WorkerDeps, record: RunRecord, reason: string): Pro
     if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
     await jira.comment(
       record.key,
-      `Released by the Globu worker: ${reason}${machine}\n\n${footer(record, deps.now())}`
+      `Released by the Globu worker: ${reason}${machine}\n\n${handbackPart(handback)}${footer(record, deps.now())}`
     );
   } catch (err) {
     log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
@@ -570,23 +584,24 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   const commits = commitsOn(target);
   const unstarted = outcome === null ? null : notStarted("claude", outcome);
   if (unstarted !== null) return await release(deps, record, environmentProblem(record, unstarted));
-  if (outcome?.timedOut) return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`);
+  const written = readHandback(handbackFile);
+  if (outcome?.timedOut) {
+    return await release(deps, record, `timed out after ${minutes(config.limits.timeout)}`, written);
+  }
   if (outcome?.summary.subtype === "error_max_turns") {
-    return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`);
+    return await release(deps, record, `stopped at the turn cap of ${config.claude.maxTurns}`, written);
   }
   if (commits === 0) {
     const failed = outcome !== null && outcome.code !== 0;
     const detail = failed ? `, claude exited with ${outcome.code}: ${outcome.stderr.trim()}` : "";
-    return await release(deps, record, `the run made no commits${detail}`);
+    return await release(deps, record, `the run made no commits${detail}`, written);
   }
 
   record.state = "pushing";
   persist(deps, dir, record);
   const token = deps.secrets.githubToken;
   if (token === null) throw new Error("set GH_TOKEN to push branches and open pull requests");
-  const handback = fs.existsSync(handbackFile)
-    ? fs.readFileSync(handbackFile, "utf8").trim()
-    : `The run wrote no handback. Its last message:\n\n${outcome?.summary.result ?? "(none)"}`;
+  const handback = written ?? `The run wrote no handback. Its last message:\n\n${outcome?.summary.result ?? "(none)"}`;
   const issue = await jira.issue(record.key);
   const title = `${issue.key}: ${issue.summary}`;
   for (const worktree of worktrees) {
@@ -1083,9 +1098,24 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, hold: Hold): Promis
   return { runs: [...repaired, ...runs], plan };
 }
 
+/** Which issues of a dry run's plan an automatic cycle would take, within limits.concurrent and limits.perShard. */
+export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
+  const { concurrent, perShard } = config.limits;
+  const taken: PlanEntry[] = [];
+  for (const entry of plan) {
+    if (taken.length >= concurrent) break;
+    if (!entry.action.startsWith("would ")) continue;
+    if (taken.filter((other) => other.shard === entry.shard).length >= perShard) continue;
+    taken.push(entry);
+  }
+  const keys = taken.length === 0 ? "nothing" : taken.map((entry) => entry.key).join(", ");
+  return `next cycle takes ${keys} (limits.concurrent ${concurrent}, limits.perShard ${perShard})`;
+}
+
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
-export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<void> {
+/** Runs cycles until stopped; true when it stopped for a problem of the machine. */
+export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
   for (;;) {
     try {
       const broken = (await once(deps)).runs.find((record) => record.environment);
@@ -1093,15 +1123,17 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<void
         log().error("stopping", { run: broken.id, reason: broken.reason });
         deps.io.err(`globu-worker: stopping, the machine needs fixing first: ${broken.reason}`);
         const message = `globu-worker stopped, the machine needs fixing first: ${oneLine(broken.reason as string)}`;
-        await notify(deps, { event: "stopped", key: broken.key, url: issueUrl(deps.config, broken.key), message });
-        return;
+        const url = issueUrl(deps.config, broken.key);
+        const problem = await notify(deps, { event: "stopped", key: broken.key, url, message });
+        if (problem !== null) deps.io.err(`globu-worker: could not send the stopped notification: ${problem}`);
+        return true;
       }
     } catch (err) {
       log().error("cycle failed", { error: (err as Error).message });
       deps.io.err(`globu-worker: ${(err as Error).message}`);
     }
-    if (options.stopped()) return;
+    if (options.stopped()) return false;
     await options.sleep(deps.config.poll.every);
-    if (options.stopped()) return;
+    if (options.stopped()) return false;
   }
 }

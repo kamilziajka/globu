@@ -20,6 +20,7 @@ import {
   finishRun,
   loop,
   markerShard,
+  nextCycle,
   once,
   type PresentShard,
   registry,
@@ -344,6 +345,26 @@ describe("markerShard", () => {
   });
 });
 
+describe("nextCycle", () => {
+  it("takes the would-be claims in plan order within the concurrent and per-shard limits", () => {
+    const { config } = setup();
+    const entry = (key: string, shard: string, action: string) => ({ key, summary: "", shard, action });
+    const plan = [
+      entry("MR-1", "backend", "skipped, already assigned"),
+      entry("MR-2", "backend", "would claim and run in backend (0 references resolved)"),
+      entry("MR-3", "backend", "would claim and run in backend (0 references resolved)"),
+      entry("MR-4", "frontend", "would release: no deliverable marker"),
+      entry("MR-5", "frontend", "would claim and run in frontend (0 references resolved)")
+    ];
+    const limits = (concurrent: number) => ({ ...config, limits: { ...config.limits, concurrent, perShard: 1 } });
+    expect(nextCycle(limits(1), plan)).toBe("next cycle takes MR-2 (limits.concurrent 1, limits.perShard 1)");
+    expect(nextCycle(limits(3), plan)).toBe("next cycle takes MR-2, MR-4 (limits.concurrent 3, limits.perShard 1)");
+    expect(nextCycle(limits(1), plan.slice(0, 1))).toBe(
+      "next cycle takes nothing (limits.concurrent 1, limits.perShard 1)"
+    );
+  });
+});
+
 describe("once", () => {
   it("in a dry run says what it would do and touches nothing", async () => {
     const world = setup();
@@ -638,7 +659,8 @@ describe("once", () => {
     worker.platform = "win32";
     worker.env = { ...worker.env, PATH: tempDir() };
     const slept: number[] = [];
-    await loop(worker, { sleep: async (ms) => void slept.push(ms), stopped: () => false });
+    worker.config = { ...worker.config, notify: { ...worker.config.notify, command: "notify-me" } };
+    expect(await loop(worker, { sleep: async (ms) => void slept.push(ms), stopped: () => false })).toBe(true);
     expect(slept).toEqual([]);
     const shellless = loadRuns(world.home).find(({ record }) => record.key === "MR-2")?.record as RunRecord;
     machine(
@@ -647,6 +669,7 @@ describe("once", () => {
       "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"
     );
     expect(io.stderr).toContain("globu-worker: stopping, the machine needs fixing first: could not find sh");
+    expect(io.stderr).toContain("globu-worker: could not send the stopped notification: could not find sh");
 
     world.config.setup = {};
     const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
@@ -1066,6 +1089,16 @@ describe("once", () => {
 
     const crashed = await runWith(world, [issue("MR-3")], { code: 1, stderr: "boom\n" });
     expectReleased(crashed.jira, crashed.record as RunRecord, "the run made no commits, claude exited with 1: boom");
+    expect(crashed.jira.comments["MR-3"].at(-1)).not.toContain("The run's handback");
+
+    const question = "## Summary\n\nhello.js does not exist yet: create it here or wait for MR-1?\n";
+    const empty = await runWith(world, [issue("MR-4")], { handback: question });
+    expectReleased(empty.jira, empty.record as RunRecord, "the run made no commits");
+    expect(empty.jira.comments["MR-4"].at(-1)).toContain(
+      "the run made no commits\n\nThe run's handback:\n\n## Summary\n\nhello.js does not exist yet: create it here or wait for MR-1?\n\n---\n\nRun MR-4-"
+    );
+    const blank = await runWith(world, [issue("MR-5")], { handback: "  \n" });
+    expect(blank.jira.comments["MR-5"].at(-1)).not.toContain("The run's handback");
   });
 
   it("turns a worker error into a release and keeps a pushed branch", async () => {
