@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
-import { scrubbedEnv, type WorkerConfig } from "./config.js";
+import {
+  DEFAULT_PROJECT,
+  type FollowUpSettings,
+  projectOf,
+  type StatusSetting,
+  scrubbedEnv,
+  settingFor,
+  type WorkerConfig
+} from "./config.js";
 import { notStarted } from "./exec.js";
+import { isStatusId, type JiraIssueType } from "./jira.js";
 import { log } from "./logger.js";
 import { isTerminal, loadRuns } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
@@ -163,18 +172,85 @@ async function setupProbe(deps: WorkerDeps): Promise<Found> {
   return { detail: [`${shell} finds ${programs.join(", ")}`, ...notes].join(", "), short: programs.join(", ") };
 }
 
-export const CHECK_NAMES = ["shards", "setup", "jira", "github", "claude"];
+const FOLLOW_UP_PERMISSIONS: Record<string, string> = { CREATE_ISSUES: "Create issues", LINK_ISSUES: "Link issues" };
+const PROJECT_SAMPLE = 50;
+
+async function followUpProjects(deps: WorkerDeps, setting: StatusSetting): Promise<string[]> {
+  const named = typeof setting === "string" ? [] : Object.keys(setting).filter((key) => key !== DEFAULT_PROJECT);
+  const hits = await deps.jira.search(deps.config.jira.jql, PROJECT_SAMPLE);
+  return [...new Set([...named, ...hits.map((hit) => projectOf(hit.key))])].sort();
+}
+
+async function followUpProject(deps: WorkerDeps, setting: StatusSetting, project: string): Promise<JiraIssueType> {
+  const wanted = settingFor(setting, project);
+  if (wanted === undefined)
+    throw new Error(`no jira.followUps.issueType for project ${project}, which the JQL matches`);
+  const [types, granted] = await Promise.all([
+    deps.jira.issueTypes(project),
+    deps.jira.permissions(project, Object.keys(FOLLOW_UP_PERMISSIONS))
+  ]);
+  const type = types.find((candidate) => (isStatusId(wanted) ? candidate.id : candidate.name) === wanted);
+  if (type === undefined) {
+    const names = types.map((candidate) => `${candidate.name} (${candidate.id})`).join(", ") || "none";
+    throw new Error(`${project} has no issue type "${wanted}", available: ${names}`);
+  }
+  const missing = Object.keys(FOLLOW_UP_PERMISSIONS).filter((key) => !granted[key]);
+  if (missing.length > 0) {
+    const names = missing.map((key) => FOLLOW_UP_PERMISSIONS[key]).join(" and ");
+    const noun = missing.length === 1 ? "permission" : "permissions";
+    throw new Error(`the worker's Jira user lacks the ${names} ${noun} in ${project}`);
+  }
+  return type;
+}
+
+async function linkTypeProbe(deps: WorkerDeps, linkType: string): Promise<string> {
+  const names = await deps.jira.linkTypes();
+  if (!names.includes(linkType)) {
+    throw new Error(`Jira has no link type "${linkType}", available: ${names.join(", ") || "none"}`);
+  }
+  return linkType;
+}
+
+async function followUpsProbe(deps: WorkerDeps, settings: FollowUpSettings): Promise<Found> {
+  const projects = await followUpProjects(deps, settings.issueType);
+  const [link, ...types] = await Promise.allSettled([
+    linkTypeProbe(deps, settings.linkType),
+    ...projects.map((project) => followUpProject(deps, settings.issueType, project))
+  ]);
+  const failed = [link, ...types].flatMap((result) =>
+    result.status === "rejected" ? [(result.reason as Error).message] : []
+  );
+  if (failed.length > 0) throw new Error(failed.join("; "));
+  const found = (types as PromiseFulfilledResult<JiraIssueType>[]).map((result) => result.value);
+  const resolved = found.map((type, index) => `${type.name} (${type.id}) in ${projects[index]}`);
+  const parts =
+    projects.length === 0
+      ? ["issue type and permissions not checked, the JQL matches no issue now and issueType names no project"]
+      : [`issue type ${resolved.join(", ")}`, `Create issues and Link issues granted in ${projects.join(", ")}`];
+  const names = [...new Set(found.map((type) => type.name))];
+  return {
+    detail: [...parts, `link type ${settings.linkType}`].join(", "),
+    short: [...names, settings.linkType].join(", ")
+  };
+}
+
+export const CHECK_NAMES = ["shards", "setup", "jira", "follow-ups", "github", "claude"];
+
+export function checkNames(config: WorkerConfig): string[] {
+  return config.jira.followUps === undefined ? CHECK_NAMES.filter((name) => name !== "follow-ups") : CHECK_NAMES;
+}
 
 export async function checkAccess(deps: WorkerDeps, onCheck: (check: Check) => void = () => {}): Promise<Check[]> {
   const probes: Record<string, () => Promise<Found> | Found> = {
     shards: () => shardsProbe(deps),
     setup: () => setupProbe(deps),
     jira: () => jiraProbe(deps),
+    "follow-ups": () => followUpsProbe(deps, deps.config.jira.followUps as FollowUpSettings),
     github: () => githubProbe(deps),
     claude: () => claudeProbe(deps)
   };
   return await Promise.all(
-    CHECK_NAMES.map(async (name) => {
+    checkNames(deps.config).map(async (name) => {
       const check = await attempt(name, probes[name]);
       onCheck(check);
       return check;

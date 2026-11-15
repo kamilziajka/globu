@@ -5,7 +5,7 @@ import type { Io } from "../../globu-cli/src/cli/index.js";
 import { useGitHubToken } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
 import { bootstrapShards } from "./bootstrap.js";
-import { attempt, CHECK_NAMES, type Check, checkAccess, formatCheck } from "./check.js";
+import { attempt, type Check, checkAccess, checkNames, formatCheck } from "./check.js";
 import {
   type Homes,
   loadWorkerConfig,
@@ -109,7 +109,7 @@ async function verify(io: Io, overrides: Overrides, deps: WorkerDeps, first: Che
     if (screen === undefined) io.out(formatCheck(check));
     else screen.write(`${checkLine(check.name, check, 0, widthOf(screen))}\n`);
   }
-  return [...first, ...(await report(io, overrides, CHECK_NAMES, (onCheck) => checkAccess(deps, onCheck)))];
+  return [...first, ...(await report(io, overrides, checkNames(deps.config), (onCheck) => checkAccess(deps, onCheck)))];
 }
 
 const passed = (checks: Check[]) => checks.every((check) => check.ok);

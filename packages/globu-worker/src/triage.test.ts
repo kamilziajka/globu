@@ -96,7 +96,10 @@ function fakeJira(issues: JiraIssue[]): FakeJira {
     },
     remoteLink: async () => {},
     createIssue: async () => "MR-100",
-    linkIssues: async () => {}
+    linkIssues: async () => {},
+    issueTypes: async () => [],
+    linkTypes: async () => [],
+    permissions: async () => ({})
   };
 }
 

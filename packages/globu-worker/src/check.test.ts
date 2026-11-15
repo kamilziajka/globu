@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { register } from "../../globu-core/src/index.js";
 import { captureIo, initRepo, tempDir, write } from "../../testing/index.js";
-import { checkAccess, checksLine, formatCheck } from "./check.js";
+import { checkAccess, checkNames, checksLine, formatCheck } from "./check.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import type { Runner, RunResult } from "./exec.js";
 import type { JiraClient } from "./jira.js";
@@ -54,6 +54,9 @@ function jira(overrides: Partial<JiraClient> = {}): JiraClient {
     remoteLink: unused,
     createIssue: unused,
     linkIssues: unused,
+    issueTypes: unused,
+    linkTypes: unused,
+    permissions: unused,
     ...overrides
   };
 }
@@ -271,6 +274,110 @@ describe("checkAccess", () => {
     shellless.worker.env = { PATH: root };
     expect(detail(await checkAccess(shellless.worker), "setup")).toBe(
       "could not find sh for the setup commands, install Git for Windows or add its bin directory to PATH"
+    );
+  });
+
+  it("checks the follow-up issue types, link type and permissions in each project when follow-ups are on", async () => {
+    const setup = world();
+    const config = configOf(
+      CONFIG.replace(
+        '    labelPrefix: "repo:"\n',
+        '    labelPrefix: "repo:"\n  followUps:\n    issueType:\n      MR: "10001"\n      default: Story\n'
+      )
+    );
+    const asked: string[] = [];
+    const fake = jira({
+      search: async (_jql, max) => {
+        asked.push(`search ${max}`);
+        return [
+          { key: "SB-3", labels: [] },
+          { key: "MR-1", labels: [] },
+          { key: "MR-2", labels: [] }
+        ];
+      },
+      issueTypes: async (project) =>
+        project === "MR" ? [{ id: "10001", name: "Task" }] : [{ id: "10002", name: "Story" }],
+      linkTypes: async () => ["Blocks", "Relates"],
+      permissions: async (project, keys) => {
+        asked.push(`permissions ${project} ${keys.join(",")}`);
+        return { CREATE_ISSUES: true, LINK_ISSUES: true };
+      }
+    });
+    expect(checkNames(config)).toEqual(["shards", "setup", "jira", "follow-ups", "github", "claude"]);
+    expect(checkNames(setup.config)).toEqual(["shards", "setup", "jira", "github", "claude"]);
+    const checks = await checkAccess(deps({ ...setup, config }, { jira: fake }).worker);
+    expect(checks.map((check) => check.name)).toEqual(checkNames(config));
+    expect(checks[3]).toEqual({
+      name: "follow-ups",
+      ok: true,
+      detail:
+        "issue type Task (10001) in MR, Story (10002) in SB, Create issues and Link issues granted in MR, SB, link type Relates",
+      short: "Task, Story, Relates"
+    });
+    expect([...asked].sort()).toEqual([
+      "permissions MR CREATE_ISSUES,LINK_ISSUES",
+      "permissions SB CREATE_ISSUES,LINK_ISSUES",
+      "search 1",
+      "search 50"
+    ]);
+
+    const quiet = configOf(
+      CONFIG.replace('    labelPrefix: "repo:"\n', '    labelPrefix: "repo:"\n  followUps:\n    issueType: Task\n')
+    );
+    const unknown = await checkAccess(
+      deps({ ...setup, config: quiet }, { jira: jira({ search: async () => [], linkTypes: async () => ["Relates"] }) })
+        .worker
+    );
+    expect(detail(unknown, "follow-ups")).toBe(
+      "issue type and permissions not checked, the JQL matches no issue now and issueType names no project, link type Relates"
+    );
+  });
+
+  it("names each follow-up setting Jira does not accept", async () => {
+    const setup = world();
+    const config = configOf(
+      CONFIG.replace(
+        '    labelPrefix: "repo:"\n',
+        '    labelPrefix: "repo:"\n  followUps:\n    issueType:\n      MR: Bug\n      KB: Task\n    linkType: Relates to\n'
+      )
+    );
+    const fake = jira({
+      search: async () => [{ key: "SB-3", labels: [] }],
+      issueTypes: async (project) => (project === "MR" ? [{ id: "10001", name: "Task" }] : [{ id: "1", name: "Task" }]),
+      linkTypes: async () => ["Relates"],
+      permissions: async (project) => ({ CREATE_ISSUES: project === "KB", LINK_ISSUES: false })
+    });
+    const checks = await checkAccess(deps({ ...setup, config }, { jira: fake }).worker);
+    expect(checks.find((check) => check.name === "follow-ups")?.ok).toBe(false);
+    expect(detail(checks, "follow-ups")).toBe(
+      [
+        'Jira has no link type "Relates to", available: Relates',
+        "the worker's Jira user lacks the Link issues permission in KB",
+        'MR has no issue type "Bug", available: Task (10001)',
+        "no jira.followUps.issueType for project SB, which the JQL matches"
+      ].join("; ")
+    );
+
+    const bare = jira({
+      search: async () => [{ key: "MR-1", labels: [] }],
+      issueTypes: async () => [],
+      linkTypes: async () => [],
+      permissions: async () => ({ CREATE_ISSUES: false, LINK_ISSUES: false })
+    });
+    const single = configOf(
+      CONFIG.replace('    labelPrefix: "repo:"\n', '    labelPrefix: "repo:"\n  followUps:\n    issueType: "10001"\n')
+    );
+    expect(detail(await checkAccess(deps({ ...setup, config: single }, { jira: bare }).worker), "follow-ups")).toBe(
+      'Jira has no link type "Relates", available: none; MR has no issue type "10001", available: none'
+    );
+    const denied = jira({
+      search: async () => [{ key: "MR-1", labels: [] }],
+      issueTypes: async () => [{ id: "10001", name: "Task" }],
+      linkTypes: async () => ["Relates"],
+      permissions: async () => ({ CREATE_ISSUES: false, LINK_ISSUES: false })
+    });
+    expect(detail(await checkAccess(deps({ ...setup, config: single }, { jira: denied }).worker), "follow-ups")).toBe(
+      "the worker's Jira user lacks the Create issues and Link issues permissions in MR"
     );
   });
 

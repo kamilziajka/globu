@@ -52,6 +52,9 @@ function jira(issues: JiraIssue[], overrides: Partial<JiraClient> = {}): JiraCli
     remoteLink: async () => {},
     createIssue: async () => "MR-100",
     linkIssues: async () => {},
+    issueTypes: async () => [],
+    linkTypes: async () => [],
+    permissions: async () => ({}),
     ...overrides
   };
 }

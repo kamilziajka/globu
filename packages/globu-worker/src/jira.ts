@@ -17,6 +17,7 @@ export type JiraLink = { relation: string; key: string; summary: string; status:
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
 export type NewIssue = { project: string; issueType: string; summary: string; description: string };
+export type JiraIssueType = { id: string; name: string };
 export type JiraClient = {
   myself(): Promise<JiraUser>;
   search(jql: string, max: number): Promise<JiraHit[]>;
@@ -30,6 +31,9 @@ export type JiraClient = {
   remoteLink(key: string, url: string, title: string): Promise<void>;
   createIssue(issue: NewIssue): Promise<string>;
   linkIssues(type: string, inward: string, outward: string): Promise<void>;
+  issueTypes(project: string): Promise<JiraIssueType[]>;
+  linkTypes(): Promise<string[]>;
+  permissions(project: string, keys: string[]): Promise<Record<string, boolean>>;
 };
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -186,6 +190,22 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
         type: { name: type },
         inwardIssue: { key: inward },
         outwardIssue: { key: outward }
-      })
+      }),
+    async issueTypes(project) {
+      const found = await request<{ issueTypes: JiraIssueType[] }>("GET", `/project/${encodeURIComponent(project)}`);
+      return found.issueTypes.map(({ id, name }) => ({ id, name }));
+    },
+    async linkTypes() {
+      const found = await request<{ issueLinkTypes: { name: string }[] }>("GET", "/issueLinkType");
+      return found.issueLinkTypes.map((type) => type.name);
+    },
+    async permissions(project, keys) {
+      const query = `projectKey=${encodeURIComponent(project)}&permissions=${keys.join(",")}`;
+      const found = await request<{ permissions: Record<string, { havePermission: boolean }> }>(
+        "GET",
+        `/mypermissions?${query}`
+      );
+      return Object.fromEntries(keys.map((key) => [key, found.permissions[key]?.havePermission === true]));
+    }
   };
 }

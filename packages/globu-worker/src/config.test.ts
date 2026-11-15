@@ -14,6 +14,7 @@ import {
   scrubbedEnv,
   secretValues,
   sessionHomes,
+  settingFor,
   statusFor,
   withSecretsFile,
   workerConfigPath
@@ -182,6 +183,7 @@ describe("statusFor", () => {
     expect(statusFor({ KLAYBOY: "In Progress", default: "Doing" }, "SANDBOX-2")).toBe("Doing");
     expect(statusFor({ KLAYBOY: "In Progress" }, "SANDBOX-2")).toBeUndefined();
     expect(statusFor(undefined, "SANDBOX-2")).toBeUndefined();
+    expect(settingFor({ KLAYBOY: "Task", default: "Story" }, "SANDBOX")).toBe("Story");
   });
 });
 
