@@ -17,7 +17,7 @@ const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
 
 type Claude = "resolve" | "add-only" | "nothing" | "fix" | "timeout" | "missing";
-type Script = { pulls: Record<string, object | null>; claude?: Claude };
+type Script = { pulls: Record<string, object | null>; claude?: Claude; viewEnded?: boolean };
 type Calls = {
   gh: string[][];
   claude: { cwd: string; env: NodeJS.ProcessEnv; prompt: string }[];
@@ -34,6 +34,7 @@ function runner(script: Script, calls: Calls): Runner {
     if (command === "gh") {
       calls.gh.push(args);
       if (args[1] === "view") {
+        if (script.viewEnded) return { code: 3221225794, stdout: "", stderr: "", timedOut: false };
         const raw = script.pulls[args[2]];
         if (raw === null) return { code: 1, stdout: "", stderr: "not found", timedOut: false };
         return { code: 0, stdout: JSON.stringify(raw), stderr: "", timedOut: false };
@@ -309,6 +310,21 @@ describe("following pull requests", () => {
     expect(reasons[3]).toMatch(/^worker error: gh pr view .* failed: not found$/);
     expect(reasons[4]).toBe("could not start claude: not found on PATH");
     expect(original(setup).followUp).toEqual({ repairs: 4, state: "open" });
+  });
+
+  it("does not count a repair whose child Windows ended, and records it as a problem of the machine", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n" });
+    const { worker, jira } = deps(setup, { pulls: { [setup.url]: pull(setup.url) }, viewEnded: true });
+    const record = (await once(worker, { repair: setup.url })).runs[0];
+    expect(record).toMatchObject({
+      state: "released",
+      environment: true,
+      reason: "Windows ended gh with status 0xC0000142"
+    });
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "open" });
+    expect(jira.comments.at(-1)).toContain(
+      "could not repair this pull request: Windows ended gh with status 0xC0000142. The worker will try again."
+    );
   });
 
   it("fails a repair that commits nothing", async () => {

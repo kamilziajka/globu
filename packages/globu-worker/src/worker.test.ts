@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { register, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
-import type { Runner } from "./exec.js";
+import { MachineProblem, type Runner } from "./exec.js";
 import { filedFor } from "./filed.js";
 import type { JiraClient, JiraIssue, NewIssue } from "./jira.js";
 import { type Logger, setLogger, silentLogger } from "./logger.js";
@@ -25,7 +25,8 @@ import {
   type PresentShard,
   registry,
   releaseRun,
-  type WorkerDeps
+  type WorkerDeps,
+  git as workerGit
 } from "./worker.js";
 
 const NOW = new Date("2026-11-05T10:20:30.000Z");
@@ -189,6 +190,7 @@ type Script = {
   stderr?: string;
   timedOut?: boolean;
   ghFails?: boolean;
+  ghEnded?: boolean;
   ghLoginFails?: boolean;
   startError?: string;
   setup?: { code?: number | null; timedOut?: boolean; stdout?: string; stderr?: string; startError?: string };
@@ -236,6 +238,7 @@ function fakeRunner(script: Script, calls: Calls): Runner {
         return { code: script.ghLoginFails ? 1 : 0, stdout: "octocat\n", stderr: "", timedOut: false };
       }
       if (script.ghFails) return { code: 1, stdout: "", stderr: "label not found", timedOut: false };
+      if (script.ghEnded) return { code: 3221225794, stdout: "", stderr: "", timedOut: false };
       return {
         code: 0,
         stdout: `creating...\nhttps://github.com/acme/pr/${calls.gh.length}\n`,
@@ -685,6 +688,29 @@ describe("once", () => {
     world.config.setup = {};
     const claudeless = await runWith(world, [issue("MR-3")], { code: null as unknown as number, startError: "ENOENT" });
     machine(claudeless.jira, claudeless.record as RunRecord, "could not start claude: not found on PATH");
+
+    const ended = await runWith(world, [issue("MR-5")], { code: 3221225794 });
+    machine(ended.jira, ended.record as RunRecord, "Windows ended claude with status 0xC0000142");
+    const torn = await runWith(world, [issue("MR-6")], { commit: true, handback: true, ghEnded: true });
+    machine(torn.jira, torn.record as RunRecord, "Windows ended gh with status 0xC0000142");
+    world.config.setup = { backend: ["npm ci"] };
+    const setupEnded = await runWith(world, [issue("MR-8")], { setup: { code: 3221225794 } });
+    machine(
+      setupEnded.jira,
+      setupEnded.record as RunRecord,
+      'setup command "npm ci" in backend: Windows ended sh with status 0xC0000142'
+    );
+    world.config.setup = {};
+
+    const savedPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(() => workerGit(["status"], world.clones.backend)).toThrow(MachineProblem);
+      expect(() => workerGit(["status"], world.clones.backend)).toThrow("could not start git: not found on PATH");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    expect(() => workerGit(["nope"], world.clones.backend)).toThrow(/Command failed/);
 
     world.config.notify.command = "notify-me";
     const calls: Calls = { gh: [], claude: [], setup: [] };

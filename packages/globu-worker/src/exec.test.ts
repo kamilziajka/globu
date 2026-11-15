@@ -2,7 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../../testing/index.js";
-import { notStarted, runOrThrow, spawnRunner } from "./exec.js";
+import {
+  endedByWindows,
+  MachineProblem,
+  machineFailure,
+  notStarted,
+  type Runner,
+  runOrThrow,
+  spawnRunner
+} from "./exec.js";
 
 describe("spawnRunner", () => {
   it("captures stdout and stderr and mirrors stdout to a file", async () => {
@@ -43,8 +51,28 @@ describe("runOrThrow", () => {
       "node -e console.error('bad'); process.exit(3) failed: bad"
     );
     await expect(runOrThrow(spawnRunner, "node", ["-e", "process.exit(4)"])).rejects.toThrow("failed: exit code 4");
-    await expect(runOrThrow(spawnRunner, "globu-no-such-command", ["x"])).rejects.toThrow(
-      "globu-no-such-command x failed: could not start globu-no-such-command: not found on PATH"
-    );
+  });
+
+  it("throws a machine problem for a command that cannot start or that Windows ended", async () => {
+    const missing = runOrThrow(spawnRunner, "globu-no-such-command", ["x"]);
+    await expect(missing).rejects.toBeInstanceOf(MachineProblem);
+    await expect(missing).rejects.toThrow("could not start globu-no-such-command: not found on PATH");
+    const ended: Runner = async () => ({ code: 3221225794, stdout: "", stderr: "", timedOut: false });
+    const torn = runOrThrow(ended, "gh", ["pr", "comment"]);
+    await expect(torn).rejects.toBeInstanceOf(MachineProblem);
+    await expect(torn).rejects.toThrow("Windows ended gh with status 0xC0000142");
+    const failed = runOrThrow(spawnRunner, "node", ["-e", "process.exit(4)"]);
+    await expect(failed).rejects.not.toBeInstanceOf(MachineProblem);
+  });
+});
+
+describe("machineFailure", () => {
+  it("names a command that did not start or ended with a Windows status, and nothing else", () => {
+    expect(machineFailure("git", { code: null, startError: "ENOENT" })).toBe("could not start git: not found on PATH");
+    expect(machineFailure("git", { code: 3221225794 })).toBe("Windows ended git with status 0xC0000142");
+    expect(endedByWindows("claude", 0xc000013a)).toBe("Windows ended claude with status 0xC000013A");
+    expect(machineFailure("git", { code: 128 })).toBeNull();
+    expect(machineFailure("git", { code: 0 })).toBeNull();
+    expect(machineFailure("git", { code: null })).toBeNull();
   });
 });

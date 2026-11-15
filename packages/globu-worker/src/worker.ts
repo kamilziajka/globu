@@ -15,7 +15,7 @@ import {
 import { type Blocker, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import { projectOf, type Secrets, scrubbedEnv, statusFor, type WorkerConfig } from "./config.js";
-import { notStarted, type Runner, runOrThrow } from "./exec.js";
+import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
 import { fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
@@ -112,7 +112,7 @@ export function git(args: string[], cwd: string): string {
     log().debug("command", { command: "git", args, cwd, code: 0, ms: Date.now() - started });
     return stdout;
   } catch (err) {
-    const failure = err as { status: number | null; stderr: string };
+    const failure = err as { status: number | null; stderr: string; code?: string };
     log().debug("command", {
       command: "git",
       args,
@@ -121,7 +121,8 @@ export function git(args: string[], cwd: string): string {
       ms: Date.now() - started,
       stderr: tail(`${failure.stderr}`)
     });
-    throw err;
+    const machine = machineFailure("git", { code: failure.status, startError: failure.code });
+    throw machine === null ? err : new MachineProblem(machine);
   }
 }
 
@@ -395,6 +396,11 @@ function environmentProblem(record: RunRecord, reason: string): string {
   return reason;
 }
 
+function failureOf(record: RunRecord, err: unknown): string {
+  const { message } = err as Error;
+  return err instanceof MachineProblem ? environmentProblem(record, message) : `worker error: ${message}`;
+}
+
 export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: Worktree[]): Promise<string | null> {
   const { config } = deps;
   const steps = worktrees.flatMap((worktree) =>
@@ -411,7 +417,7 @@ export async function runSetup(deps: WorkerDeps, record: RunRecord, worktrees: W
       timeoutMs: config.limits.timeout
     });
     if (result.code === 0 && !result.timedOut) continue;
-    const start = notStarted(shell, result);
+    const start = machineFailure(shell, result);
     if (start !== null)
       return environmentProblem(record, `setup command "${command}" in ${worktree.shard.id}: ${start}`);
     const outcome = result.timedOut ? "timed out" : `exited with ${result.code}`;
@@ -591,7 +597,7 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   const { config, jira } = deps;
   const { record, dir, worktrees, target, handbackFile } = prepared;
   const commits = commitsOn(target);
-  const unstarted = outcome === null ? null : notStarted("claude", outcome);
+  const unstarted = outcome === null ? null : machineFailure("claude", outcome);
   if (unstarted !== null) return await release(deps, record, environmentProblem(record, unstarted));
   const written = readHandback(handbackFile);
   if (outcome?.timedOut) {
@@ -653,7 +659,7 @@ async function runOne(deps: WorkerDeps, candidate: Candidate, record: RunRecord,
     const outcome = await execute(deps, prepared);
     return await conclude(deps, prepared, outcome);
   } catch (err) {
-    return await release(deps, record, `worker error: ${(err as Error).message}`);
+    return await release(deps, record, failureOf(record, err));
   } finally {
     discard(dir, worktrees);
     persist(deps, dir, record);
@@ -680,7 +686,7 @@ export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimRe
   try {
     prepared = await prepare(deps, { issue, shardId: markerShard(issue, config) }, record, dir, worktrees);
   } catch (err) {
-    await release(deps, record, `worker error: ${(err as Error).message}`);
+    await release(deps, record, failureOf(record, err));
   } finally {
     if (prepared === null) discard(dir, worktrees);
     persist(deps, dir, record);
@@ -717,7 +723,7 @@ export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord
   try {
     await conclude(deps, prepared, null);
   } catch (err) {
-    await release(deps, record, `worker error: ${(err as Error).message}`);
+    await release(deps, record, failureOf(record, err));
   } finally {
     discard(dir, worktrees);
     persist(deps, dir, record);
@@ -901,7 +907,7 @@ async function attemptRepair(
     const handbackFile = path.join(dir, "handback.md");
     fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
     const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile));
-    const unstarted = notStarted("claude", outcome);
+    const unstarted = machineFailure("claude", outcome);
     if (unstarted !== null) return environmentProblem(record, unstarted);
     if (outcome.timedOut) return `timed out after ${minutes(deps.config.limits.timeout)}`;
     if (conflictedFiles(tree).length > 0) return "conflicts are left unresolved";
@@ -950,7 +956,7 @@ export async function repairPullRequest(
     record.branch = pull.head;
     problem = await attemptRepair(deps, record, dir, shard, pull, original.dir, worktrees, token);
   } catch (err) {
-    problem = `worker error: ${(err as Error).message}`;
+    problem = failureOf(record, err);
   } finally {
     discard(dir, worktrees);
   }

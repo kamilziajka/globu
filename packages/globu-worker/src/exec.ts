@@ -41,11 +41,25 @@ export function notStarted(command: string, result: { startError?: string }): st
   return `could not start ${command}: ${why}`;
 }
 
+const NTSTATUS_ERROR = 0xc0000000;
+
+export function endedByWindows(command: string, code: number | null): string | null {
+  if (code === null || code < NTSTATUS_ERROR) return null;
+  return `Windows ended ${command} with status 0x${code.toString(16).toUpperCase()}`;
+}
+
+export function machineFailure(command: string, result: { code: number | null; startError?: string }): string | null {
+  return notStarted(command, result) ?? endedByWindows(command, result.code);
+}
+
+export class MachineProblem extends Error {}
+
 export async function runOrThrow(run: Runner, command: string, args: string[], options?: RunOptions): Promise<string> {
   const result = await run(command, args, options);
   if (result.code !== 0) {
-    const reason = notStarted(command, result) ?? result.stderr.trim();
-    throw new Error(`${command} ${args.join(" ")} failed: ${reason || `exit code ${result.code}`}`);
+    const machine = machineFailure(command, result);
+    if (machine !== null) throw new MachineProblem(machine);
+    throw new Error(`${command} ${args.join(" ")} failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
   }
   return result.stdout.trim();
 }
