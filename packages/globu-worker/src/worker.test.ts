@@ -215,6 +215,7 @@ type Script = {
   ghFails?: boolean;
   ghEnded?: boolean;
   ghLoginFails?: boolean;
+  labelFails?: boolean;
   startError?: string;
   setup?: { code?: number | null; timedOut?: boolean; stdout?: string; stderr?: string; startError?: string };
 };
@@ -259,6 +260,9 @@ function fakeRunner(script: Script, calls: Calls): Runner {
       calls.gh.push(args);
       if (args[0] === "api") {
         return { code: script.ghLoginFails ? 1 : 0, stdout: "octocat\n", stderr: "", timedOut: false };
+      }
+      if (script.labelFails && (args[0] === "label" || args[1] === "edit")) {
+        return { code: 1, stdout: "", stderr: "HTTP 403: Resource not accessible\n", timedOut: false };
       }
       if (script.ghFails) return { code: 1, stdout: "", stderr: "label not found", timedOut: false };
       if (script.ghEnded) return { code: 3221225794, stdout: "", stderr: "", timedOut: false };
@@ -472,6 +476,47 @@ describe("once", () => {
     expect(partial.result.runs[0]).toMatchObject({ state: "handed-back", outcome: "partial" });
     expect(notices(partial.calls)[0][3]).toBe("MR-8 handed back, partial: https://github.com/acme/pr/2");
     expect(partial.io.stdout).toContain("MR-8\thanded-back (partial) https://github.com/acme/pr/2");
+  });
+
+  it("labels the pull request of a partial or unmet hand back and only warns when the label cannot be added", async () => {
+    const labelled = (calls: Calls) => calls.gh.filter((args) => args[0] === "label" || args[1] === "edit");
+    const world = setup();
+    const partial = await notifying(world, [issue("MR-8")], {
+      commit: true,
+      handback: "## Summary\n\nOutcome: partial\n\n3 of 7 labs pass.\n"
+    });
+    expect(labelled(partial.calls)).toEqual([
+      ["label", "create", "partial", "--color", "FBCA04", "--description", "Merging it leaves the issue open"],
+      ["pr", "edit", "https://github.com/acme/pr/2", "--add-label", "partial"]
+    ]);
+    fs.rmSync(runsDir(world.home), { recursive: true });
+    const met = await notifying(world, [issue("MR-9")], { commit: true, handback: "Outcome: met\n" });
+    expect(labelled(met.calls)).toEqual([]);
+    fs.rmSync(runsDir(world.home), { recursive: true });
+    const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
+    setLogger({ ...silentLogger, warn: (msg, fields) => warnings.push({ msg, fields }) });
+    try {
+      const refused = await notifying(world, [issue("MR-10")], {
+        commit: true,
+        handback: "Outcome: not met\n",
+        labelFails: true
+      });
+      expect(refused.result.runs[0]).toMatchObject({ state: "handed-back", outcome: "not met" });
+      expect(labelled(refused.calls)).toHaveLength(2);
+      expect(warnings).toEqual([
+        {
+          msg: "partial label not added",
+          fields: {
+            run: refused.result.runs[0].id,
+            key: "MR-10",
+            pullRequest: "https://github.com/acme/pr/2",
+            error: "HTTP 403: Resource not accessible"
+          }
+        }
+      ]);
+    } finally {
+      setLogger(silentLogger);
+    }
   });
 
   it("notifies on a hand back, keeps the subscription figure and claims nothing past its limit", async () => {

@@ -379,6 +379,17 @@ describe("loadWorkerConfig for a version 2 file", () => {
     expect(defaultClaude(config)).toMatchObject({ model: "claude-sonnet-5-5", maxTurns: 40, skill: "issue-deliver" });
   });
 
+  it("takes the status of a partial merge from the defaults or the project", () => {
+    const config = v2(V2.replace("defaults:\n", "defaults:\n  statuses: { partial: Partly done }\n"), {
+      ...PROJECTS,
+      sandbox: { ...PROJECTS.sandbox, worker: { statuses: { claimed: "Doing", released: "Open", partial: "Review" } } }
+    });
+    const [klayboy, sandbox] = config.projects;
+    expect(settingsFor(config, klayboy).statuses).toEqual({ ...STATUSES, partial: "Partly done" });
+    expect(settingsFor(config, sandbox).statuses).toEqual({ claimed: "Doing", released: "Open", partial: "Review" });
+    expect(settingsFor(v2(V2), klayboy).statuses.partial).toBeUndefined();
+  });
+
   it("refuses version 1 keys, unknown projects and projects it cannot serve", () => {
     expect(() => v2(`${V2}shards:\n  deliverable: [klayboy]\n`)).toThrow(/Unrecognized key: "shards"/);
     expect(() => v2(V2.replace("limits: { concurrent: 2 }", "limits: { timeout: 1h }"))).toThrow(

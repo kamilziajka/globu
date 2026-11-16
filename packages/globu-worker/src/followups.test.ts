@@ -520,6 +520,52 @@ describe("following pull requests", () => {
     expect(closed.jira.transitions).toEqual([]);
   });
 
+  it("leaves the issue of a partial merge open, or moves it to the partial status, and settles it once", async () => {
+    const setup = world();
+    fs.writeFileSync(
+      setup.configFile,
+      config("").replace(
+        "  releasedStatus: Ready for delivery",
+        "  releasedStatus: Ready for delivery\n  doneStatus: Done"
+      )
+    );
+    git(setup.remote, "branch", "-D", BRANCH);
+    const save = (patch: Partial<RunRecord>) => {
+      const record = { ...original(setup), ...patch };
+      delete record.followUp;
+      saveRun(path.join(setup.home, "runs", record.id), record);
+    };
+    save({ outcome: "partial", followUpIssues: ["MR-100"] });
+    const pulls = { [setup.url]: pull(setup.url, { state: "MERGED" }) };
+    const partial = deps(setup, { pulls });
+    await followUps(partial.worker, true);
+    expect(partial.jira.transitions).toEqual([]);
+    expect(partial.jira.comments).toEqual([
+      `Merged: ${setup.url}\n\nThe merge was partial: the run handed back with Outcome: partial, so MR-7 stays open. What is left is filed as MR-100.`
+    ]);
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+    expect(mergedIssues(setup.home, loadRuns(setup.home))).toEqual({});
+    expect(await followUps(partial.worker, true)).toEqual([]);
+    expect(partial.jira.comments).toHaveLength(1);
+
+    save({ outcome: "not met", followUpIssues: undefined });
+    const moved = deps(setup, { pulls });
+    const project = moved.worker.config.projects[0];
+    project.worker.statuses = { ...project.worker.statuses, partial: "Partly done" };
+    await followUps(moved.worker, true);
+    expect(moved.jira.transitions).toEqual(["MR-7 -> Partly done"]);
+    expect(moved.jira.comments).toEqual([
+      `Merged: ${setup.url}\n\nThe merge was partial: the run handed back with Outcome: not met, so MR-7 stays open and moves to Partly done. What is left is in its handback.`
+    ]);
+
+    save({ outcome: "met" });
+    const met = deps(setup, { pulls });
+    await followUps(met.worker, true);
+    expect(met.jira.transitions).toEqual(["MR-7 -> Done"]);
+    expect(met.jira.comments).toEqual([`Merged: ${setup.url}`]);
+    expect(Object.keys(mergedIssues(setup.home, []))).toEqual(["MR-7"]);
+  });
+
   it("leaves the pull requests and stale runs of a project it no longer serves to people", async () => {
     const setup = world();
     const stale = newRun("MR-7", NOW, { jira: "Bot", github: null });

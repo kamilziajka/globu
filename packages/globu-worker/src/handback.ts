@@ -23,6 +23,10 @@ export function parseOutcome(handback: string): HandbackOutcome | null {
   return match === null ? null : (match[1].toLowerCase() as HandbackOutcome);
 }
 
+export function unmet(outcome: HandbackOutcome | null | undefined): boolean {
+  return outcome === "partial" || outcome === "not met";
+}
+
 function heading(line: string): { depth: number; text: string } | null {
   const match = HEADING_RE.exec(line);
   return match === null ? null : { depth: match[1].length, text: match[2] };

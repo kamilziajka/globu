@@ -92,7 +92,8 @@ const SettingsPart = {
       ready: Text.optional(),
       claimed: Text.optional(),
       released: Text.optional(),
-      done: Text.optional()
+      done: Text.optional(),
+      partial: Text.optional()
     })
     .optional(),
   followUps: z
@@ -115,7 +116,13 @@ const ManifestProjectSchema = z.object({
 });
 
 const SettingsSchema = z.object({
-  statuses: z.object({ ready: Text.optional(), claimed: Text, released: Text, done: Text.optional() }),
+  statuses: z.object({
+    ready: Text.optional(),
+    claimed: Text,
+    released: Text,
+    done: Text.optional(),
+    partial: Text.optional()
+  }),
   followUps: z.object({ issueType: Text, linkType: Text.default("Relates"), max: z.number().default(10) }).optional(),
   exclusive: z.array(z.string()).default([]),
   claude: z

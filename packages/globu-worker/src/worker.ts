@@ -34,7 +34,7 @@ import {
 } from "./config.js";
 import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
-import { type Carried, fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
+import { type Carried, fileFollowUps, followUpSection, parseOutcome, unmet } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
@@ -458,6 +458,26 @@ export async function openPullRequest(
   return output.split("\n").at(-1) as string;
 }
 
+const PARTIAL_LABEL = "partial";
+
+async function labelPartial(deps: WorkerDeps, record: RunRecord, url: string, cwd: string, token: string) {
+  const env = { ...deps.env, GH_TOKEN: token };
+  const description = "Merging it leaves the issue open";
+  await deps.run("gh", ["label", "create", PARTIAL_LABEL, "--color", "FBCA04", "--description", description], {
+    cwd,
+    env
+  });
+  const added = await deps.run("gh", ["pr", "edit", url, "--add-label", PARTIAL_LABEL], { cwd, env });
+  if (added.code !== 0) {
+    log().warn("partial label not added", {
+      run: record.id,
+      key: record.key,
+      pullRequest: url,
+      error: tail(added.stderr)
+    });
+  }
+}
+
 function environmentProblem(record: RunRecord, reason: string): string {
   record.environment = true;
   return reason;
@@ -711,7 +731,9 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     const bodyFile = path.join(dir, `pull-request-${worktree.shard.id}.md`);
     fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
     const { github } = worktree === target ? settings : settingsFor(config, project, worktree.shard.id);
-    record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token, github));
+    const url = await openPullRequest(deps, worktree, title, bodyFile, token, github);
+    record.pullRequests.push(url);
+    if (unmet(met)) await labelPartial(deps, record, url, worktree.tree, token);
   }
   const filed = await fileFollowUps(
     jira,
@@ -917,18 +939,29 @@ function deleteBranch(record: RunRecord, pull: PullRequest, token: string): void
   }
 }
 
+function partialNote(record: RunRecord, status: string | undefined): string {
+  const moved = status === undefined ? "" : ` and moves to ${status}`;
+  const keys = record.followUpIssues ?? [];
+  const rest = keys.length === 0 ? "What is left is in its handback." : `What is left is filed as ${keys.join(", ")}.`;
+  return `The merge was partial: the run handed back with Outcome: ${record.outcome}, so ${record.key} stays open${moved}. ${rest}`;
+}
+
 async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[], token: string): Promise<void> {
   const { record, dir } = stored;
   const merged = pulls.some((pull) => pull.state === "MERGED");
+  const partial = merged && unmet(record.outcome);
   const urls = pulls.map((pull) => pull.url).join(" ");
   record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
   const project = projectFor(deps.config, record.key);
-  const done = project === null ? undefined : settingsFor(deps.config, project).statuses.done;
-  if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
-  await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
-  log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
+  const statuses = project === null ? undefined : settingsFor(deps.config, project).statuses;
+  const target = partial ? statuses?.partial : statuses?.done;
+  if (merged && target !== undefined) await deps.jira.transitionTo(record.key, target);
+  const note = partial ? `Merged: ${urls}\n\n${partialNote(record, target)}` : `Merged: ${urls}`;
+  await deps.jira.comment(record.key, merged ? note : `Closed without merging: ${urls}`);
+  const fields = { run: record.id, key: record.key, pullRequests: record.pullRequests };
+  log().info(merged ? "merged" : "closed", partial ? { ...fields, outcome: record.outcome } : fields);
   for (const pull of pulls) deleteBranch(record, pull, token);
-  if (merged) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
+  if (merged && !partial) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
   persist(deps, dir, record);
 }
 
