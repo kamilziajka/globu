@@ -353,14 +353,12 @@ async function release(
     await jira.transitionTo(record.key, statusesOf(config, record.key).released);
     await jira.assign(record.key, null);
     if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
-    await jira.comment(
-      record.key,
-      `Released by the Globu worker: ${reason}${machine}\n\n${handbackPart(handback)}${footer(record, deps.now())}`
-    );
   } catch (err) {
     log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
     io.err(`${record.key}: releasing failed: ${(err as Error).message}`);
   }
+  const body = `Released by the Globu worker: ${reason}${machine}\n\n${handbackPart(handback)}${footer(record, deps.now())}`;
+  await postComments(deps, record, [{ on: "issue", target: record.key, body }]);
   if (!record.environment) {
     await tell(deps, record, "released", issueUrl(config, record.key), `${record.key} released: ${oneLine(reason)}`);
   }
@@ -758,14 +756,19 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
   const section = followUpSection(filed);
-  await jira.comment(
-    issue.key,
-    `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`
-  );
-  forgetFiled(deps.home, issue.key);
-  for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
+  const body = `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`;
   record.state = "handed-back";
   endRun(record, deps.now());
+  await deliver(deps, dir, record, [
+    { on: "issue", target: issue.key, body },
+    ...record.pullRequests.map((url) => ({
+      on: "link" as const,
+      target: issue.key,
+      url,
+      title: `Pull request for ${issue.key}`
+    }))
+  ]);
+  forgetFiled(deps.home, issue.key);
   log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests, outcome: met });
   const message = `${record.key} handed back${met === null ? "" : `, ${met}`}: ${record.pullRequests.join(" ")}`;
   await tell(deps, record, "handed-back", record.pullRequests[0], message);
@@ -807,6 +810,7 @@ function pullNumber(record: RunRecord): string {
 
 export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {
   const { jira, io, home } = deps;
+  await postUnposted(deps);
   const me = await jira.myself();
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: await githubLogin(deps) };
   const issue = await jira.issue(key);
@@ -857,6 +861,7 @@ function preparedRun(deps: WorkerDeps, id: string): Prepared {
 }
 
 export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord> {
+  await postUnposted(deps);
   const prepared = preparedRun(deps, id);
   const { record, dir, worktrees } = prepared;
   try {
@@ -872,6 +877,7 @@ export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord
 }
 
 export async function releaseRun(deps: WorkerDeps, id: string, reason: string): Promise<RunRecord> {
+  await postUnposted(deps);
   const { dir, record } = loadRun(deps.home, id);
   if (isTerminal(record.state)) throw new Error(`run ${id} is already ${record.state}`);
   const worktrees = restoreWorktrees(record);
@@ -964,15 +970,15 @@ async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[],
   record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
   const project = projectFor(deps.config, record.key);
   const statuses = project === null ? undefined : settingsFor(deps.config, project).statuses;
-  const target = partial ? statuses?.partial : statuses?.done;
-  if (merged && target !== undefined) await deps.jira.transitionTo(record.key, target);
-  const note = partial ? `Merged: ${urls}\n\n${partialNote(record, target)}` : `Merged: ${urls}`;
-  await deps.jira.comment(record.key, merged ? note : `Closed without merging: ${urls}`);
+  const status = partial ? statuses?.partial : statuses?.done;
+  if (merged && status !== undefined) await deps.jira.transitionTo(record.key, status);
   const fields = { run: record.id, key: record.key, pullRequests: record.pullRequests };
   log().info(merged ? "merged" : "closed", partial ? { ...fields, outcome: record.outcome } : fields);
   for (const pull of pulls) deleteBranch(record, pull, token);
   if (merged && !partial) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
-  persist(deps, dir, record);
+  const note = partial ? `Merged: ${urls}\n\n${partialNote(record, status)}` : `Merged: ${urls}`;
+  const body = merged ? note : `Closed without merging: ${urls}`;
+  await deliver(deps, dir, record, [{ on: "issue", target: record.key, body }]);
 }
 
 export async function followUps(deps: WorkerDeps, apply: boolean): Promise<FollowUpRow[]> {
@@ -1122,34 +1128,42 @@ async function noteRepair(deps: WorkerDeps, url: string, token: string, body: st
   if (label !== undefined) await deps.run("gh", ["pr", "edit", url, "--add-label", label], { env });
 }
 
-async function postComments(
-  deps: WorkerDeps,
-  record: RunRecord,
-  token: string,
-  comments: UnpostedComment[]
-): Promise<void> {
+async function postOne(deps: WorkerDeps, comment: UnpostedComment): Promise<void> {
+  if (comment.on === "issue") return await deps.jira.comment(comment.target, comment.body);
+  if (comment.on === "link") return await deps.jira.remoteLink(comment.target, comment.url, comment.title);
+  const token = deps.secrets.githubToken;
+  if (token === null) throw new Error("set GH_TOKEN to comment on pull requests");
+  await noteRepair(deps, comment.target, token, comment.body, comment.label);
+}
+
+async function postComments(deps: WorkerDeps, record: RunRecord, comments: UnpostedComment[] = []): Promise<void> {
   const unposted: UnpostedComment[] = [];
-  for (const comment of comments) {
+  for (const comment of [...(record.unposted ?? []), ...comments]) {
     try {
-      if (comment.on === "issue") await deps.jira.comment(comment.target, comment.body);
-      else await noteRepair(deps, comment.target, token, comment.body, comment.label);
+      await postOne(deps, comment);
     } catch (err) {
       const error = (err as Error).message;
+      const what = comment.on === "link" ? `link ${comment.url} to ${comment.target}` : `comment on ${comment.target}`;
       unposted.push(comment);
       log().warn("comment not posted", { run: record.id, key: record.key, target: comment.target, error });
-      deps.io.err(`globu-worker: could not comment on ${comment.target}, the next cycle tries again: ${error}`);
+      deps.io.err(`globu-worker: could not ${what}, the next cycle tries again: ${error}`);
     }
   }
   if (unposted.length > 0) record.unposted = unposted;
   else delete record.unposted;
 }
 
+async function deliver(deps: WorkerDeps, dir: string, record: RunRecord, comments: UnpostedComment[]): Promise<void> {
+  record.unposted = [...(record.unposted ?? []), ...comments];
+  persist(deps, dir, record);
+  await postComments(deps, record);
+  persist(deps, dir, record);
+}
+
 async function postUnposted(deps: WorkerDeps): Promise<void> {
-  const token = deps.secrets.githubToken;
-  if (token === null) return;
   for (const { dir, record } of loadRuns(deps.home)) {
     if (record.unposted === undefined) continue;
-    await postComments(deps, record, token, record.unposted);
+    await postComments(deps, record);
     saveRun(dir, record);
   }
 }
@@ -1192,8 +1206,7 @@ export async function repairPullRequest(
   if (problem === null) {
     record.state = "handed-back";
     log().info("repaired", { run: record.id, key: record.key, pullRequest: url });
-    persist(deps, dir, record);
-    await postComments(deps, record, token, [
+    await deliver(deps, dir, record, [
       { on: "pull", target: url, body: `Repaired by the Globu worker.\n\n${run}` },
       { on: "issue", target: record.key, body: `Repaired ${url}.\n\n${run}` }
     ]);
@@ -1207,8 +1220,7 @@ export async function repairPullRequest(
     const body = `The Globu worker could not repair this pull request: ${problem}. ${next}\n\n${run}`;
     original.record.followUp = { repairs, state: exhausted ? "needs-human" : "open" };
     persist(deps, original.dir, original.record);
-    persist(deps, dir, record);
-    await postComments(deps, record, token, [
+    await deliver(deps, dir, record, [
       { on: "pull", target: url, body, ...(exhausted ? { label: "needs-human" } : {}) },
       { on: "issue", target: record.key, body }
     ]);
@@ -1294,8 +1306,8 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: null as string | null };
   const dryRun = options.dryRun === true;
   if (!dryRun) {
-    await reconcile(deps, me);
     await postUnposted(deps);
+    await reconcile(deps, me);
     const pruned = pruneRuns(home, config.limits.keepRuns, deps.now());
     if (pruned.length > 0) log().info("pruned", { runs: pruned, keep: config.limits.keepRuns });
     identity.github = await githubLogin(deps);

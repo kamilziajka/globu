@@ -5,7 +5,9 @@ import { mergedIssues, mergedRun, saveMerged } from "./merged.js";
 export type RunState = "claimed" | "resolving" | "prepared" | "running" | "pushing" | "handed-back" | "released";
 export type RunDriver = "worker" | "session";
 export type StoredWorktree = { shard: string; tree: string; branch: string; base: string };
-export type UnpostedComment = { on: "pull" | "issue"; target: string; body: string; label?: string };
+export type UnpostedComment =
+  | { on: "pull" | "issue"; target: string; body: string; label?: string }
+  | { on: "link"; target: string; url: string; title: string };
 export type DeniedCall = { call: string; reason?: string; note?: string };
 export type FollowUp = { state: "open" | "merged" | "closed" | "needs-human"; repairs: number };
 export type RunRecord = {

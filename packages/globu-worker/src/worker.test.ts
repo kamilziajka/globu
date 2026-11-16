@@ -1222,24 +1222,49 @@ describe("once", () => {
     );
   });
 
-  it("does not file the follow-ups again when the comment failed and a later run hands back", async () => {
+  it("hands back when Jira refuses the handback comment and its links, and a later cycle posts them once", async () => {
     const world = setup();
     world.config.projects[0].worker.followUps = { issueType: "Task" };
     const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Add retries to the client\n- Rename the flag\n";
-    const failed = await runWith(world, [issue("MR-7")], { commit: true, handback }, { jira: { failHandback: true } });
-    expect(failed.record?.state).toBe("released");
-    expect(failed.record?.reason).toContain("Jira POST /issue/MR-7/comment failed: 500");
-    expect(failed.record?.followUpIssues).toEqual(["MR-101", "MR-102"]);
-    expect(filedFor(world.home, "MR-7").map((entry) => entry.key)).toEqual(["MR-101", "MR-102"]);
-
-    const retry = await runWith(world, [issue("MR-7", { summary: "Change x again" })], { commit: true, handback });
-    expect(retry.record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
-    expect(retry.jira.created).toEqual([]);
-    expect(retry.jira.issueLinks).toEqual([]);
-    expect(retry.jira.comments["MR-7"][0]).toContain(
-      "Follow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
+    const jira = fakeJira([issue("MR-7")], { failHandback: true });
+    jira.remoteLink = async () => {
+      throw new Error("Jira POST /issue/MR-7/remotelink failed: 503");
+    };
+    const { worker, io } = deps(world, jira, fakeRunner({ commit: true, handback }, { gh: [], claude: [] }));
+    const record = (await once(worker)).runs[0];
+    const url = record.pullRequests[0];
+    expect(record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
+    const stored = () => loadRuns(world.home).find((entry) => entry.record.id === record.id)?.record as RunRecord;
+    expect(stored()).toMatchObject({ state: "handed-back", pullRequests: [url] });
+    expect(stored().unposted).toEqual([
+      {
+        on: "issue",
+        target: "MR-7",
+        body: expect.stringContaining(`MR-102: Rename the flag\n\nPull requests:\n- ${url}`)
+      },
+      { on: "link", target: "MR-7", url, title: "Pull request for MR-7" }
+    ]);
+    expect(io.stderr).toContain(
+      "globu-worker: could not comment on MR-7, the next cycle tries again: Jira POST /issue/MR-7/comment failed: 500"
     );
+    expect(io.stderr).toContain(
+      `globu-worker: could not link ${url} to MR-7, the next cycle tries again: Jira POST /issue/MR-7/remotelink failed: 503`
+    );
+    expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", assignee: "bot" });
+    expect(jira.store.get("MR-7")?.labels).not.toContain("agent-blocked");
     expect(filedFor(world.home, "MR-7")).toEqual([]);
+
+    const later = fakeJira([]);
+    await once(deps(world, later, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(later.comments["MR-7"]).toEqual([expect.stringContaining("Follow-up issues:\n- MR-101: Add retries")]);
+    expect(later.links["MR-7"]).toEqual([url]);
+    expect(stored().unposted).toBeUndefined();
+    expect(stored().state).toBe("handed-back");
+
+    const after = fakeJira([]);
+    await once(deps(world, after, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(after.comments).toEqual({});
+    expect(after.links).toEqual({});
   });
 
   it("leaves the follow-ups in the comment only when they are not configured", async () => {
@@ -1405,6 +1430,28 @@ describe("once", () => {
     );
     expect(record?.state).toBe("released");
     expect(io.stderr).toContain("MR-1: releasing failed: no transition");
+  });
+
+  it("keeps a release comment Jira refuses and posts it on a later cycle", async () => {
+    const world = setup();
+    const jira = fakeJira([issue("MR-1", { labels: [] })]);
+    jira.comment = async () => {
+      throw new Error("Jira is down");
+    };
+    const { worker, io } = deps(world, jira, fakeRunner({}, { gh: [], claude: [] }));
+    const record = (await once(worker)).runs[0];
+    const stored = () => loadRuns(world.home).find((entry) => entry.record.id === record.id)?.record as RunRecord;
+    expect(stored()).toMatchObject({
+      state: "released",
+      unposted: [{ on: "issue", target: "MR-1", body: expect.stringContaining("Released by the Globu worker") }]
+    });
+    expect(jira.store.get("MR-1")).toMatchObject({ status: "Ready for delivery", labels: ["agent-blocked"] });
+    expect(io.stderr).toContain("globu-worker: could not comment on MR-1, the next cycle tries again: Jira is down");
+
+    const later = fakeJira([]);
+    await once(deps(world, later, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(later.comments["MR-1"]).toEqual([expect.stringContaining("Released by the Globu worker")]);
+    expect(stored().unposted).toBeUndefined();
   });
 
   it("notes a lost claim and takes a named issue that is already claimed", async () => {

@@ -406,7 +406,11 @@ describe("following pull requests", () => {
 
     const tokenless = deps(setup, { pulls: {} }, null);
     await once(tokenless.worker);
-    expect(stored().unposted).toHaveLength(2);
+    expect(stored().unposted).toEqual([expect.objectContaining({ on: "pull", target: setup.url })]);
+    expect(tokenless.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
+    expect(tokenless.io.stderr).toContain(
+      `globu-worker: could not comment on ${setup.url}, the next cycle tries again: set GH_TOKEN to comment on pull requests`
+    );
 
     const second = deps(setup, { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } });
     await once(second.worker);
@@ -419,7 +423,7 @@ describe("following pull requests", () => {
       "--body",
       expect.stringContaining("could not repair")
     ]);
-    expect(second.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
+    expect(second.jira.comments).toEqual([]);
   });
 
   it("prints a repair as repaired or repair failed, and says which issue waits for the slot it took", async () => {
@@ -489,6 +493,35 @@ describe("following pull requests", () => {
     expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
     expect(git(clone, "branch", "--all", "--list", `*${BRANCH}`)).toBe("");
     expect(await followUps(worker, true)).toEqual([]);
+  });
+
+  it("settles a merge when Jira refuses the comment, and a later cycle posts the comment once", async () => {
+    const setup = world();
+    const merged = { pulls: { [setup.url]: pull(setup.url, { state: "MERGED" }) } };
+    const first = deps(setup, merged);
+    first.jira.comment = async () => {
+      throw new Error("Jira is down");
+    };
+    await followUps(first.worker, true);
+    expect(original(setup)).toMatchObject({
+      followUp: { repairs: 0, state: "merged" },
+      unposted: [{ on: "issue", target: "MR-7", body: `Merged: ${setup.url}` }]
+    });
+    expect(mergedIssues(setup.home, [])).toHaveProperty("MR-7");
+    expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
+    expect(first.io.stderr).toContain(
+      "globu-worker: could not comment on MR-7, the next cycle tries again: Jira is down"
+    );
+
+    const second = deps(setup, merged);
+    await once(second.worker);
+    expect(second.jira.comments).toEqual([`Merged: ${setup.url}`]);
+    expect(second.calls.gh.filter((args) => args[1] === "view")).toEqual([]);
+    expect(original(setup).unposted).toBeUndefined();
+
+    const third = deps(setup, merged);
+    await once(third.worker);
+    expect(third.jira.comments).toEqual([]);
   });
 
   it("deletes only the branch it created and logs a branch it cannot delete", async () => {
