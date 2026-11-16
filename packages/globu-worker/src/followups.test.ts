@@ -11,7 +11,8 @@ import { setLogger, silentLogger } from "./logger.js";
 import { mergedIssues } from "./merged.js";
 import { loadRun, loadRuns, newRun, type RunRecord, saveRun } from "./runs.js";
 import { start } from "./start.js";
-import { type FollowUpRow, followUps, once, type WorkerDeps } from "./worker.js";
+import { recordUsage } from "./subscription.js";
+import { type FollowUpRow, followUps, loop, once, type WorkerDeps } from "./worker.js";
 
 const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
@@ -565,6 +566,32 @@ describe("following pull requests", () => {
       setLogger(silentLogger);
     }
     expect(seenDuringTheRun).toBe(true);
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+  });
+
+  it("settles a merge while a limit holds, and says the hold when it starts and when it ends", async () => {
+    const setup = world();
+    const merged = pull(setup.url, { state: "MERGED" });
+    const { worker, jira: fake, io } = deps(setup, { pulls: { [setup.url]: merged } });
+    recordUsage(setup.home, [{ window: "five_hour", utilization: 0.82, resetsAt: "2026-11-13T15:00:00.000Z" }], NOW);
+    const held =
+      "subscription limit reached: the subscription's five-hour window is at 82 %, the limit is 70 %, it resets at 2026-11-13 15:00 UTC, claiming nothing\n";
+
+    for (const options of [{ dryRun: true }, { issue: "MR-9" }, { repair: setup.url }]) await once(worker, options);
+    expect(io.stdout).toBe(held.repeat(3));
+    expect(fake.comments).toEqual([]);
+
+    io.stdout = "";
+    let pauses = 0;
+    await loop(worker, {
+      sleep: async () => {
+        pauses += 1;
+        if (pauses === 2) worker.now = () => new Date("2026-11-13T15:00:01.000Z");
+      },
+      stopped: () => pauses >= 3
+    });
+    expect(io.stdout).toBe(`${held}the subscription limit no longer holds, claiming again\nnothing eligible\n`);
+    expect(fake.comments).toEqual([`Merged: ${setup.url}`]);
     expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
   });
 

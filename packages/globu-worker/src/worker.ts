@@ -75,7 +75,9 @@ export type WorkerDeps = {
   onPlan?: (plan: PlanEntry[]) => void;
   onFollowUps?: (rows: FollowUpRow[]) => void;
 };
-export type OnceOptions = { dryRun?: boolean; issue?: string; repair?: string };
+export type LimitHold = { kind: "day cap" | "subscription limit"; line: string; detail: Record<string, unknown> };
+export type SaidHold = { current: LimitHold | null };
+export type OnceOptions = { dryRun?: boolean; issue?: string; repair?: string; hold?: SaidHold };
 export type FollowUpRow = {
   run: string;
   key: string;
@@ -1170,6 +1172,20 @@ export function projectHolds(deps: WorkerDeps, holder: string): ProjectHolds {
   };
 }
 
+function limitHold(deps: WorkerDeps): LimitHold | null {
+  const { config, home } = deps;
+  const spent = spentOn(loadRuns(home), deps.now());
+  if (spent >= config.limits.dayUsd) {
+    const line = `day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`;
+    return { kind: "day cap", line, detail: { capUsd: config.limits.dayUsd, spentUsd: spent } };
+  }
+  const limit = config.limits.subscription;
+  const usage = overLimit(currentUsage(home, deps.env, deps.now()), limit);
+  if (usage === null) return null;
+  const line = `subscription limit reached: ${holdReason(usage, limit)}, claiming nothing`;
+  return { kind: "subscription limit", line, detail: { ...usage, limit } };
+}
+
 export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise<OnceResult> {
   const holds = projectHolds(deps, "globu-worker");
   try {
@@ -1192,18 +1208,20 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds
     if (pruned.length > 0) log().info("pruned", { runs: pruned, keep: config.limits.keepRuns });
     identity.github = await githubLogin(deps);
   }
-  const spent = spentOn(loadRuns(home), deps.now());
-  if (spent >= config.limits.dayUsd) {
-    log().warn("day cap reached", { capUsd: config.limits.dayUsd, spentUsd: spent });
-    io.out(`day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`);
+  const hold = limitHold(deps);
+  const said = options.hold?.current ?? null;
+  if (options.hold !== undefined) options.hold.current = hold;
+  if (hold !== null) {
+    if (said?.line !== hold.line) {
+      log().warn(`${hold.kind} reached`, hold.detail);
+      io.out(hold.line);
+    }
+    if (!dryRun && options.issue === undefined && options.repair === undefined) await followUps(deps, true);
     return { runs: [], plan: [] };
   }
-  const limit = config.limits.subscription;
-  const usage = overLimit(currentUsage(home, deps.env, deps.now()), limit);
-  if (usage !== null) {
-    log().warn("subscription limit reached", { ...usage, limit });
-    io.out(`subscription limit reached: ${holdReason(usage, limit)}, claiming nothing`);
-    return { runs: [], plan: [] };
+  if (said !== null) {
+    log().info("hold over", { kind: said.kind });
+    io.out(`the ${said.kind} no longer holds, claiming again`);
   }
   if (options.repair !== undefined) {
     const url = options.repair;
@@ -1322,9 +1340,10 @@ export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
+  const hold: SaidHold = { current: null };
   for (;;) {
     try {
-      const broken = (await once(deps)).runs.find((record) => record.environment);
+      const broken = (await once(deps, { hold })).runs.find((record) => record.environment);
       if (broken !== undefined) {
         log().error("stopping", { run: broken.id, reason: broken.reason });
         deps.io.err(`globu-worker: stopping, the machine needs fixing first: ${broken.reason}`);

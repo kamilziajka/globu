@@ -1,5 +1,8 @@
 # Knowledge base update log
 
+## 2026-11-16
+* [globu-worker](./worker.md#the-subscription-limit): a cycle held by `limits.subscription` or `limits.dayUsd` still settles merged and closed pull requests, and `run` and a headless `start` say the hold once when it starts and once when it ends instead of every cycle. The docs now say that both limits are points to stop at and not ceilings, since they are checked before a cycle starts work and never during a run, and that the subscription windows are shared with the owner's own sessions while the worker sees only the figure of its last run.
+
 ## 2026-11-15
 * [Development](./development.md#releasing): the release's record step comments on every GLOBU Jira issue that shipped and moves it to Done when nothing is left open, through `twg`; the work items moved from files in globu-knowledge-base to the Jira project GLOBU on `kazet.atlassian.net`. The release skill says the same.
 * [globu-worker](./worker.md#from-a-session): `poll`, `claim`, `finish` and `release` read the projects from the manifest of the session's home, so a person's home needs no `worker.yaml` beyond `version: 2` and the Jira site. In a session only the project of the issue at hand is checked: its shards must be editable, `ask` mode is enough, and `poll` lists an issue whose project has no usable clone as skipped instead of refusing to poll. The `issue-work` and `issue-watch` skills in [plugin skills](./skills.md) say where the projects come from, that the poll covers every project with a Jira key and what the other worktrees of a claim are.
