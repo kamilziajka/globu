@@ -230,6 +230,9 @@ describe("following pull requests", () => {
       "so run one command per call and read or change files with Read, Edit, Write, Grep and Glob"
     );
     expect(brief).toContain("`git stash` is denied");
+    expect(brief).toContain(
+      "`globu base stamp --verified` is denied because a verification needs a person.\n\nClaude Code stops a command started with `run_in_background` when its `timeout` runs out. In this run that `timeout` can be at most 2 hours"
+    );
     expect(calls.claude[0].prompt).toContain("Repair the pull request described in");
     expect(calls.claude[0].env.JIRA_API_TOKEN).toBeUndefined();
     expect(calls.gh.find((args) => args[1] === "comment")?.[4]).toContain("Repaired by the Globu worker.");

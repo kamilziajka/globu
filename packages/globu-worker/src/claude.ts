@@ -12,6 +12,17 @@ export type ClaudeInvocation = {
   pluginDir?: string;
 };
 
+export const BACKGROUND_CAP_MS = 2 * 60 * 60_000;
+export const LONGEST_TIMEOUT_MS = 2_147_483_647;
+
+export function backgroundCap(timeoutMs: number): number {
+  return Math.min(Math.max(BACKGROUND_CAP_MS, timeoutMs), LONGEST_TIMEOUT_MS);
+}
+
+export function backgroundEnv(timeoutMs: number): NodeJS.ProcessEnv {
+  return timeoutMs > BACKGROUND_CAP_MS ? { BASH_MAX_TIMEOUT_MS: String(backgroundCap(timeoutMs)) } : {};
+}
+
 export function claudeArgs(invocation: ClaudeInvocation): string[] {
   return [
     "-p",

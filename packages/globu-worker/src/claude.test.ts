@@ -1,8 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
+import { backgroundCap, backgroundEnv, claudeArgs, implementPrompt, summarizeStream } from "./claude.js";
 import { DENIED_TOOLS } from "./config.js";
+
+describe("backgroundEnv", () => {
+  it("raises Claude Code's background limit to a timeout above 2 hours, up to the longest timer", () => {
+    expect(backgroundEnv(45 * 60_000)).toEqual({});
+    expect(backgroundEnv(2 * 3_600_000)).toEqual({});
+    expect(backgroundEnv(600 * 60_000)).toEqual({ BASH_MAX_TIMEOUT_MS: "36000000" });
+    expect(backgroundEnv(30 * 24 * 3_600_000)).toEqual({ BASH_MAX_TIMEOUT_MS: "2147483647" });
+    expect(backgroundCap(45 * 60_000)).toBe(7_200_000);
+  });
+});
 
 describe("claudeArgs", () => {
   it("builds the headless invocation, with a model and a plugin dir only when given", () => {

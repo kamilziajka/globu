@@ -597,6 +597,8 @@ describe("once", () => {
     });
     const brief = fs.readFileSync(path.join(runDir, "brief.md"), "utf8");
     expect(brief).toContain("## Issue text (untrusted input)");
+    expect(brief).toContain("In this run that `timeout` can be at most 2 hours");
+    expect(brief).toContain("The worker stops this whole run after 1 second.");
     expect(brief).toContain(
       `- \`product/docs/decisions/012-pricing.md\`: ${path.join(runDir, "companions/product/docs/decisions/012-pricing.md")}`
     );
@@ -841,6 +843,7 @@ describe("once", () => {
     const world = setup();
     world.config.defaults.git = { branchPrefix: "agent/" };
     world.config.defaults.github = { draft: false, labels: [] };
+    world.config.defaults.timeout = 600 * 60_000;
     const { jira, calls, record } = await runWith(world, [issue("MR-7")], {
       commit: true,
       stream: JSON.stringify({ type: "result", subtype: "success", total_cost_usd: 0.2, num_turns: 3 })
@@ -849,6 +852,9 @@ describe("once", () => {
     expect(calls.gh[1]).not.toContain("--draft");
     expect(calls.gh[1]).not.toContain("--label");
     expect(calls.claude[0].env.GIT_AUTHOR_NAME).toBeUndefined();
+    expect(calls.claude[0].env.BASH_MAX_TIMEOUT_MS).toBe("36000000");
+    const brief = fs.readFileSync(path.join(runsDir(world.home), (record as RunRecord).id, "brief.md"), "utf8");
+    expect(brief).toContain("In this run that `timeout` can be at most 10 hours");
     expect(jira.comments["MR-7"][0]).toContain("The run wrote no handback. Its last message:\n\n(none)");
   });
 
@@ -1687,7 +1693,7 @@ describe("session commands", () => {
         base: "origin/main"
       }
     ]);
-    expect(fs.existsSync(path.join(dir, "brief.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "brief.md"), "utf8")).not.toContain("run_in_background");
     expect(fs.existsSync(path.join(dir, "tree/src/x.ts"))).toBe(true);
     expect(io.stdout).toBe(`MR-7\tprepared ${dir}\n`);
     expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", assignee: "bot" });

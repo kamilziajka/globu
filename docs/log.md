@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [globu-worker](./worker.md#background-commands): Claude Code stops a background command after 2 hours at most, so a run whose `timeout` is longer gets it as `BASH_MAX_TIMEOUT_MS` and a background command may last as long as the run. The delivery and repair briefs state the cap and `check` notes a `timeout` past the longest Claude Code takes.
 * [globu-worker](./worker.md#denied-tool-calls): each denied tool call in `run.json` keeps Claude Code's reason and the worker's note on whether a rule in `allowedTools` covers it, so a call denied for a path outside the run's directories is told apart from one no rule allows. `why` and the footer show them.
 * [globu-worker](./worker.md#a-command-with-an-env-variable): a Bash rule is matched against the whole command text, so a command with a variable in front needs a rule that starts with the assignment, such as `Bash(NAME=* node *)`, except for the variables Claude Code treats as safe. The brief tells the run the same and points to an option or a file such as `node --env-file`.
 * [globu-worker](./worker.md#follow-up-issues): a follow-up carries the original's repository marker, a marker label with the other labels and a marker field with the original's value, and is filed again without the field when Jira refuses it. The [repair brief](./worker.md#following-its-pull-requests) carries the delivery brief's Bash rules for the shard's `allowedTools`.

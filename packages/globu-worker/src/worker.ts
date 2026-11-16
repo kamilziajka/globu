@@ -12,8 +12,15 @@ import {
   resolveRefs,
   sameRepo
 } from "../../globu-core/src/index.js";
-import { type Blocker, bashRules, renderBrief } from "./brief.js";
-import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
+import { type Blocker, backgroundRules, bashRules, renderBrief } from "./brief.js";
+import {
+  backgroundEnv,
+  type ClaudeSummary,
+  claudeArgs,
+  implementPrompt,
+  repairPrompt,
+  summarizeStream
+} from "./claude.js";
 import {
   projectFor,
   projectOf,
@@ -590,6 +597,7 @@ async function prepare(
       informational: resolved.informational.map((result) => inRunTree(result, worktrees)),
       blockers: blockers(deps, issue, loadRuns(deps.home)),
       allowedTools: settings.claude.allowedTools,
+      timeout: record.driver === "session" ? undefined : settings.timeout,
       handbackFile,
       followUps: settings.followUps !== undefined
     })
@@ -625,6 +633,7 @@ async function runClaude(
   const env = {
     ...scrubbedEnv(deps.env),
     ...authorEnv(settings.git),
+    ...backgroundEnv(settings.timeout),
     GLOBU_HOME: deps.home,
     CLAUDE_CONFIG_DIR: deps.claudeConfigDir
   };
@@ -989,7 +998,7 @@ function repairBrief(
   original: string,
   conflicted: string[],
   handbackFile: string,
-  allowedTools: string[]
+  settings: Settings
 ): string {
   const files = conflicted.length === 0 ? "none" : conflicted.map((file) => `- ${file}`).join("\n");
   const checks = pull.failing.length === 0 ? "none" : pull.failing.map((line) => `- ${line}`).join("\n");
@@ -999,7 +1008,8 @@ function repairBrief(
     `The branch \`${pull.head}\` is checked out here with \`origin/${pull.base}\` merged into it, the merge left uncommitted when it conflicted.`,
     "Keep what the pull request set out to do and fit it to what changed on the base branch. Do not rebase, do not push.",
     "",
-    bashRules(allowedTools),
+    bashRules(settings.claude.allowedTools),
+    ...backgroundRules(settings.claude.allowedTools, settings.timeout),
     "",
     "## Conflicted files",
     "",
@@ -1044,7 +1054,7 @@ async function attemptRepair(
     if (failedSetup !== null) return failedSetup;
     const briefFile = path.join(dir, "brief.md");
     const handbackFile = path.join(dir, "handback.md");
-    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile, settings.claude.allowedTools));
+    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile, settings));
     const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile), settings);
     const unstarted = machineFailure("claude", outcome);
     if (unstarted !== null) return environmentProblem(record, unstarted);
