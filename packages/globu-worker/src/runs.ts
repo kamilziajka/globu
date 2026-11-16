@@ -6,6 +6,7 @@ export type RunState = "claimed" | "resolving" | "prepared" | "running" | "pushi
 export type RunDriver = "worker" | "session";
 export type StoredWorktree = { shard: string; tree: string; branch: string; base: string };
 export type UnpostedComment = { on: "pull" | "issue"; target: string; body: string; label?: string };
+export type DeniedCall = { call: string; reason?: string; note?: string };
 export type FollowUp = { state: "open" | "merged" | "closed" | "needs-human"; repairs: number };
 export type RunRecord = {
   id: string;
@@ -27,7 +28,7 @@ export type RunRecord = {
   followUp?: FollowUp;
   followUpIssues?: string[];
   environment?: boolean;
-  denied?: string[];
+  denied?: (DeniedCall | string)[];
   durationMs?: number;
   apiMs?: number;
   segments?: number;
@@ -115,6 +116,10 @@ export function spentOn(runs: StoredRun[], day: Date): number {
   return runs
     .filter(({ record }) => record.startedAt.startsWith(prefix))
     .reduce((total, { record }) => total + record.costUsd, 0);
+}
+
+export function deniedCalls(record: RunRecord): DeniedCall[] {
+  return (record.denied ?? []).map((entry) => (typeof entry === "string" ? { call: entry } : entry));
 }
 
 export function followingUp(record: RunRecord): boolean {

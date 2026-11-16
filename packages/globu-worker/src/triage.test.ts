@@ -195,6 +195,7 @@ describe("why", () => {
       assignee: null,
       waiting: [],
       holds: [],
+      denied: null,
       action: "would claim and run in backend (0 references resolved)",
       picked: true
     });
@@ -291,6 +292,35 @@ describe("why", () => {
       limit: "concurrent",
       detail: "limits.concurrent is 2 and 2 repairs come first"
     });
+  });
+
+  it("lists the denied tool calls of the issue's last run with their reasons", async () => {
+    const { root, config } = setup();
+    const home = process.env.GLOBU_HOME as string;
+    const reason = "Permission to use Bash with command git stash list has been denied.";
+    const earlier = {
+      ...newRun("MR-1", new Date("2026-11-13T09:00:00.000Z"), { jira: "x", github: null }),
+      denied: ["Bash: x"]
+    };
+    const last: RunRecord = {
+      ...newRun("MR-1", NOW, { jira: "x", github: null }),
+      state: "released",
+      denied: ["Bash: git stash push", { call: "Bash: git stash list", reason }]
+    };
+    const other = { ...newRun("MR-2", NOW, { jira: "x", github: null }), denied: ["Bash: y"] };
+    for (const record of [earlier, last, other]) saveRun(path.join(runsDir(home), record.id), record);
+    const { worker, io } = deps(root, config, fakeJira([issue("MR-1"), issue("MR-3")]));
+    const report = await why(worker, "MR-1");
+    expect(report.denied).toEqual({
+      run: last.id,
+      calls: [{ call: "Bash: git stash push" }, { call: "Bash: git stash list", reason }]
+    });
+    expect(io.stdout).toContain(
+      `limits\tnone hold it\ndenied\t2 in run ${last.id}\ndenied\tBash: git stash push\ndenied\tBash: git stash list - ${reason}\noutcome\t`
+    );
+    expect((await why(worker, "MR-3")).denied).toBeNull();
+    saveRun(path.join(runsDir(home), last.id), { ...last, denied: undefined });
+    expect((await why(worker, "MR-1")).denied).toBeNull();
   });
 
   it("walks the queue ahead of the issue as a cycle would, for the concurrency and per-shard limits", async () => {

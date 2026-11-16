@@ -38,6 +38,8 @@ import { deliveryShards, layoutOf, othersOf, searchJql, setupShards, targetOf } 
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
+  type DeniedCall,
+  deniedCalls,
   endRun,
   followingUp,
   isTerminal,
@@ -183,6 +185,11 @@ function oneLine(text: string): string {
   return first.length < text.length || first.length > LINE_LIMIT ? `${first.slice(0, LINE_LIMIT)} …` : first;
 }
 
+export function deniedLine(denied: DeniedCall): string {
+  const why = [denied.reason, denied.note].filter((part) => part !== undefined).join(" ");
+  return why === "" ? oneLine(denied.call) : `${oneLine(denied.call)} - ${why}`;
+}
+
 function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(1)} min`;
 }
@@ -289,13 +296,13 @@ function footer(record: RunRecord, now: Date): string {
   if (record.driver === "session") {
     return `Run ${record.id} as ${record.identity.jira}${github} from a Claude Code session, ${elapsed}.`;
   }
-  const denied = record.denied ?? [];
+  const denied = deniedCalls(record);
   const segments = (record.segments ?? 1) > 1 ? ` in ${record.segments} segments` : "";
   const api = record.apiMs ? `, ${minutes(record.apiMs)} of it in the model API` : "";
   const lines = [
     `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns${segments}, ${record.costUsd.toFixed(2)} USD, ${elapsed}${api}. Blocked writes: ${record.blocked.length}. Denied tool calls: ${denied.length}.`,
     ...record.blocked.map((text) => `- ${text}`),
-    ...denied.map((text) => `- denied ${oneLine(text)}`)
+    ...denied.map((entry) => `- denied ${deniedLine(entry)}`)
   ];
   return lines.join("\n");
 }
@@ -639,7 +646,11 @@ async function runClaude(
       stdoutFile: streamFile
     }
   );
-  const summary = summarizeStream(fs.readFileSync(streamFile, "utf8"));
+  const summary = summarizeStream(
+    fs.readFileSync(streamFile, "utf8"),
+    claude.allowedTools,
+    deps.config.claude.configDir === "user"
+  );
   record.costUsd = summary.costUsd;
   record.turns = summary.turns;
   record.blocked = summary.blocked;

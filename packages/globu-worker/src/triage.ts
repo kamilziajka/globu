@@ -2,11 +2,12 @@ import { resolveAll } from "../../globu-core/src/index.js";
 import { projectFor, projectOf, requireProject, type ServedProject, settingsFor } from "./config.js";
 import { type JiraIssue, matchesStatus } from "./jira.js";
 import { searchFilter, searchJql, targetOf } from "./projects.js";
-import { loadRuns, type StoredRun, spentOn } from "./runs.js";
+import { type DeniedCall, deniedCalls, latestRuns, loadRuns, type StoredRun, spentOn } from "./runs.js";
 import { currentUsage, holdReason, overLimit } from "./subscription.js";
 import {
   candidateOf,
   checkShards,
+  deniedLine,
   dryRunAction,
   followUps,
   markerShard,
@@ -37,6 +38,7 @@ export type WhyReport = {
   assignee: string | null;
   waiting: { key: string; status: string }[];
   holds: Hold[];
+  denied: { run: string; calls: DeniedCall[] } | null;
   action: string;
   picked: boolean;
 };
@@ -166,9 +168,24 @@ function whyLines(report: WhyReport, blockedLabel: string, search: string): stri
     `assignee\t${report.assignee ?? "none"}`,
     `blockers\t${waiting === "" ? "none open" : `waiting on ${waiting}`}`,
     `limits\t${report.holds.length === 0 ? "none hold it" : report.holds.map((hold) => hold.detail).join("; ")}`,
+    ...(report.denied === null
+      ? []
+      : [
+          `denied\t${report.denied.calls.length} in run ${report.denied.run}`,
+          ...report.denied.calls.map((call) => `denied\t${deniedLine(call)}`)
+        ]),
     `outcome\t${report.action}`,
     `verdict\t${report.picked ? "the next cycle claims it" : `the next cycle leaves it: ${leftBecause(report, waiting, search)}`}`
   ];
+}
+
+function lastDenied(stored: StoredRun[], key: string): WhyReport["denied"] {
+  const [last] = latestRuns(
+    stored.filter(({ record }) => record.key === key),
+    1
+  );
+  const calls = last === undefined ? [] : deniedCalls(last.record);
+  return calls.length === 0 ? null : { run: last.record.id, calls };
 }
 
 export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
@@ -185,7 +202,8 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
   const shard = markerShard(issue, config);
   const target = candidate.project === null ? null : candidate.shardId;
   const reasons = matches ? [] : await searchReasons(deps, issue, candidate.project);
-  const waiting = waitingOn(deps, issue, loadRuns(home)).map((blocker) => ({
+  const stored = loadRuns(home);
+  const waiting = waitingOn(deps, issue, stored).map((blocker) => ({
     key: blocker.key,
     status: blocker.status
   }));
@@ -203,6 +221,7 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
     assignee: issue.assignee,
     waiting,
     holds: held,
+    denied: lastDenied(stored, issue.key),
     action,
     picked:
       matches &&

@@ -1,4 +1,5 @@
 import { DENIED_TOOLS } from "./config.js";
+import type { DeniedCall } from "./runs.js";
 import type { UsageWindow } from "./subscription.js";
 
 export type ClaudeInvocation = {
@@ -51,7 +52,7 @@ export type ClaudeSummary = {
   result: string | null;
   blocked: string[];
   failedTools: string[];
-  denied: string[];
+  denied: DeniedCall[];
   durationMs: number;
   apiMs: number;
   segments: number;
@@ -60,8 +61,8 @@ export type ClaudeSummary = {
 
 type RateWindow = { status?: string; utilization?: number; resetsAt?: number };
 type RateLimitInfo = RateWindow & { rateLimitType?: string; unifiedWindows?: Record<string, RateWindow> };
-type Denial = { tool_name: string; tool_input?: Record<string, unknown> };
-type ToolResult = { type: string; content?: unknown; is_error?: boolean };
+type Denial = { tool_name: string; tool_use_id?: string; tool_input?: Record<string, unknown> };
+type ToolResult = { type: string; content?: unknown; is_error?: boolean; tool_use_id?: string };
 type StreamEvent = {
   type: string;
   subtype?: string;
@@ -77,6 +78,7 @@ type StreamEvent = {
 };
 
 const GUARD_MESSAGE = /shard "[^"]+"/;
+const DONT_ASK = /running in don't ask mode/;
 
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
@@ -93,8 +95,49 @@ function deniedCall(denial: Denial): string {
   return `${denial.tool_name}: ${what}`;
 }
 
-function withDenials(known: string[], reported: string[]): string[] {
-  const cumulative = known.every((call, index) => reported[index] === call);
+function bashRule(rule: string): RegExp | null {
+  const match = /^Bash(?:\((.*)\))?$/s.exec(rule);
+  if (match === null) return null;
+  const glob = (match[1] ?? "*").replace(/:\*$/, "*");
+  const pattern = glob
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${pattern}$`, "s");
+}
+
+function coveringRules(command: string, allowedTools: string[]): string[] | null {
+  const rules = allowedTools.flatMap((rule) => {
+    const pattern = bashRule(rule);
+    return pattern === null ? [] : [{ rule, pattern }];
+  });
+  const found = command
+    .split(/&&|\|\||;|\|/)
+    .map((part) => part.trim())
+    .map((part) => rules.find(({ pattern }) => pattern.test(part))?.rule);
+  return found.includes(undefined) ? null : [...new Set(found as string[])];
+}
+
+const UNCHECKED =
+  " The allow rules of the person's own Claude Code settings, which claude.configDir: user adds, are not checked.";
+
+function denialOf(denial: Denial, errors: Map<string, string>, allowedTools: string[], userRules: boolean): DeniedCall {
+  const call = deniedCall(denial);
+  const text = errors.get(denial.tool_use_id ?? "");
+  if (text === undefined) return { call };
+  const reason = text.split(" IMPORTANT: ")[0].trim();
+  const command = denial.tool_input?.command;
+  if (denial.tool_name !== "Bash" || typeof command !== "string" || !DONT_ASK.test(reason)) return { call, reason };
+  const rules = coveringRules(command, allowedTools);
+  const note =
+    rules === null
+      ? `No rule in allowedTools covers the command.${userRules ? UNCHECKED : ""}`
+      : `The command is covered by ${rules.join(" and ")} in allowedTools, so the likely cause is a path outside the run's directories.`;
+  return { call, reason, note };
+}
+
+function withDenials(known: DeniedCall[], reported: DeniedCall[]): DeniedCall[] {
+  const cumulative = known.every((denied, index) => reported[index]?.call === denied.call);
   return cumulative ? reported : [...known, ...reported];
 }
 
@@ -116,7 +159,7 @@ function parseLine(line: string): StreamEvent | null {
   }
 }
 
-export function summarizeStream(jsonl: string): ClaudeSummary {
+export function summarizeStream(jsonl: string, allowedTools: string[] = [], userRules = false): ClaudeSummary {
   const summary: ClaudeSummary = {
     subtype: null,
     isError: false,
@@ -131,6 +174,7 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     segments: 0,
     usage: []
   };
+  const errors = new Map<string, string>();
   for (const line of jsonl.split("\n")) {
     const event = parseLine(line);
     if (event === null) continue;
@@ -140,7 +184,10 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
       summary.costUsd = event.total_cost_usd ?? summary.costUsd;
       summary.turns += event.num_turns ?? 0;
       summary.result = event.result ?? null;
-      summary.denied = withDenials(summary.denied, (event.permission_denials ?? []).map(deniedCall));
+      const reported = (event.permission_denials ?? []).map((denial) =>
+        denialOf(denial, errors, allowedTools, userRules)
+      );
+      summary.denied = withDenials(summary.denied, reported);
       summary.durationMs += event.duration_ms ?? 0;
       summary.apiMs = event.duration_api_ms ?? summary.apiMs;
       summary.segments += 1;
@@ -154,6 +201,7 @@ export function summarizeStream(jsonl: string): ClaudeSummary {
     for (const part of event.message?.content ?? []) {
       if (part.type !== "tool_result" || part.is_error !== true) continue;
       const text = textOf(part.content);
+      if (part.tool_use_id !== undefined) errors.set(part.tool_use_id, text);
       (GUARD_MESSAGE.test(text) ? summary.blocked : summary.failedTools).push(text);
     }
   }

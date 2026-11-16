@@ -763,25 +763,47 @@ describe("once", () => {
 
   it("records denied tool calls and the time in the model API in run.json and the footer", async () => {
     const world = setup();
-    const stream = JSON.stringify({
-      type: "result",
-      subtype: "success",
-      total_cost_usd: 1.25,
-      num_turns: 59,
-      result: "done",
-      duration_ms: 798_000,
-      duration_api_ms: 228_000,
-      permission_denials: [
-        { tool_name: "Bash", tool_input: { command: "git stash push -u" } },
-        { tool_name: "Bash", tool_input: { command: "cat <<'EOF' > a.ts\nexport {};\nEOF" } },
-        { tool_name: "Bash", tool_input: { command: `node -e "${"x".repeat(200)}"` } }
-      ]
+    const dontAsk = "Permission to use Bash has been denied because Claude Code is running in don't ask mode.";
+    const listing = 'ls "C:/Program Files/NVIDIA Corporation"';
+    const result = (id: string) => ({
+      type: "tool_result",
+      tool_use_id: id,
+      is_error: true,
+      content: `${dontAsk} IMPORTANT: You *may* ...`
     });
+    const refused = { type: "user", message: { content: [result("t1"), result("t2")] } };
+    world.config.claude.configDir = "user";
+    const stream = [
+      JSON.stringify(refused),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        total_cost_usd: 1.25,
+        num_turns: 59,
+        result: "done",
+        duration_ms: 798_000,
+        duration_api_ms: 228_000,
+        permission_denials: [
+          { tool_name: "Bash", tool_use_id: "t1", tool_input: { command: listing } },
+          { tool_name: "Bash", tool_use_id: "t2", tool_input: { command: "nvidia-smi" } },
+          { tool_name: "Bash", tool_input: { command: "git stash push -u" } },
+          { tool_name: "Bash", tool_input: { command: "cat <<'EOF' > a.ts\nexport {};\nEOF" } },
+          { tool_name: "Bash", tool_input: { command: `node -e "${"x".repeat(200)}"` } }
+        ]
+      })
+    ].join("\n");
     const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true, stream });
     expect(record).toMatchObject({ durationMs: 798_000, apiMs: 228_000, segments: 1, wallMs: 0 });
-    expect(record?.denied).toHaveLength(3);
+    const outside =
+      "The command is covered by Bash(ls*) in allowedTools, so the likely cause is a path outside the run's directories.";
+    expect(record?.denied?.[0]).toEqual({ call: `Bash: ${listing}`, reason: dontAsk, note: outside });
+    expect(record?.denied?.[1]).toMatchObject({
+      note: "No rule in allowedTools covers the command. The allow rules of the person's own Claude Code settings, which claude.configDir: user adds, are not checked."
+    });
+    expect(record?.denied).toHaveLength(5);
     const comment = jira.comments["MR-7"][0];
-    expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 3.");
+    expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 5.");
+    expect(comment).toContain(`- denied Bash: ${listing} - ${dontAsk} ${outside}\n`);
     expect(comment).toContain("- denied Bash: git stash push -u\n");
     expect(comment).toContain("- denied Bash: cat <<'EOF' > a.ts …\n");
     expect(comment).toContain(`- denied Bash: node -e "${"x".repeat(145)} …`);
