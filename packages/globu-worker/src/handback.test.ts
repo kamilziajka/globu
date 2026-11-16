@@ -154,7 +154,8 @@ describe("fileFollowUps", () => {
       tempDir(),
       "MR-7",
       "run-1",
-      HANDBACK
+      HANDBACK,
+      ["repo:backend", "task"]
     );
     expect(filed.map((entry) => entry.key)).toEqual(["MR-101", "MR-102", "MR-103"]);
     expect(fake.created[0]).toEqual({
@@ -163,7 +164,8 @@ describe("fileFollowUps", () => {
       summary: "Add retries to the client",
       description: expect.stringMatching(
         /^The client gives up after one failure\.[\s\S]*\n\nFollow-up of MR-7, from the handback of Globu worker run run-1\.$/
-      )
+      ),
+      labels: ["repo:backend", "task"]
     });
     expect(fake.created[2].description).toBe("Follow-up of MR-7, from the handback of Globu worker run run-1.");
     expect(fake.linked).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102", "MR-7 Relates MR-103"]);

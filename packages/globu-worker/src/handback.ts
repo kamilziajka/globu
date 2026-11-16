@@ -106,7 +106,8 @@ async function create(
   settings: FollowUpSettings,
   ledger: Ledger,
   runId: string,
-  item: FollowUpItem
+  item: FollowUpItem,
+  labels: string[]
 ): Promise<FiledEntry | string> {
   let key: string;
   try {
@@ -114,7 +115,8 @@ async function create(
       project: projectOf(ledger.key),
       issueType: settings.issueType,
       summary: item.summary,
-      description: description(item, ledger.key, runId)
+      description: description(item, ledger.key, runId),
+      labels
     });
   } catch (err) {
     return (err as Error).message;
@@ -131,7 +133,8 @@ async function fileOne(
   ledger: Ledger,
   runId: string,
   item: FollowUpItem,
-  index: number
+  index: number,
+  labels: string[]
 ): Promise<FiledFollowUp & { reused: boolean }> {
   const { summary } = item;
   if (index >= settings.max) {
@@ -139,7 +142,7 @@ async function fileOne(
   }
   const at = ledger.earlier.findIndex((entry) => entry.summary === summary);
   const reused = at !== -1;
-  const entry = reused ? ledger.earlier.splice(at, 1)[0] : await create(jira, settings, ledger, runId, item);
+  const entry = reused ? ledger.earlier.splice(at, 1)[0] : await create(jira, settings, ledger, runId, item, labels);
   if (typeof entry === "string") return { summary, key: null, problem: entry, reused };
   const problem = await link(jira, settings, ledger, entry);
   return { summary, key: entry.key, problem, reused };
@@ -151,14 +154,15 @@ export async function fileFollowUps(
   home: string,
   key: string,
   runId: string,
-  handback: string
+  handback: string,
+  labels: string[] = []
 ): Promise<FiledFollowUp[]> {
   if (settings === undefined) return [];
   const entries = filedFor(home, key);
   const ledger: Ledger = { home, key, entries, earlier: [...entries] };
   const filed: FiledFollowUp[] = [];
   for (const [index, item] of parseFollowUps(handback).entries()) {
-    const { reused, ...entry } = await fileOne(jira, settings, ledger, runId, item, index);
+    const { reused, ...entry } = await fileOne(jira, settings, ledger, runId, item, index, labels);
     const fields = { run: runId, key, followUp: entry.key, summary: entry.summary };
     if (entry.problem !== null) log().warn("follow-up failed", { ...fields, problem: entry.problem });
     else log().info(reused ? "follow-up reused" : "follow-up filed", fields);

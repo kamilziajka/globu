@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [globu-worker](./worker.md#follow-up-issues): a follow-up is created with the labels of the issue it comes from, without the eligibility, blocked and priority labels and without a repository marker label, and the brief asks the run to write each follow-up in the issue format the repository asks for. In what the worker posts to Jira an issue key of the same project is written as a link with the key as its text, since Jira turns a bare key into a smart-link card that plain-text readers show as a gap.
 * [globu-worker](./worker.md#keeping-the-machine-awake): while a command that cycles is running the worker asks the system not to sleep on its idle timer, through a helper process that ends with it: `SetThreadExecutionState` called from PowerShell on Windows and `caffeinate` on macOS. `keepAwake: false` in `worker.yaml` turns it off. The first cycle after a pause that lasted more than five minutes too long says `resumed after a gap` with both times.
 * [globu-worker](./worker.md#the-subscription-limit): a cycle held by `limits.subscription` or `limits.dayUsd` still settles merged and closed pull requests, and `run` and a headless `start` say the hold once when it starts and once when it ends instead of every cycle. The docs now say that both limits are points to stop at and not ceilings, since they are checked before a cycle starts work and never during a run, and that the subscription windows are shared with the owner's own sessions while the worker sees only the figure of its last run.
 

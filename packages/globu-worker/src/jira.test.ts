@@ -138,6 +138,10 @@ describe("jiraClient", () => {
     await client.transitionTo("MR-7", "delivery");
     await client.transitionTo("MR-7", "10024");
     await client.comment("MR-7", "hello");
+    await client.comment(
+      "MR-7",
+      "MR-101: after MR-7 (see MR-8), not `MR-9`, [MR-10](u), MR-7-run, XMR-1 or UTF-8.\nMR-12"
+    );
     await client.addLabel("MR-7", "agent-blocked");
     await client.remoteLink("MR-7", "https://github.com/acme/backend/pull/1", "Pull request for MR-7");
     expect(calls.map((call) => call.body)).toEqual([
@@ -148,6 +152,9 @@ describe("jiraClient", () => {
       undefined,
       { transition: { id: "21" } },
       { body: "hello" },
+      {
+        body: "[MR-101|https://acme.atlassian.net/browse/MR-101]: after [MR-7|https://acme.atlassian.net/browse/MR-7] (see [MR-8|https://acme.atlassian.net/browse/MR-8]), not `MR-9`, [MR-10](u), MR-7-run, XMR-1 or UTF-8.\n[MR-12|https://acme.atlassian.net/browse/MR-12]"
+      },
       { update: { labels: [{ add: "agent-blocked" }] } },
       { object: { url: "https://github.com/acme/backend/pull/1", title: "Pull request for MR-7" } }
     ]);
@@ -159,13 +166,25 @@ describe("jiraClient", () => {
       "POST /issueLink": { status: 201 }
     });
     const client = jiraClient("https://acme.atlassian.net", "e", "t", fetchFn);
-    const named = { project: "MR", issueType: "Task", summary: "Do more", description: "Later." };
+    const named = {
+      project: "MR",
+      issueType: "Task",
+      summary: "Do more",
+      description: "Follow-up of MR-7.",
+      labels: ["task"]
+    };
+    const fields = {
+      project: { key: "MR" },
+      summary: "Do more",
+      description: "Follow-up of [MR-7|https://acme.atlassian.net/browse/MR-7].",
+      labels: ["task"]
+    };
     expect(await client.createIssue(named)).toBe("MR-9");
     expect(await client.createIssue({ ...named, issueType: "10002" })).toBe("MR-9");
     await client.linkIssues("Relates", "MR-7", "MR-9");
     expect(calls.map((call) => call.body)).toEqual([
-      { fields: { project: { key: "MR" }, issuetype: { name: "Task" }, summary: "Do more", description: "Later." } },
-      { fields: { project: { key: "MR" }, issuetype: { id: "10002" }, summary: "Do more", description: "Later." } },
+      { fields: { ...fields, issuetype: { name: "Task" } } },
+      { fields: { ...fields, issuetype: { id: "10002" } } },
       { type: { name: "Relates" }, inwardIssue: { key: "MR-7" }, outwardIssue: { key: "MR-9" } }
     ]);
   });

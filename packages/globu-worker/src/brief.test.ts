@@ -132,7 +132,7 @@ describe("renderBrief", () => {
       followUps: true
     });
     expect(brief).toContain(
-      "The worker files each bullet as an issue linked to this one and lists the new keys on this issue."
+      "The worker files each bullet as an issue linked to this one, with this issue's labels, and lists the new keys on this issue."
     );
     expect(brief).toContain("> (empty)");
     expect(brief).toContain("- none");

@@ -683,7 +683,11 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     const { github } = worktree === target ? settings : settingsFor(config, project, worktree.shard.id);
     record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token, github));
   }
-  const filed = await fileFollowUps(jira, settings.followUps, deps.home, issue.key, record.id, handback);
+  const own = [config.jira.eligibleLabel, config.jira.blockedLabel, config.jira.priorityLabel];
+  const marker = config.jira.repository;
+  const marks = (label: string) => "labelPrefix" in marker && label.startsWith(marker.labelPrefix);
+  const labels = issue.labels.filter((label) => !own.includes(label) && !marks(label));
+  const filed = await fileFollowUps(jira, settings.followUps, deps.home, issue.key, record.id, handback, labels);
   const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");

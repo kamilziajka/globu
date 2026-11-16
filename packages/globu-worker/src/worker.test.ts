@@ -188,7 +188,10 @@ function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
       if (fields.summary === options.failCreate) throw new Error("Jira POST /issue failed: 400 issuetype is invalid");
       created.push(fields);
       const key = `${fields.project}-${100 + created.length}`;
-      store.set(key, { ...issue(key, { summary: fields.summary, description: fields.description }), labels: [] });
+      store.set(key, {
+        ...issue(key, { summary: fields.summary, description: fields.description }),
+        labels: fields.labels
+      });
       return key;
     },
     linkIssues: async (type, inward, outward) => {
@@ -1023,14 +1026,16 @@ describe("once", () => {
       "- Rename the flag",
       ""
     ].join("\n");
-    const { jira, calls, record } = await runWith(world, [issue("MR-7")], { commit: true, handback });
+    world.config.jira.priorityLabel = "urgent";
+    const labelled = issue("MR-7", { labels: ["agent-eligible", "repo:backend", "task", "urgent"] });
+    const { jira, calls, record } = await runWith(world, [labelled], { commit: true, handback });
     expect(record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
     expect(jira.created.map((entry) => `${entry.project} ${entry.issueType} ${entry.summary}`)).toEqual([
       "MR Task Add retries to the client",
       "MR Task Rename the flag"
     ]);
     expect(jira.issueLinks).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102"]);
-    expect(jira.store.get("MR-101")?.labels).toEqual([]);
+    expect(jira.store.get("MR-101")?.labels).toEqual(["task"]);
     const comment = jira.comments["MR-7"][0];
     expect(comment).toContain(
       "---\n\nFollow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
@@ -1038,6 +1043,18 @@ describe("once", () => {
     expect(calls.claude).toHaveLength(1);
     const brief = fs.readFileSync(path.join(world.home, "runs", record?.id as string, "brief.md"), "utf8");
     expect(brief).toContain("The worker files each bullet as an issue linked to this one");
+    expect(brief).toContain("write the description of each follow-up in that format");
+  });
+
+  it("leaves a label that only looks like a marker on a follow-up when the marker is a field", async () => {
+    const world = setup();
+    world.config.projects[0].worker.followUps = { issueType: "Task" };
+    world.config.jira.repository = { field: "customfield_1" };
+    const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Rename the flag\n";
+    const marked = issue("MR-7", { fields: { customfield_1: "backend" } });
+    const { jira, record } = await runWith(world, [marked], { commit: true, handback });
+    expect(record?.state).toBe("handed-back");
+    expect(jira.store.get("MR-101")?.labels).toEqual(["repo:backend"]);
   });
 
   it("hands back when a follow-up cannot be created and says so in the comment", async () => {
