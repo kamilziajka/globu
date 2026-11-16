@@ -364,7 +364,7 @@ The `claude -p` stream then carries `rate_limit_event` lines. The worker reads e
 
 While the limit holds, and while the day cap does, each cycle still reads the worker's pull requests and settles the ones that were merged or closed, since that needs no Claude: a merged issue moves to done and the issues it blocked are free when the hold ends. `run` and a headless `start` say the hold once, when it starts, in the service log and as one `warn` line in the worker's log, and say `the subscription limit no longer holds, claiming again` (or `the day cap`) on the first cycle after it. A hold whose figures change, for example when another window takes over, is said again. `once` is one cycle, so every `once` during a hold prints the line.
 
-**The limit is a point to stop at, not a ceiling.** It is compared before a cycle starts work and never during a run, so a run that starts below the limit runs to its end and can take the window well past it: on the test desktop one run of 74 minutes took the five-hour window from under 70 % to 82 %. With `limits.concurrent` above 1 several runs start from the same figure. Set the limit with the length of a run in mind, lower when the owner's own sessions need the room.
+**The limit is a point to stop at, not a ceiling.** It is compared before a cycle starts work and never during a run, so a run that starts below the limit runs to its end and can take the window well past it: a run of over an hour can use a tenth of the five-hour window or more. With `limits.concurrent` above 1 several runs start from the same figure. Set the limit with the length of a run in mind, lower when the owner's own sessions need the room.
 
 **The window is shared and the worker sees only its own runs.** The five-hour and seven-day windows count the owner's interactive sessions together with the worker's runs. A busy day of the owner's own can therefore hold the worker, and the worker's runs take from what the owner has left.
 
@@ -545,7 +545,7 @@ What the consuming project needs in Jira: a status a person moves an issue into 
 
 ### Keeping the machine awake
 
-A worker that polls once a minute is not activity to the operating system, so an unattended desk machine goes to sleep under it on its idle timer: on the test desktop Windows slept during a subscription hold, and the worker neither repaired nor settled anything until a person woke the machine hours later.
+A worker that polls once a minute is not activity to the operating system, so an unattended desk machine goes to sleep under it on its idle timer, and an asleep worker neither repairs nor settles anything until a person wakes the machine.
 
 While `once` (not `--dry-run`), `retry`, `run` or `start` is running, during runs and between them, the worker therefore holds a request that the system stays awake. It starts one small helper process and ends it when the command ends:
 
