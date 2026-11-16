@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import { processIo } from "../../../globu-cli/src/cli/process-io.js";
+import { keepAwake } from "../awake.js";
 import { workerMain } from "../cli.js";
 import type { Key, ReadKey } from "../start.js";
 import { SHOW_CURSOR } from "../tui.js";
@@ -41,6 +42,7 @@ process.on("exit", () => {
 
 process.exitCode = await workerMain(process.argv.slice(2), processIo, process.env, {
   signals: process,
+  awake: keepAwake,
   screen: interactive ? process.stdout : undefined,
   readKey: interactive ? readKey : undefined,
   wait: (ms) =>

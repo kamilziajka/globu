@@ -181,7 +181,8 @@ const WorkerFileSchema = z.strictObject({
   poll: PollSchema,
   limits: z.strictObject(MachineLimits).prefault({}),
   claude: z.strictObject({ configDir: ConfigDir }).prefault({}),
-  notify: NotifySchema
+  notify: NotifySchema,
+  keepAwake: z.boolean().default(true)
 });
 
 const StatusSetting = z.union([
@@ -220,7 +221,8 @@ const LegacyFileSchema = z.object({
   claude: ClaudePart.extend({ configDir: ConfigDir }).prefault({}),
   git: GitPart.optional(),
   github: GithubPart.optional(),
-  notify: NotifySchema
+  notify: NotifySchema,
+  keepAwake: z.boolean().default(true)
 });
 type LegacyFile = z.infer<typeof LegacyFileSchema>;
 
@@ -235,6 +237,7 @@ export type WorkerConfig = {
   limits: z.infer<typeof WorkerFileSchema>["limits"];
   claude: { configDir: "own" | "user" };
   notify: z.infer<typeof NotifySchema>;
+  keepAwake: boolean;
   warnings: string[];
 };
 
@@ -341,6 +344,7 @@ function legacyConfig(file: LegacyFile, source: string): WorkerConfig {
     limits: machine,
     claude: { configDir },
     notify: file.notify,
+    keepAwake: file.keepAwake,
     warnings: [
       `${source} is a version 1 worker.yaml: its settings are read as the defaults of version 2 and its shards as one project for ${names.join(", ")}, with deliverable and companion kept as they were; ${MOVING}`
     ]

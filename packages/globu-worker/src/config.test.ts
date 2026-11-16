@@ -81,6 +81,7 @@ describe("loadWorkerConfig for a version 1 file", () => {
       limits: { concurrent: 1, perShard: 1, dayUsd: 40, openPullRequests: 5, keepRuns: 100, subscription: 70 },
       claude: { configDir: "own" },
       notify: { timeout: 30_000 },
+      keepAwake: true,
       warnings: [
         `${file} is a version 1 worker.yaml: its settings are read as the defaults of version 2 and its shards as one project for every other Jira project, with deliverable and companion kept as they were; see "Moving a version 1 worker.yaml" in the worker docs`
       ]
@@ -315,6 +316,7 @@ describe("loadWorkerConfig for a version 2 file", () => {
       repos: {},
       limits: { concurrent: 2, perShard: 1, dayUsd: 40 },
       claude: { configDir: "own" },
+      keepAwake: true,
       warnings: []
     });
     expect(config.jira.jql).toBeUndefined();

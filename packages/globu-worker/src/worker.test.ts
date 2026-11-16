@@ -1577,6 +1577,24 @@ describe("loop", () => {
     });
     expect(cycles).toBe(6);
   });
+
+  it("names the gap when a pause took much longer than the poll interval", async () => {
+    const world = setup();
+    const { worker, io } = deps(world, fakeJira([]), fakeRunner({}, { gh: [], claude: [] }));
+    const times = ["2026-11-15T23:14:10Z", "2026-11-16T05:52:40Z", "2026-11-16T05:53:00Z", "2026-11-16T05:54:00Z"];
+    let pauses = 0;
+    worker.now = () => new Date(times[0]);
+    await loop(worker, {
+      sleep: async () => {
+        pauses += 1;
+        worker.now = () => new Date(times[pauses]);
+      },
+      stopped: () => pauses >= 3
+    });
+    expect(io.stdout.split("\n").filter((line) => line.startsWith("resumed"))).toEqual([
+      "resumed after a gap: nothing ran from 2026-11-15 23:14 UTC to 2026-11-16 05:52 UTC, the machine was asleep or the worker was suspended"
+    ]);
+  });
 });
 
 describe("session commands", () => {

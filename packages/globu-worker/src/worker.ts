@@ -57,7 +57,7 @@ import {
   type UnpostedComment
 } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
-import { currentUsage, holdReason, overLimit, recordUsage } from "./subscription.js";
+import { currentUsage, holdReason, overLimit, recordUsage, resetTime } from "./subscription.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -1339,6 +1339,8 @@ export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
 
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
+const AWAY_MS = 5 * 60_000;
+
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
   const hold: SaidHold = { current: null };
   for (;;) {
@@ -1358,7 +1360,16 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<bool
       deps.io.err(`globu-worker: ${(err as Error).message}`);
     }
     if (options.stopped()) return false;
+    const paused = deps.now();
     await options.sleep(deps.config.poll.every);
     if (options.stopped()) return false;
+    const resumed = deps.now();
+    if (resumed.getTime() - paused.getTime() - deps.config.poll.every > AWAY_MS) {
+      const [from, to] = [paused.toISOString(), resumed.toISOString()];
+      log().warn("resumed after a gap", { from, to });
+      deps.io.out(
+        `resumed after a gap: nothing ran from ${resetTime(from)} to ${resetTime(to)}, the machine was asleep or the worker was suspended`
+      );
+    }
   }
 }

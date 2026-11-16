@@ -165,6 +165,7 @@ claude:
 notify:
   command: ./notify.sh "$@"
   timeout: 30s
+keepAwake: true
 ```
 
 | Key | Meaning | Default |
@@ -189,6 +190,7 @@ notify:
 | `claude.configDir` | `own` or `user`: whether Claude runs in a home of the worker's own or in the person's `~/.claude`, see [the user's Claude home](#the-users-claude-home) | `own` |
 | `notify.command` | A command run on a hand back, a release, a pull request that needs a person and a stop for a machine problem, see [notifications](#notifications) | none |
 | `notify.timeout` | The notification command is killed when it lasts longer | `30s` |
+| `keepAwake` | While a command that cycles is running, the worker asks Windows or macOS not to put the machine to sleep on its idle timer, see [keeping the machine awake](#keeping-the-machine-awake). `false` leaves the machine's power settings alone | `true` |
 
 A key that is not in this table is an error, so a version 1 key left in a version 2 file is named instead of ignored.
 
@@ -303,7 +305,7 @@ Every command takes `--log-level` before its name, as in `globu-worker --log-lev
 2026-11-15T20:32:05.120Z stopping after the current cycle
 ```
 
-The time is UTC in ISO 8601, then a space, then the line: a key, a tab and what happened to it, or a message of the worker. Lines for the error output, such as a stop for a machine problem, carry the time as well. `once` prints the same lines without the time, since a single cycle is one moment and whatever runs it can add its own.
+The time is UTC in ISO 8601, then a space, then the line: a key, a tab and what happened to it, or a message of the worker. Lines for the error output, such as a stop for a machine problem, carry the time as well. When a pause between two cycles lasted more than five minutes longer than `poll.every`, the next line says so: `resumed after a gap: nothing ran from 2026-11-15 23:14 UTC to 2026-11-16 05:52 UTC, the machine was asleep or the worker was suspended`. `once` prints the same lines without the time, since a single cycle is one moment and whatever runs it can add its own.
 
 ## The smoke test
 
@@ -536,6 +538,24 @@ The commands that cycle, `once` (not `--dry-run`), `retry`, `run` and `start` in
 
 What the consuming project needs in Jira: a status a person moves an issue into as the act of delegation, an eligibility label and, in a project with more than one shard, a repository marker per issue. `delegate` sets the label and the marker from a terminal. The Claude Code behaviours the worker relies on and which were tested are in the [hook contract](./claude-code-hooks.md).
 
+### Keeping the machine awake
+
+A worker that polls once a minute is not activity to the operating system, so an unattended desk machine goes to sleep under it on its idle timer: on the test desktop Windows slept during a subscription hold, and the worker neither repaired nor settled anything until a person woke the machine hours later.
+
+While `once` (not `--dry-run`), `retry`, `run` or `start` is running, during runs and between them, the worker therefore holds a request that the system stays awake. It starts one small helper process and ends it when the command ends:
+
+| System | Helper | What it holds |
+|---|---|---|
+| Windows | `powershell.exe` calling `SetThreadExecutionState` with `ES_CONTINUOUS` and `ES_SYSTEM_REQUIRED`, then waiting for the worker's process | The system stays awake; the display may still turn off |
+| macOS | `caffeinate -i -w <the worker's pid>` | No idle sleep; the display may still sleep |
+| Linux and others | None | A server does not sleep on an idle timer; a desk machine needs its own power setting |
+
+The helper watches the worker's process and ends with it, so a worker that is killed leaves no request behind. To see the request: `powercfg /requests` in an elevated prompt on Windows, `pmset -g assertions` on macOS. When the helper cannot start or ends on its own, the worker says `globu-worker: cannot keep the machine awake, <why>` on the error output, logs a `warn` and carries on.
+
+The request only covers the idle timer. A person choosing Sleep, a closed laptop lid, hibernation on a low battery and a sleep that a policy forces still stop the worker, and on battery Windows can ignore the request under Modern Standby. The worker cannot report while the machine is asleep. What it does is name the gap afterwards: the first cycle after a pause that lasted more than five minutes longer than `poll.every` prints `resumed after a gap: nothing ran from <time> to <time>, the machine was asleep or the worker was suspended` and logs it as a `warn` with both times, so the [diagnostics](#logs-and-diagnostics) archive shows it. A sleep in the middle of a run is not named: the run goes on after the resume, and its `timeout` counts the time asleep.
+
+`keepAwake: false` in `worker.yaml` turns the request off, for a machine whose power plan already keeps it awake or one that should be allowed to sleep. The Windows equivalent by hand is `powercfg /change standby-timeout-ac 0`.
+
 ### On Windows
 
 The worker runs on Windows with Git for Windows, Node and `claude`, installed natively or through npm; commands installed as `.cmd` shims, such as `npm`, `claude` or `gh`, are started through `cmd.exe` with their arguments escaped for it. Things to set up before the first real run:
@@ -585,6 +605,7 @@ What each part is for:
 | `-MultipleInstances IgnoreNew` | A second start while the worker runs does nothing. A second worker would be refused by `worker.lock` anyway |
 | `conhost.exe --headless` | Gives the worker a console without a window on the desktop. Git, `gh` and `claude` are console programs and need one |
 | `>> logs\service.out 2>&1` | Appends what `run` prints, each line with its time, see [the service log](#the-service-log) |
+| Sleep | Nothing to set: the worker [keeps the machine awake](#keeping-the-machine-awake) while it runs. `-AllowStartIfOnBatteries` and `-DontStopIfGoingOnBatteries` only matter on a laptop |
 | No restart on failure | Leave `-RestartCount` and `-RestartInterval` unset. Task Scheduler cannot tell exit code 69, a stop for a machine problem, from any other failure, and a restart into that problem repeats it. After such a stop the task's last result is 69 (`0x45`); fix the machine and start the task again |
 
 Add `-Trigger (New-ScheduledTaskTrigger -AtLogOn)` to `Register-ScheduledTask` to start the worker with the session.

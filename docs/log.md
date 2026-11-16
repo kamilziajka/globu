@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [globu-worker](./worker.md#keeping-the-machine-awake): while a command that cycles is running the worker asks the system not to sleep on its idle timer, through a helper process that ends with it: `SetThreadExecutionState` called from PowerShell on Windows and `caffeinate` on macOS. `keepAwake: false` in `worker.yaml` turns it off. The first cycle after a pause that lasted more than five minutes too long says `resumed after a gap` with both times.
 * [globu-worker](./worker.md#the-subscription-limit): a cycle held by `limits.subscription` or `limits.dayUsd` still settles merged and closed pull requests, and `run` and a headless `start` say the hold once when it starts and once when it ends instead of every cycle. The docs now say that both limits are points to stop at and not ceilings, since they are checked before a cycle starts work and never during a run, and that the subscription windows are shared with the owner's own sessions while the worker sees only the figure of its last run.
 
 ## 2026-11-15

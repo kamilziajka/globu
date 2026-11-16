@@ -571,6 +571,31 @@ describe("globu-worker", () => {
     expect(fs.existsSync(lock)).toBe(false);
   });
 
+  it("keeps the machine awake while a command cycles, unless keepAwake is off", async () => {
+    const root = prepare();
+    const home = process.env.GLOBU_HOME as string;
+    const calls: string[] = [];
+    const awake = (platform: NodeJS.Platform, onProblem: (problem: string) => void) => {
+      calls.push(`awake on ${platform}`);
+      onProblem("caffeinate could not start: ENOENT");
+      return () => void calls.push("released");
+    };
+    const io = captureIo(root);
+    const overrides = { ...quiet(), jira: idleJira(() => calls.push("cycle")), awake };
+    expect(await workerMain(["once"], io, env(), { ...overrides, platform: "win32" })).toBe(0);
+    expect(calls).toEqual(["awake on win32", "cycle", "released"]);
+    expect(io.stderr).toContain("globu-worker: cannot keep the machine awake, caffeinate could not start: ENOENT");
+
+    expect(await workerMain(["once", "--dry-run"], captureIo(root), env(), overrides)).toBe(0);
+    write(home, "worker.yaml", `${CONFIG}keepAwake: false\n`);
+    expect(await workerMain(["once"], captureIo(root), env(), overrides)).toBe(0);
+    expect(calls).toEqual(["awake on win32", "cycle", "released", "cycle", "cycle"]);
+
+    write(home, "worker.yaml", CONFIG);
+    expect(await workerMain(["once"], captureIo(root), env(), overrides)).toBe(0);
+    expect(calls.slice(5)).toEqual([`awake on ${process.platform}`, "cycle", "released"]);
+  });
+
   it("exits 69 when run or start --mode auto stops for a problem of the machine", async () => {
     const root = prepare();
     const claudeless: Runner = async (command, args, options) =>

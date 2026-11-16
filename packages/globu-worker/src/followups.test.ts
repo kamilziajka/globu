@@ -573,9 +573,9 @@ describe("following pull requests", () => {
     const setup = world();
     const merged = pull(setup.url, { state: "MERGED" });
     const { worker, jira: fake, io } = deps(setup, { pulls: { [setup.url]: merged } });
-    recordUsage(setup.home, [{ window: "five_hour", utilization: 0.82, resetsAt: "2026-11-13T15:00:00.000Z" }], NOW);
+    recordUsage(setup.home, [{ window: "five_hour", utilization: 0.82, resetsAt: "2026-11-13T12:02:00.000Z" }], NOW);
     const held =
-      "subscription limit reached: the subscription's five-hour window is at 82 %, the limit is 70 %, it resets at 2026-11-13 15:00 UTC, claiming nothing\n";
+      "subscription limit reached: the subscription's five-hour window is at 82 %, the limit is 70 %, it resets at 2026-11-13 12:02 UTC, claiming nothing\n";
 
     for (const options of [{ dryRun: true }, { issue: "MR-9" }, { repair: setup.url }]) await once(worker, options);
     expect(io.stdout).toBe(held.repeat(3));
@@ -586,7 +586,7 @@ describe("following pull requests", () => {
     await loop(worker, {
       sleep: async () => {
         pauses += 1;
-        if (pauses === 2) worker.now = () => new Date("2026-11-13T15:00:01.000Z");
+        if (pauses === 2) worker.now = () => new Date("2026-11-13T12:02:01.000Z");
       },
       stopped: () => pauses >= 3
     });
