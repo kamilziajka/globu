@@ -6,8 +6,9 @@ import { register } from "../../globu-core/src/index.js";
 import { captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
+import { GAP_MESSAGE, readGaps, runGap } from "./gaps.js";
 import type { JiraClient } from "./jira.js";
-import { setLogger, silentLogger } from "./logger.js";
+import { fileLogger, setLogger, silentLogger } from "./logger.js";
 import { mergedIssues } from "./merged.js";
 import { loadRun, loadRuns, newRun, type RunRecord, saveRun } from "./runs.js";
 import { start } from "./start.js";
@@ -200,6 +201,20 @@ function deps(setup: ReturnType<typeof world>, script: Script, token: string | n
     onFollowUps: (next) => rows.push(next)
   };
   return { worker, calls, jira: fake, rows, io };
+}
+
+function anotherIssue(fake: FakeJira): void {
+  const next = { assignee: null as string | null, status: "Ready for delivery" };
+  const others = fake.issue;
+  fake.search = async () => [{ key: "MR-9", labels: ["repo:backend"] }];
+  fake.issue = async (key) =>
+    key === "MR-9" ? { ...(await others(key)), labels: ["repo:backend"], ...next } : await others(key);
+  fake.assign = async (_key, accountId) => {
+    next.assignee = accountId;
+  };
+  fake.transitionTo = async (_key, status) => {
+    next.status = status;
+  };
 }
 
 function original(setup: ReturnType<typeof world>): RunRecord {
@@ -661,17 +676,7 @@ describe("following pull requests", () => {
     const script: Script = { pulls: { [setup.url]: open } };
     const { worker, jira: fake } = deps(setup, script);
     worker.config.poll.every = 10;
-    const next = { assignee: null as string | null, status: "Ready for delivery" };
-    const others = fake.issue;
-    fake.search = async () => [{ key: "MR-9", labels: ["repo:backend"] }];
-    fake.issue = async (key) =>
-      key === "MR-9" ? { ...(await others(key)), labels: ["repo:backend"], ...next } : await others(key);
-    fake.assign = async (_key, accountId) => {
-      next.assignee = accountId;
-    };
-    fake.transitionTo = async (_key, status) => {
-      next.status = status;
-    };
+    anotherIssue(fake);
     const warnings: string[] = [];
     setLogger({ ...silentLogger, warn: (message) => warnings.push(message) });
     let seenDuringTheRun = false;
@@ -690,6 +695,35 @@ describe("following pull requests", () => {
     }
     expect(seenDuringTheRun).toBe(true);
     expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+  });
+
+  it("names a gap that a sleep during a run leaves, on the poll interval", async () => {
+    const setup = world();
+    const script: Script = { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } };
+    const { worker, jira: fake, io } = deps(setup, script);
+    worker.config.poll.every = 10;
+    anotherIssue(fake);
+    let clock = NOW;
+    worker.now = () => clock;
+    const logs = path.join(setup.home, "logs");
+    setLogger(fileLogger({ dir: logs, level: "warn", secrets: [], now: () => clock }));
+    const woke = new Date("2026-11-13T19:00:00.000Z");
+    script.during = async () => {
+      clock = woke;
+      await vi.waitFor(() => expect(io.stdout).toContain(GAP_MESSAGE));
+    };
+    try {
+      await once(worker);
+    } finally {
+      setLogger(silentLogger);
+    }
+    expect(io.stdout.split("\n").filter((line) => line.startsWith(GAP_MESSAGE))).toEqual([
+      "resumed after a gap: nothing ran from 2026-11-13 12:00 UTC to 2026-11-13 19:00 UTC, the machine was asleep or the worker was suspended"
+    ]);
+    const gaps = readGaps(logs, NOW);
+    expect(gaps).toEqual([{ from: NOW.toISOString(), to: woke.toISOString() }]);
+    const run = loadRuns(setup.home).find(({ record }) => record.key === "MR-9")?.record as RunRecord;
+    expect(runGap(run, gaps, woke)?.gaps).toEqual(gaps);
   });
 
   it("settles a merge while a limit holds, and says the hold when it starts and when it ends", async () => {

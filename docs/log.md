@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [globu-worker](./worker.md#keeping-the-machine-awake): a sleep during a run is noticed by the timer that settles merges while runs go on, `why` shows the gaps of the last 24 hours and whether the issue's last run was stretched by one, and `diagnostics` writes the gaps the packed logs record into `summary.txt`.
 * [globu-worker](./worker.md#comments-that-cannot-be-posted): every comment and remote link the worker sends, the handback comment, the release comment and the `Merged` comment included, is kept in `run.json` when Jira or `gh` cannot take it and is posted by a later cycle, after the step it reports is recorded.
 * [globu-worker](./worker.md#a-run): a `git` call through the Globu library that did not start or that Windows ended, in the reference check or for a worktree's default branch, is a problem of the machine, and so is a repair's merge that Windows ended, which no longer counts against `repairs`.
 * [globu-worker](./worker.md#the-outcome): merging the pull requests of a run whose outcome is `partial` or `not met` leaves the issue open, in `statuses.claimed` or the new `statuses.partial`, keeps its key out of `merged.json` and says where the rest is. Its pull requests are labelled `partial`.

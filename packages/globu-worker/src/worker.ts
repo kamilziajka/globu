@@ -34,6 +34,7 @@ import {
 } from "./config.js";
 import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
+import { AWAY_MS, GAP_MESSAGE } from "./gaps.js";
 import { type Carried, fileFollowUps, followUpSection, parseOutcome, unmet } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
@@ -1005,15 +1006,27 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
   return rows;
 }
 
+function noteGap(deps: WorkerDeps, paused: Date): void {
+  const resumed = deps.now();
+  if (resumed.getTime() - paused.getTime() - deps.config.poll.every <= AWAY_MS) return;
+  const [from, to] = [paused.toISOString(), resumed.toISOString()];
+  log().warn(GAP_MESSAGE, { from, to });
+  deps.io.out(
+    `${GAP_MESSAGE}: nothing ran from ${resetTime(from)} to ${resetTime(to)}, the machine was asleep or the worker was suspended`
+  );
+}
+
 async function settlingMeanwhile<T>(deps: WorkerDeps, work: Promise<T>): Promise<T> {
   const ended = Promise.allSettled([work]).then(() => true);
   const workEnded = async (): Promise<boolean> => {
     let timer: NodeJS.Timeout | undefined;
+    const planned = deps.now();
     const interval = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => resolve(false), deps.config.poll.every);
     });
     const over = await Promise.race([interval, ended]);
     clearTimeout(timer);
+    noteGap(deps, planned);
     return over;
   };
   const settling = (async () => {
@@ -1443,8 +1456,6 @@ export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
 
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
-const AWAY_MS = 5 * 60_000;
-
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
   const hold: SaidHold = { current: null };
   for (;;) {
@@ -1467,13 +1478,6 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<bool
     const paused = deps.now();
     await options.sleep(deps.config.poll.every);
     if (options.stopped()) return false;
-    const resumed = deps.now();
-    if (resumed.getTime() - paused.getTime() - deps.config.poll.every > AWAY_MS) {
-      const [from, to] = [paused.toISOString(), resumed.toISOString()];
-      log().warn("resumed after a gap", { from, to });
-      deps.io.out(
-        `resumed after a gap: nothing ran from ${resetTime(from)} to ${resetTime(to)}, the machine was asleep or the worker was suspended`
-      );
-    }
+    noteGap(deps, paused);
   }
 }

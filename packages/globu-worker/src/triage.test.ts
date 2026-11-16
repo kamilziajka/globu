@@ -197,7 +197,9 @@ describe("why", () => {
       holds: [],
       denied: null,
       action: "would claim and run in backend (0 references resolved)",
-      picked: true
+      picked: true,
+      gaps: [],
+      run: null
     });
     expect(io.stdout).toBe(
       [
@@ -207,6 +209,7 @@ describe("why", () => {
         "assignee\tnone",
         "blockers\tnone open",
         "limits\tnone hold it",
+        "gaps\tnone in the last 24 hours",
         "outcome\twould claim and run in backend (0 references resolved)",
         "verdict\tthe next cycle claims it",
         ""
@@ -224,6 +227,57 @@ describe("why", () => {
     ]);
     expect(held.picked).toBe(false);
     expect(fs.existsSync(lock)).toBe(true);
+  });
+
+  it("names the gaps of the last 24 hours and a gap in the issue's latest run", async () => {
+    const { root, config } = setup();
+    const home = process.env.GLOBU_HOME as string;
+    const gap = (from: string, to: string) => ({ time: to, level: "warn", msg: "resumed after a gap", from, to });
+    const lines = (...gaps: object[]) => `${gaps.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    const evening = gap("2026-11-12T20:00:00.000Z", "2026-11-12T22:00:00.000Z");
+    const night = gap("2026-11-13T23:14:00.000Z", "2026-11-14T05:52:00.000Z");
+    const morning = gap("2026-11-14T07:00:00.000Z", "2026-11-14T08:10:00.000Z");
+    write(home, "logs/worker-2026-11-12.log", lines(evening));
+    write(home, "logs/worker-2026-11-14.log", lines(night, morning));
+    const old: RunRecord = {
+      ...newRun("MR-1", new Date("2026-11-12T19:00:00.000Z"), { jira: "Bot", github: null }),
+      state: "released",
+      endedAt: "2026-11-12T23:00:00.000Z",
+      wallMs: 4 * 60 * 60_000,
+      durationMs: 60 * 60_000
+    };
+    saveRun(path.join(runsDir(home), old.id), old);
+    const open = newRun("MR-2", new Date("2026-11-14T06:30:00.000Z"), { jira: "Bot", github: null });
+    saveRun(path.join(runsDir(home), open.id), open);
+    const jira = fakeJira([issue("MR-1"), issue("MR-2", { assignee: "Bot" })]);
+    const { worker, io } = deps(root, config, jira);
+    const report = await why(worker, "MR-1");
+    expect(report.gaps).toEqual([
+      { from: night.from, to: night.to },
+      { from: morning.from, to: morning.to }
+    ]);
+    expect(report.run).toEqual({
+      id: "MR-1-20261112T190000Z",
+      wallMs: 4 * 60 * 60_000,
+      outsideMs: 3 * 60 * 60_000,
+      gaps: [{ from: evening.from, to: evening.to }]
+    });
+    expect(io.stdout).toContain(
+      "gaps\tthe worker paused 2026-11-13 23:14 UTC to 2026-11-14 05:52 UTC (6 h 38 min); the worker paused 2026-11-14 07:00 UTC to 2026-11-14 08:10 UTC (1 h 10 min), the machine was asleep or the worker was suspended\n"
+    );
+    expect(io.stdout).toContain(
+      "run\tMR-1-20261112T190000Z took 4 h, 3 h of it outside Claude's segments, spent in setup, the push or a pause such as the machine asleep, the worker paused 2026-11-12 20:00 UTC to 2026-11-12 22:00 UTC (2 h)\n"
+    );
+    const running = await why(worker, "MR-2");
+    expect(running.run).toEqual({
+      id: open.id,
+      wallMs: null,
+      outsideMs: null,
+      gaps: [{ from: morning.from, to: morning.to }]
+    });
+    expect(io.stdout).toContain(
+      `run\t${open.id}, the worker paused 2026-11-14 07:00 UTC to 2026-11-14 08:10 UTC (1 h 10 min)\n`
+    );
   });
 
   it("names the blocked label, a missing or foreign marker, an assignee and open blockers", async () => {
@@ -316,7 +370,7 @@ describe("why", () => {
       calls: [{ call: "Bash: git stash push" }, { call: "Bash: git stash list", reason }]
     });
     expect(io.stdout).toContain(
-      `limits\tnone hold it\ndenied\t2 in run ${last.id}\ndenied\tBash: git stash push\ndenied\tBash: git stash list - ${reason}\noutcome\t`
+      `limits\tnone hold it\ngaps\tnone in the last 24 hours\ndenied\t2 in run ${last.id}\ndenied\tBash: git stash push\ndenied\tBash: git stash list - ${reason}\noutcome\t`
     );
     expect((await why(worker, "MR-3")).denied).toBeNull();
     saveRun(path.join(runsDir(home), last.id), { ...last, denied: undefined });

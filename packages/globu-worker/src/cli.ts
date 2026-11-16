@@ -17,7 +17,7 @@ import {
   withSecretsFile,
   workerConfigPath
 } from "./config.js";
-import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
+import { diagnosticsName, gapLines, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
 import { hold, POLL_MS } from "./hold.js";
 import { jiraClient } from "./jira.js";
@@ -385,11 +385,12 @@ export async function workerMain(
       const now = overrides.now ?? (() => new Date());
       const out = path.resolve(io.cwd, options.out ?? diagnosticsName(now()));
       const run = overrides.run ?? spawnRunner;
-      const included = await writeDiagnostics(
+      const { included, gaps } = await writeDiagnostics(
         { home: homes.home, env: loaded.env, run, secrets: secretValues(loaded.env) },
         out
       );
       io.out(`wrote ${out} with ${included.length} files: ${included.join(", ")}`);
+      for (const line of gapLines(gaps)) io.out(line);
     });
 
   program
