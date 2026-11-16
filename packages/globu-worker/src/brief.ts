@@ -36,7 +36,7 @@ function quoted(text: string): string {
     .join("\n");
 }
 
-function bashRules(allowedTools: string[]): string {
+export function bashRules(allowedTools: string[]): string {
   const prefixes = allowedTools.flatMap((tool) => BASH_RE.exec(tool)?.[1] ?? []);
   const allowed =
     prefixes.length === 0

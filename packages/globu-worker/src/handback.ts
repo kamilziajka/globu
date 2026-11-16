@@ -1,10 +1,11 @@
 import { type FollowUpSettings, projectOf } from "./config.js";
 import { type FiledEntry, filedFor, saveFiled } from "./filed.js";
-import type { JiraClient } from "./jira.js";
+import type { JiraClient, NewIssue } from "./jira.js";
 import { log } from "./logger.js";
 
 export type FollowUpItem = { summary: string; description: string };
 export type FiledFollowUp = { summary: string; key: string | null; problem: string | null };
+export type Carried = Pick<NewIssue, "labels" | "fields">;
 
 const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*?)[\s#]*$/;
 const SECTION_RE = /^follow[- ]?ups$/i;
@@ -101,30 +102,40 @@ async function link(jira: JiraClient, settings: FollowUpSettings, ledger: Ledger
   return null;
 }
 
+async function attempt(jira: JiraClient, issue: NewIssue): Promise<{ key: string } | { error: string }> {
+  try {
+    return { key: await jira.createIssue(issue) };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 async function create(
   jira: JiraClient,
   settings: FollowUpSettings,
   ledger: Ledger,
   runId: string,
   item: FollowUpItem,
-  labels: string[]
-): Promise<FiledEntry | string> {
-  let key: string;
-  try {
-    key = await jira.createIssue({
-      project: projectOf(ledger.key),
-      issueType: settings.issueType,
-      summary: item.summary,
-      description: description(item, ledger.key, runId),
-      labels
-    });
-  } catch (err) {
-    return (err as Error).message;
+  { fields, ...carried }: Carried
+): Promise<{ entry: FiledEntry; unmarked: string | null } | string> {
+  const issue: NewIssue = {
+    project: projectOf(ledger.key),
+    issueType: settings.issueType,
+    summary: item.summary,
+    description: description(item, ledger.key, runId),
+    ...carried
+  };
+  let made = await attempt(jira, fields === undefined ? issue : { ...issue, fields });
+  let unmarked: string | null = null;
+  if ("error" in made && fields !== undefined) {
+    unmarked = `repository marker not set: ${made.error}`;
+    made = await attempt(jira, issue);
   }
-  const entry = { summary: item.summary, key, linked: false };
+  if ("error" in made) return made.error;
+  const entry = { summary: item.summary, key: made.key, linked: false };
   ledger.entries.push(entry);
   remember(ledger);
-  return entry;
+  return { entry, unmarked };
 }
 
 async function fileOne(
@@ -134,7 +145,7 @@ async function fileOne(
   runId: string,
   item: FollowUpItem,
   index: number,
-  labels: string[]
+  carried: Carried
 ): Promise<FiledFollowUp & { reused: boolean }> {
   const { summary } = item;
   if (index >= settings.max) {
@@ -142,10 +153,14 @@ async function fileOne(
   }
   const at = ledger.earlier.findIndex((entry) => entry.summary === summary);
   const reused = at !== -1;
-  const entry = reused ? ledger.earlier.splice(at, 1)[0] : await create(jira, settings, ledger, runId, item, labels);
-  if (typeof entry === "string") return { summary, key: null, problem: entry, reused };
-  const problem = await link(jira, settings, ledger, entry);
-  return { summary, key: entry.key, problem, reused };
+  const made = reused
+    ? { entry: ledger.earlier.splice(at, 1)[0], unmarked: null }
+    : await create(jira, settings, ledger, runId, item, carried);
+  if (typeof made === "string") return { summary, key: null, problem: made, reused };
+  const problems = [made.unmarked, await link(jira, settings, ledger, made.entry)].filter(
+    (problem) => problem !== null
+  );
+  return { summary, key: made.entry.key, problem: problems.length === 0 ? null : problems.join(", "), reused };
 }
 
 export async function fileFollowUps(
@@ -155,14 +170,14 @@ export async function fileFollowUps(
   key: string,
   runId: string,
   handback: string,
-  labels: string[] = []
+  carried: Carried = { labels: [] }
 ): Promise<FiledFollowUp[]> {
   if (settings === undefined) return [];
   const entries = filedFor(home, key);
   const ledger: Ledger = { home, key, entries, earlier: [...entries] };
   const filed: FiledFollowUp[] = [];
   for (const [index, item] of parseFollowUps(handback).entries()) {
-    const { reused, ...entry } = await fileOne(jira, settings, ledger, runId, item, index, labels);
+    const { reused, ...entry } = await fileOne(jira, settings, ledger, runId, item, index, carried);
     const fields = { run: runId, key, followUp: entry.key, summary: entry.summary };
     if (entry.problem !== null) log().warn("follow-up failed", { ...fields, problem: entry.problem });
     else log().info(reused ? "follow-up reused" : "follow-up filed", fields);

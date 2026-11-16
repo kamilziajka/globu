@@ -12,7 +12,7 @@ import {
   resolveRefs,
   sameRepo
 } from "../../globu-core/src/index.js";
-import { type Blocker, renderBrief } from "./brief.js";
+import { type Blocker, bashRules, renderBrief } from "./brief.js";
 import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
 import {
   projectFor,
@@ -27,7 +27,7 @@ import {
 } from "./config.js";
 import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
-import { fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
+import { type Carried, fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
@@ -237,6 +237,16 @@ export function markerShard(issue: JiraIssue, config: WorkerConfig): string | nu
   if (typeof value === "string") return value;
   const option = (value as { value?: unknown } | null)?.value;
   return typeof option === "string" ? option : null;
+}
+
+export function carriedFrom(issue: JiraIssue, config: WorkerConfig): Carried {
+  const own = [config.jira.eligibleLabel, config.jira.blockedLabel, config.jira.priorityLabel];
+  const labels = issue.labels.filter((label) => !own.includes(label));
+  const marker = config.jira.repository;
+  const shard = markerShard(issue, config);
+  if ("labelPrefix" in marker || shard === null) return { labels };
+  const value = typeof issue.fields[marker.field] === "string" ? shard : { value: shard };
+  return { labels, fields: { [marker.field]: value } };
 }
 
 export function candidateOf(deps: WorkerDeps, issue: JiraIssue): Candidate {
@@ -683,11 +693,15 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     const { github } = worktree === target ? settings : settingsFor(config, project, worktree.shard.id);
     record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token, github));
   }
-  const own = [config.jira.eligibleLabel, config.jira.blockedLabel, config.jira.priorityLabel];
-  const marker = config.jira.repository;
-  const marks = (label: string) => "labelPrefix" in marker && label.startsWith(marker.labelPrefix);
-  const labels = issue.labels.filter((label) => !own.includes(label) && !marks(label));
-  const filed = await fileFollowUps(jira, settings.followUps, deps.home, issue.key, record.id, handback, labels);
+  const filed = await fileFollowUps(
+    jira,
+    settings.followUps,
+    deps.home,
+    issue.key,
+    record.id,
+    handback,
+    carriedFrom(issue, config)
+  );
   const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
@@ -959,7 +973,13 @@ function conflictedFiles(tree: string): string[] {
     .filter((line) => line !== "");
 }
 
-function repairBrief(pull: PullRequest, original: string, conflicted: string[], handbackFile: string): string {
+function repairBrief(
+  pull: PullRequest,
+  original: string,
+  conflicted: string[],
+  handbackFile: string,
+  allowedTools: string[]
+): string {
   const files = conflicted.length === 0 ? "none" : conflicted.map((file) => `- ${file}`).join("\n");
   const checks = pull.failing.length === 0 ? "none" : pull.failing.map((line) => `- ${line}`).join("\n");
   return [
@@ -967,6 +987,8 @@ function repairBrief(pull: PullRequest, original: string, conflicted: string[], 
     "",
     `The branch \`${pull.head}\` is checked out here with \`origin/${pull.base}\` merged into it, the merge left uncommitted when it conflicted.`,
     "Keep what the pull request set out to do and fit it to what changed on the base branch. Do not rebase, do not push.",
+    "",
+    bashRules(allowedTools),
     "",
     "## Conflicted files",
     "",
@@ -1011,7 +1033,7 @@ async function attemptRepair(
     if (failedSetup !== null) return failedSetup;
     const briefFile = path.join(dir, "brief.md");
     const handbackFile = path.join(dir, "handback.md");
-    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
+    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile, settings.claude.allowedTools));
     const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile), settings);
     const unstarted = machineFailure("claude", outcome);
     if (unstarted !== null) return environmentProblem(record, unstarted);

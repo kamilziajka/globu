@@ -181,10 +181,12 @@ describe("jiraClient", () => {
     };
     expect(await client.createIssue(named)).toBe("MR-9");
     expect(await client.createIssue({ ...named, issueType: "10002" })).toBe("MR-9");
+    expect(await client.createIssue({ ...named, fields: { customfield_1: { value: "backend" } } })).toBe("MR-9");
     await client.linkIssues("Relates", "MR-7", "MR-9");
     expect(calls.map((call) => call.body)).toEqual([
       { fields: { ...fields, issuetype: { name: "Task" } } },
       { fields: { ...fields, issuetype: { id: "10002" } } },
+      { fields: { ...fields, customfield_1: { value: "backend" }, issuetype: { name: "Task" } } },
       { type: { name: "Relates" }, inwardIssue: { key: "MR-7" }, outwardIssue: { key: "MR-9" } }
     ]);
   });

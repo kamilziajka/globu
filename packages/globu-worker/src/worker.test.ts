@@ -14,6 +14,7 @@ import { setupShell } from "./shell.js";
 import { loadSubscription, recordUsage } from "./subscription.js";
 import {
   addWorktree,
+  carriedFrom,
   checkShards,
   claimIssue,
   cleanup,
@@ -361,6 +362,25 @@ describe("markerShard", () => {
     expect(markerShard(issue("MR-1", { fields: { customfield_1: { id: 3 } } }), field)).toBeNull();
     expect(markerShard(issue("MR-1", { fields: { customfield_1: null } }), field)).toBeNull();
     expect(markerShard(issue("MR-1"), field)).toBeNull();
+  });
+});
+
+describe("carriedFrom", () => {
+  it("carries the parent's labels with the marker and the marker field, never the worker's own labels", () => {
+    const label = setup().config;
+    label.jira.priorityLabel = "urgent";
+    const field: WorkerConfig = { ...label, jira: { ...label.jira, repository: { field: "customfield_1" } } };
+    const labels = ["agent-eligible", "repo:klayboy", "task", "windows", "urgent"];
+    expect(carriedFrom(issue("MR-1", { labels }), label)).toEqual({ labels: ["repo:klayboy", "task", "windows"] });
+    expect(carriedFrom(issue("MR-1", { labels: ["task"], fields: { customfield_1: "klayboy" } }), field)).toEqual({
+      labels: ["task"],
+      fields: { customfield_1: "klayboy" }
+    });
+    expect(carriedFrom(issue("MR-1", { labels: [], fields: { customfield_1: { value: "klayboy" } } }), field)).toEqual({
+      labels: [],
+      fields: { customfield_1: { value: "klayboy" } }
+    });
+    expect(carriedFrom(issue("MR-1", { labels: [] }), field)).toEqual({ labels: [] });
   });
 });
 
@@ -1035,7 +1055,7 @@ describe("once", () => {
       "MR Task Rename the flag"
     ]);
     expect(jira.issueLinks).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102"]);
-    expect(jira.store.get("MR-101")?.labels).toEqual(["task"]);
+    expect(jira.store.get("MR-101")?.labels).toEqual(["repo:backend", "task"]);
     const comment = jira.comments["MR-7"][0];
     expect(comment).toContain(
       "---\n\nFollow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
@@ -1055,6 +1075,7 @@ describe("once", () => {
     const { jira, record } = await runWith(world, [marked], { commit: true, handback });
     expect(record?.state).toBe("handed-back");
     expect(jira.store.get("MR-101")?.labels).toEqual(["repo:backend"]);
+    expect(jira.created[0].fields).toEqual({ customfield_1: "backend" });
   });
 
   it("hands back when a follow-up cannot be created and says so in the comment", async () => {

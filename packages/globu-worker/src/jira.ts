@@ -16,7 +16,14 @@ export type JiraBlocker = { key: string; summary: string; status: string; done: 
 export type JiraLink = { relation: string; key: string; summary: string; status: string };
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
-export type NewIssue = { project: string; issueType: string; summary: string; description: string; labels: string[] };
+export type NewIssue = {
+  project: string;
+  issueType: string;
+  summary: string;
+  description: string;
+  labels: string[];
+  fields?: Record<string, unknown>;
+};
 export type JiraIssueType = { id: string; name: string };
 export type JiraClient = {
   myself(): Promise<JiraUser>;
@@ -183,10 +190,17 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
       await request("PUT", issuePath(key), { fields: { [field]: content } });
     },
     remoteLink: (key, url, title) => request("POST", `${issuePath(key)}/remotelink`, { object: { url, title } }),
-    async createIssue({ project, issueType, summary, description, labels }) {
+    async createIssue({ project, issueType, summary, description, labels, fields }) {
       const issuetype = isStatusId(issueType) ? { id: issueType } : { name: issueType };
       const created = await request<{ key: string }>("POST", "/issue", {
-        fields: { project: { key: project }, issuetype, summary, description: readable(project, description), labels }
+        fields: {
+          ...fields,
+          project: { key: project },
+          issuetype,
+          summary,
+          description: readable(project, description),
+          labels
+        }
       });
       return created.key;
     },

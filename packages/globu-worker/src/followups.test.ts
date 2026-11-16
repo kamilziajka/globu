@@ -223,6 +223,13 @@ describe("following pull requests", () => {
     const brief = fs.readFileSync(path.join(setup.home, "runs", repair.id, "brief.md"), "utf8");
     expect(brief).toContain("## Conflicted files\n\n- src/x.ts");
     expect(brief).toContain("## Failing checks\n\nnone");
+    expect(brief).toContain(
+      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `npx vitest *`"
+    );
+    expect(brief).toContain(
+      "so run one command per call and read or change files with Read, Edit, Write, Grep and Glob"
+    );
+    expect(brief).toContain("`git stash` is denied");
     expect(calls.claude[0].prompt).toContain("Repair the pull request described in");
     expect(calls.claude[0].env.JIRA_API_TOKEN).toBeUndefined();
     expect(calls.gh.find((args) => args[1] === "comment")?.[4]).toContain("Repaired by the Globu worker.");
