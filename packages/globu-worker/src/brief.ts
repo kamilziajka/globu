@@ -41,7 +41,7 @@ export function bashRules(allowedTools: string[]): string {
   const allowed =
     prefixes.length === 0
       ? "Bash is not allowed in this run."
-      : `Bash runs only the commands that match these patterns, in which \`*\` stands for any text: ${prefixes.map((prefix) => `\`${prefix}\``).join(", ")}.`;
+      : `Bash runs only the commands that match these patterns, in which \`*\` stands for any text: ${prefixes.map((prefix) => `\`${prefix}\``).join(", ")}. A variable set in front of a command, as in \`FOO=1 node app.js\`, is part of the command, so it runs only under a pattern that starts with that assignment, such as \`FOO=* node *\`, and \`env FOO=1 node app.js\` or \`export FOO=1 && node app.js\` is denied the same way. Only a few common variables, such as \`NODE_ENV\`, \`RUST_LOG\`, \`LANG\`, \`TZ\` and \`CI\`, pass under the pattern of the command alone. For any other, hand the value to the program through a file or an option it reads, such as \`node --env-file=<file>\` with the file written next to the handback, and when it has none, name the command and the pattern it needs in the handback instead of dropping the step.`;
   return `${allowed} Every part of a command joined with \`;\`, \`&&\`, \`||\` or \`|\` is checked on its own, so run one command per call and read or change files with Read, Edit, Write, Grep and Glob rather than through the shell. \`git stash\` is denied because the stash is shared with every other worktree of this clone: make a work-in-progress commit instead. \`globu base stamp --verified\` is denied because a verification needs a person.`;
 }
 

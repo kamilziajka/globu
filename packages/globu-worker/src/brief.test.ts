@@ -91,10 +91,15 @@ describe("renderBrief", () => {
     expect(brief).toContain(`The worker released this issue 2 times before, the last time with: ${"x".repeat(200)} …`);
     expect(brief).toContain("Status: Delivery. Labels: windows, bug.");
     expect(brief).toContain(
-      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `git status*`. Every part of a command joined with"
+      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `git status*`. A variable set in front of a command"
     );
     expect(brief).toContain("`git stash` is denied");
     expect(brief).toContain("`globu base stamp --verified` is denied because a verification needs a person.");
+    expect(brief).toContain(
+      "A variable set in front of a command, as in `FOO=1 node app.js`, is part of the command, so it runs only under a pattern that starts with that assignment, such as `FOO=* node *`"
+    );
+    expect(brief).toContain("such as `node --env-file=<file>` with the file written next to the handback");
+    expect(brief).toContain("instead of dropping the step. Every part of a command joined with");
     expect(brief).toContain(
       "## Linked issues\n\n- relates to MR-3: Nearby (Done)\n- Cloners MR-2 (unknown)\n- linked to MR-1 (unknown)\n"
     );
@@ -144,6 +149,7 @@ describe("renderBrief", () => {
     expect(brief).not.toContain("## Linked issues");
     expect(brief).toContain("Labels: none.");
     expect(brief).toContain("Bash is not allowed in this run.");
+    expect(brief).not.toContain("A variable set in front of a command");
   });
 
   it("says once for a single earlier release", () => {
