@@ -19,7 +19,7 @@ Nothing in a repo has to change for it to be a shard. Globu reads its bases as t
 
 ## A worked example
 
-One repo with its own base, and a second repo that uses it.
+One repo with its own base, and a second repo that uses it. The slash commands run in Claude Code, in a session started after the plugin was installed. The `globu` commands run in a terminal: the plugin keeps its own copy of the CLI and does not put `globu` on the `PATH`, so install it with `npm install -g @kazet/globu` or prefix each command with `npx --yes @kazet/globu`.
 
 1. **Give a repo a base.** In the repo, `/globu:setup-knowledge-base` asks whether the base should live in `wiki` (recommended), `docs`, `knowledge` or a directory of your own naming, then creates its `index.md` with the authoring guide and its `log.md`, or upgrades a base that is already there. From then on the edit hook validates the base after every change Claude makes to it.
 
@@ -30,5 +30,12 @@ One repo with its own base, and a second repo that uses it.
 4. **Work from another repo.** A session started anywhere begins with the shard index: each shard's location, routing text and entry file. When a task touches a shard's area, Claude reads that shard's `index.md` and follows the links. When the task produces knowledge that belongs to a shard, `update-knowledge` writes it there, within that shard's mode.
 
 5. **Keep it current.** `globu sync` pulls the clones Globu owns and fetches the user's own. `globu doctor` reports clones that are missing or drifted and shards without routing text. Projects (`globu project set work product team-*`) decide which shards a session sees: those of the project its repo belongs to, plus the manifest's `always` shards.
+
+## Check it works
+
+- **The plugin.** In a new session, the eight `/globu:` skills are offered when you type `/globu`.
+- **A base.** After step 1, `wiki/index.md` and `wiki/log.md` exist and `globu base validate` prints `OK    wiki`.
+- **A shard.** After step 3, `globu list` shows the repo with its routing text, and `globu index`, run in another repo, prints the shard index that the next session there starts with. Nothing is printed while no shard is registered.
+- **The registry.** `globu doctor` prints one line per problem, such as a missing clone, a missing entry file or missing routing text, and exits 1 when one of them is an error.
 
 See [architecture](./architecture.md) for how the pieces fit, [knowledge bases](./knowledge-base.md) for the base model and commands, and the [CLI reference](./globu-cli.md) for every command.

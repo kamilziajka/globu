@@ -4,6 +4,7 @@ import { Command, CommanderError } from "commander";
 import type { Io } from "../../globu-cli/src/cli/index.js";
 import { useGitHubToken } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
+import type { KeepAwake } from "./awake.js";
 import { bootstrapShards } from "./bootstrap.js";
 import { attempt, type Check, checkAccess, checkNames, formatCheck } from "./check.js";
 import {
@@ -16,18 +17,27 @@ import {
   withSecretsFile,
   workerConfigPath
 } from "./config.js";
-import { diagnosticsName, writeDiagnostics } from "./diagnostics.js";
+import { diagnosticsName, gapLines, writeDiagnostics } from "./diagnostics.js";
 import { spawnRunner } from "./exec.js";
 import { hold, POLL_MS } from "./hold.js";
 import { jiraClient } from "./jira.js";
 import { LAUNCHER_COMMAND, launcherMain } from "./launcher.js";
 import { exclusiveHold, type Hold, withLockPid } from "./lock.js";
-import { fileLogger, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
+import { fileLogger, log, loggedFetch, loggedRunner, parseLevel, setLogger } from "./logger.js";
 import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
 import { delegate, retry, why } from "./triage.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
-import { claimIssue, finishRun, loop, nextCycle, once, releaseRun, type WorkerDeps } from "./worker.js";
+import {
+  claimIssue,
+  finishRun,
+  loop,
+  nextCycle,
+  once,
+  releaseRun,
+  stopOnMachineGit,
+  type WorkerDeps
+} from "./worker.js";
 
 export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platform">> & {
   signals: EventEmitter;
@@ -35,6 +45,7 @@ export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platf
   readKey?: ReadKey;
   every?: Every;
   wait?: (ms: number) => Promise<void>;
+  awake?: KeepAwake;
 };
 
 const DESCRIPTION = "Claim agent-eligible Jira issues and run Claude Code in the right Globu shard.";
@@ -82,6 +93,7 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
   process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const secrets = readSecrets(env);
   useGitHubToken(secrets.githubToken);
+  stopOnMachineGit();
   return {
     config,
     secrets,
@@ -137,11 +149,18 @@ function ownHome(deps: WorkerDeps, command: string): Hold {
   return lock;
 }
 
-async function owning<T>(deps: WorkerDeps, command: string, work: () => Promise<T>): Promise<T> {
+async function owning<T>(
+  deps: WorkerDeps,
+  command: string,
+  awake: () => () => void,
+  work: () => Promise<T>
+): Promise<T> {
   const lock = ownHome(deps, command);
+  const rest = deps.config.keepAwake ? awake() : () => {};
   try {
     return await work();
   } finally {
+    rest();
     lock.release();
   }
 }
@@ -195,6 +214,11 @@ export async function workerMain(
       }
     );
   };
+  const awake = () =>
+    (overrides.awake ?? (() => () => {}))(overrides.platform ?? process.platform, (problem) => {
+      log().warn("not keeping the machine awake", { problem });
+      io.err(`globu-worker: cannot keep the machine awake, ${problem}`);
+    });
   const global = () => program.opts<Global>();
   const ownDeps = (): WorkerDeps => {
     const deps = buildDeps(io, env, overrides, ownHomes(env), global());
@@ -241,7 +265,7 @@ export async function workerMain(
     .action(async (options: { dryRun?: boolean; issue?: string; repair?: string; json?: boolean }) => {
       const deps = ownDeps();
       const cycle = () => once(deps, { dryRun: options.dryRun, issue: options.issue, repair: options.repair });
-      const result = options.dryRun ? await cycle() : await owning(deps, "once", cycle);
+      const result = options.dryRun ? await cycle() : await owning(deps, "once", awake, cycle);
       if (options.dryRun && options.issue === undefined && result.plan.length > 0) {
         io.out(nextCycle(deps.config, result.plan));
       }
@@ -254,7 +278,7 @@ export async function workerMain(
     .option("--json", "print machine-readable JSON")
     .action(async (key: string, options: { json?: boolean }) => {
       const deps = ownDeps();
-      const result = await owning(deps, "retry", () => retry(deps, key));
+      const result = await owning(deps, "retry", awake, () => retry(deps, key));
       if (options.json) io.out(JSON.stringify(result, null, 2));
     });
 
@@ -329,7 +353,7 @@ export async function workerMain(
     .description("poll and run on the configured interval until SIGINT or SIGTERM")
     .action(async () => {
       const deps = ownDeps();
-      await owning(deps, "run", async () => {
+      await owning(deps, "run", awake, async () => {
         if (!passed(await verify(io, overrides, deps, []))) {
           exitCode = 1;
           return;
@@ -361,11 +385,12 @@ export async function workerMain(
       const now = overrides.now ?? (() => new Date());
       const out = path.resolve(io.cwd, options.out ?? diagnosticsName(now()));
       const run = overrides.run ?? spawnRunner;
-      const included = await writeDiagnostics(
+      const { included, gaps } = await writeDiagnostics(
         { home: homes.home, env: loaded.env, run, secrets: secretValues(loaded.env) },
         out
       );
       io.out(`wrote ${out} with ${included.length} files: ${included.join(", ")}`);
+      for (const line of gapLines(gaps)) io.out(line);
     });
 
   program
@@ -377,7 +402,7 @@ export async function workerMain(
       const mode = parseMode(options.mode ?? (interactive ? "pick" : "auto"));
       if (mode === "pick" && !interactive) throw new Error("pick mode needs a terminal, use --mode auto");
       const deps = ownDeps();
-      await owning(deps, `start --mode ${mode}`, async () => {
+      await owning(deps, `start --mode ${mode}`, awake, async () => {
         const checks = await verify(io, overrides, deps, []);
         if (!passed(checks)) {
           exitCode = 1;

@@ -6,7 +6,7 @@ import { readJson, root } from "./targets.ts";
 
 const [siteArg, dateArg] = process.argv.slice(2);
 if (siteArg === undefined) {
-  console.error("usage: node scripts/release-site.ts <globu-website checkout> [YYYY-MM-DD]");
+  console.error("usage: node scripts/release-site.ts <site checkout> [YYYY-MM-DD]");
   process.exit(1);
 }
 
@@ -26,7 +26,7 @@ const docsDir = path.join(root, "docs");
 const contentDir = path.join(site, "content");
 const navFile = path.join(site, "src", "docs", "nav.ts");
 for (const required of [contentDir, navFile, path.join(site, "release.json"), path.join(site, "docs", "log.md")]) {
-  if (!fs.existsSync(required)) throw new Error(`${required} is missing, is ${site} a globu-website checkout?`);
+  if (!fs.existsSync(required)) throw new Error(`${required} is missing, is ${site} a checkout of the site?`);
 }
 
 const markdown = (dir: string) =>

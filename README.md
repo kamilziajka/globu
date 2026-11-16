@@ -28,10 +28,17 @@ A separate program, **[globu-worker](docs/worker.md)**, polls a Jira project for
 ```sh
 claude plugin marketplace add kamilziajka/globu
 claude plugin install globu@globu
+```
+
+Then start a new Claude Code session: a session that was already running does not load the plugin's skills and hooks.
+
+Optional, the status mod:
+
+```sh
 claude plugin install globu-status@globu
 ```
 
-To pick up a new release later:
+To pick up a new release later, with the last line only when the status mod is installed:
 
 ```sh
 claude plugin marketplace update globu
@@ -39,14 +46,18 @@ claude plugin update globu@globu
 claude plugin update globu-status@globu
 ```
 
-The plugin runs its CLI from an npm package that Claude Code installs with it, so `node` (22 or newer) and `npm` must be on the `PATH`.
-
-The CLI also works on its own in a terminal:
+The plugin runs its CLI from an npm package that Claude Code installs with it, so `node` (22 or newer) and `npm` must be on the `PATH`. That copy stays inside the plugin and does not put `globu` on the `PATH`. For the `globu` commands in the docs, install the CLI in a terminal or prefix each one with `npx --yes @kazet/globu`:
 
 ```sh
 npm install -g @kazet/globu
 globu base --help
 ```
+
+## Check it works
+
+In a new session in any repo, run `/globu:setup-knowledge-base` and pick `wiki`. It works when `wiki/index.md` and `wiki/log.md` exist and `globu base validate` prints `OK    wiki`.
+
+After `/globu:register-knowledge-base`, `globu list` shows the repo as a shard and `globu index`, run in another repo, prints the text the next session there starts with. `globu doctor` prints one line per problem, such as a missing clone or missing routing text, and exits 1 when one of them is an error.
 
 The worker is its own package, installed where the worker runs:
 

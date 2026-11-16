@@ -476,4 +476,22 @@ describe("checkAccess", () => {
     expect(checks[0]).toMatchObject({ name: "shards", ok: true, short: "backend" });
     expect(detail(checks, "shards")).toBe(`backend, settled runs left their worktree behind, delete ${tree}`);
   });
+
+  it("warns when a timeout is above the longest background command Claude Code allows", async () => {
+    const setup = world();
+    const worker = { statuses: { claimed: "Doing", released: "Open" }, timeout: "800h" };
+    saveManifest({
+      ...loadManifest(),
+      projects: {
+        acme: { shards: ["backend"], jira: "MR", worker: { ...worker, shards: { backend: { timeout: "700h" } } } },
+        calm: { shards: ["backend"], jira: "CA", worker: { ...worker, timeout: "10h" } }
+      }
+    });
+    const config = configOf("version: 2\njira: { site: https://acme.atlassian.net }\n");
+    const checks = await checkAccess(deps({ ...setup, config }).worker);
+    expect(checks.find((check) => check.name === "claude")?.ok).toBe(true);
+    expect(detail(checks, "claude")).toBe(
+      "claude-test (the default, set claude.model to choose) answers in /claude with the issue-deliver skill (0.08 USD), the timeout of project acme (800 hours), shard backend of project acme (700 hours) is above the 2147483647 ms, about 596 hours, that Claude Code allows a background command, so a run there has to split work that takes longer"
+    );
+  });
 });

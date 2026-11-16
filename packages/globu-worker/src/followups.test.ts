@@ -6,12 +6,29 @@ import { register } from "../../globu-core/src/index.js";
 import { captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig } from "./config.js";
 import type { Runner } from "./exec.js";
+import { GAP_MESSAGE, readGaps, runGap } from "./gaps.js";
 import type { JiraClient } from "./jira.js";
-import { setLogger, silentLogger } from "./logger.js";
+import { fileLogger, setLogger, silentLogger } from "./logger.js";
 import { mergedIssues } from "./merged.js";
 import { loadRun, loadRuns, newRun, type RunRecord, saveRun } from "./runs.js";
 import { start } from "./start.js";
-import { type FollowUpRow, followUps, once, type WorkerDeps } from "./worker.js";
+import { recordUsage } from "./subscription.js";
+import { type FollowUpRow, followUps, loop, once, type WorkerDeps } from "./worker.js";
+
+const endedGit = vi.hoisted(() => ({ when: null as ((args: string[]) => boolean) | null }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], options: object) => {
+      if (file === "git" && endedGit.when?.(args)) {
+        throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), { status: 3221225794, stderr: "" });
+      }
+      return actual.execFileSync(file, args, options);
+    }
+  };
+});
 
 const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
@@ -186,6 +203,20 @@ function deps(setup: ReturnType<typeof world>, script: Script, token: string | n
   return { worker, calls, jira: fake, rows, io };
 }
 
+function anotherIssue(fake: FakeJira): void {
+  const next = { assignee: null as string | null, status: "Ready for delivery" };
+  const others = fake.issue;
+  fake.search = async () => [{ key: "MR-9", labels: ["repo:backend"] }];
+  fake.issue = async (key) =>
+    key === "MR-9" ? { ...(await others(key)), labels: ["repo:backend"], ...next } : await others(key);
+  fake.assign = async (_key, accountId) => {
+    next.assignee = accountId;
+  };
+  fake.transitionTo = async (_key, status) => {
+    next.status = status;
+  };
+}
+
 function original(setup: ReturnType<typeof world>): RunRecord {
   return loadRun(setup.home, setup.original.id).record;
 }
@@ -222,6 +253,16 @@ describe("following pull requests", () => {
     const brief = fs.readFileSync(path.join(setup.home, "runs", repair.id, "brief.md"), "utf8");
     expect(brief).toContain("## Conflicted files\n\n- src/x.ts");
     expect(brief).toContain("## Failing checks\n\nnone");
+    expect(brief).toContain(
+      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `npx vitest *`"
+    );
+    expect(brief).toContain(
+      "so run one command per call and read or change files with Read, Edit, Write, Grep and Glob"
+    );
+    expect(brief).toContain("`git stash` is denied");
+    expect(brief).toContain(
+      "`globu base stamp --verified` is denied because a verification needs a person.\n\nClaude Code stops a command started with `run_in_background` when its `timeout` runs out. In this run that `timeout` can be at most 2 hours"
+    );
     expect(calls.claude[0].prompt).toContain("Repair the pull request described in");
     expect(calls.claude[0].env.JIRA_API_TOKEN).toBeUndefined();
     expect(calls.gh.find((args) => args[1] === "comment")?.[4]).toContain("Repaired by the Globu worker.");
@@ -337,6 +378,25 @@ describe("following pull requests", () => {
     );
   });
 
+  it("does not count a repair whose git fetch or merge Windows ended", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n" });
+    try {
+      for (const step of ["fetch", "merge"]) {
+        endedGit.when = (args) => args.includes(step);
+        const { worker } = deps(setup, { pulls: { [setup.url]: pull(setup.url) } });
+        const record = (await once(worker, { repair: setup.url })).runs[0];
+        expect(record).toMatchObject({
+          state: "released",
+          environment: true,
+          reason: "Windows ended git with status 0xC0000142"
+        });
+      }
+    } finally {
+      endedGit.when = null;
+    }
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "open" });
+  });
+
   it("keeps a failed repair's reason and its comments when they cannot be posted, and posts them on a later cycle", async () => {
     const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n" });
     const pulls = { [setup.url]: pull(setup.url) };
@@ -361,7 +421,11 @@ describe("following pull requests", () => {
 
     const tokenless = deps(setup, { pulls: {} }, null);
     await once(tokenless.worker);
-    expect(stored().unposted).toHaveLength(2);
+    expect(stored().unposted).toEqual([expect.objectContaining({ on: "pull", target: setup.url })]);
+    expect(tokenless.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
+    expect(tokenless.io.stderr).toContain(
+      `globu-worker: could not comment on ${setup.url}, the next cycle tries again: set GH_TOKEN to comment on pull requests`
+    );
 
     const second = deps(setup, { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } });
     await once(second.worker);
@@ -374,7 +438,7 @@ describe("following pull requests", () => {
       "--body",
       expect.stringContaining("could not repair")
     ]);
-    expect(second.jira.comments).toEqual([expect.stringContaining("could not repair this pull request")]);
+    expect(second.jira.comments).toEqual([]);
   });
 
   it("prints a repair as repaired or repair failed, and says which issue waits for the slot it took", async () => {
@@ -446,6 +510,35 @@ describe("following pull requests", () => {
     expect(await followUps(worker, true)).toEqual([]);
   });
 
+  it("settles a merge when Jira refuses the comment, and a later cycle posts the comment once", async () => {
+    const setup = world();
+    const merged = { pulls: { [setup.url]: pull(setup.url, { state: "MERGED" }) } };
+    const first = deps(setup, merged);
+    first.jira.comment = async () => {
+      throw new Error("Jira is down");
+    };
+    await followUps(first.worker, true);
+    expect(original(setup)).toMatchObject({
+      followUp: { repairs: 0, state: "merged" },
+      unposted: [{ on: "issue", target: "MR-7", body: `Merged: ${setup.url}` }]
+    });
+    expect(mergedIssues(setup.home, [])).toHaveProperty("MR-7");
+    expect(git(setup.remote, "branch", "--list", BRANCH)).toBe("");
+    expect(first.io.stderr).toContain(
+      "globu-worker: could not comment on MR-7, the next cycle tries again: Jira is down"
+    );
+
+    const second = deps(setup, merged);
+    await once(second.worker);
+    expect(second.jira.comments).toEqual([`Merged: ${setup.url}`]);
+    expect(second.calls.gh.filter((args) => args[1] === "view")).toEqual([]);
+    expect(original(setup).unposted).toBeUndefined();
+
+    const third = deps(setup, merged);
+    await once(third.worker);
+    expect(third.jira.comments).toEqual([]);
+  });
+
   it("deletes only the branch it created and logs a branch it cannot delete", async () => {
     const setup = world();
     git(setup.remote, "branch", "human/topic");
@@ -509,6 +602,52 @@ describe("following pull requests", () => {
     expect(closed.jira.transitions).toEqual([]);
   });
 
+  it("leaves the issue of a partial merge open, or moves it to the partial status, and settles it once", async () => {
+    const setup = world();
+    fs.writeFileSync(
+      setup.configFile,
+      config("").replace(
+        "  releasedStatus: Ready for delivery",
+        "  releasedStatus: Ready for delivery\n  doneStatus: Done"
+      )
+    );
+    git(setup.remote, "branch", "-D", BRANCH);
+    const save = (patch: Partial<RunRecord>) => {
+      const record = { ...original(setup), ...patch };
+      delete record.followUp;
+      saveRun(path.join(setup.home, "runs", record.id), record);
+    };
+    save({ outcome: "partial", followUpIssues: ["MR-100"] });
+    const pulls = { [setup.url]: pull(setup.url, { state: "MERGED" }) };
+    const partial = deps(setup, { pulls });
+    await followUps(partial.worker, true);
+    expect(partial.jira.transitions).toEqual([]);
+    expect(partial.jira.comments).toEqual([
+      `Merged: ${setup.url}\n\nThe merge was partial: the run handed back with Outcome: partial, so MR-7 stays open. What is left is filed as MR-100.`
+    ]);
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+    expect(mergedIssues(setup.home, loadRuns(setup.home))).toEqual({});
+    expect(await followUps(partial.worker, true)).toEqual([]);
+    expect(partial.jira.comments).toHaveLength(1);
+
+    save({ outcome: "not met", followUpIssues: undefined });
+    const moved = deps(setup, { pulls });
+    const project = moved.worker.config.projects[0];
+    project.worker.statuses = { ...project.worker.statuses, partial: "Partly done" };
+    await followUps(moved.worker, true);
+    expect(moved.jira.transitions).toEqual(["MR-7 -> Partly done"]);
+    expect(moved.jira.comments).toEqual([
+      `Merged: ${setup.url}\n\nThe merge was partial: the run handed back with Outcome: not met, so MR-7 stays open and moves to Partly done. What is left is in its handback.`
+    ]);
+
+    save({ outcome: "met" });
+    const met = deps(setup, { pulls });
+    await followUps(met.worker, true);
+    expect(met.jira.transitions).toEqual(["MR-7 -> Done"]);
+    expect(met.jira.comments).toEqual([`Merged: ${setup.url}`]);
+    expect(Object.keys(mergedIssues(setup.home, []))).toEqual(["MR-7"]);
+  });
+
   it("leaves the pull requests and stale runs of a project it no longer serves to people", async () => {
     const setup = world();
     const stale = newRun("MR-7", NOW, { jira: "Bot", github: null });
@@ -537,17 +676,7 @@ describe("following pull requests", () => {
     const script: Script = { pulls: { [setup.url]: open } };
     const { worker, jira: fake } = deps(setup, script);
     worker.config.poll.every = 10;
-    const next = { assignee: null as string | null, status: "Ready for delivery" };
-    const others = fake.issue;
-    fake.search = async () => [{ key: "MR-9", labels: ["repo:backend"] }];
-    fake.issue = async (key) =>
-      key === "MR-9" ? { ...(await others(key)), labels: ["repo:backend"], ...next } : await others(key);
-    fake.assign = async (_key, accountId) => {
-      next.assignee = accountId;
-    };
-    fake.transitionTo = async (_key, status) => {
-      next.status = status;
-    };
+    anotherIssue(fake);
     const warnings: string[] = [];
     setLogger({ ...silentLogger, warn: (message) => warnings.push(message) });
     let seenDuringTheRun = false;
@@ -565,6 +694,61 @@ describe("following pull requests", () => {
       setLogger(silentLogger);
     }
     expect(seenDuringTheRun).toBe(true);
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
+  });
+
+  it("names a gap that a sleep during a run leaves, on the poll interval", async () => {
+    const setup = world();
+    const script: Script = { pulls: { [setup.url]: pull(setup.url, { mergeable: "MERGEABLE" }) } };
+    const { worker, jira: fake, io } = deps(setup, script);
+    worker.config.poll.every = 10;
+    anotherIssue(fake);
+    let clock = NOW;
+    worker.now = () => clock;
+    const logs = path.join(setup.home, "logs");
+    setLogger(fileLogger({ dir: logs, level: "warn", secrets: [], now: () => clock }));
+    const woke = new Date("2026-11-13T19:00:00.000Z");
+    script.during = async () => {
+      clock = woke;
+      await vi.waitFor(() => expect(io.stdout).toContain(GAP_MESSAGE));
+    };
+    try {
+      await once(worker);
+    } finally {
+      setLogger(silentLogger);
+    }
+    expect(io.stdout.split("\n").filter((line) => line.startsWith(GAP_MESSAGE))).toEqual([
+      "resumed after a gap: nothing ran from 2026-11-13 12:00 UTC to 2026-11-13 19:00 UTC, the machine was asleep or the worker was suspended"
+    ]);
+    const gaps = readGaps(logs, NOW);
+    expect(gaps).toEqual([{ from: NOW.toISOString(), to: woke.toISOString() }]);
+    const run = loadRuns(setup.home).find(({ record }) => record.key === "MR-9")?.record as RunRecord;
+    expect(runGap(run, gaps, woke)?.gaps).toEqual(gaps);
+  });
+
+  it("settles a merge while a limit holds, and says the hold when it starts and when it ends", async () => {
+    const setup = world();
+    const merged = pull(setup.url, { state: "MERGED" });
+    const { worker, jira: fake, io } = deps(setup, { pulls: { [setup.url]: merged } });
+    recordUsage(setup.home, [{ window: "five_hour", utilization: 0.82, resetsAt: "2026-11-13T12:02:00.000Z" }], NOW);
+    const held =
+      "subscription limit reached: the subscription's five-hour window is at 82 %, the limit is 70 %, it resets at 2026-11-13 12:02 UTC, claiming nothing\n";
+
+    for (const options of [{ dryRun: true }, { issue: "MR-9" }, { repair: setup.url }]) await once(worker, options);
+    expect(io.stdout).toBe(held.repeat(3));
+    expect(fake.comments).toEqual([]);
+
+    io.stdout = "";
+    let pauses = 0;
+    await loop(worker, {
+      sleep: async () => {
+        pauses += 1;
+        if (pauses === 2) worker.now = () => new Date("2026-11-13T12:02:01.000Z");
+      },
+      stopped: () => pauses >= 3
+    });
+    expect(io.stdout).toBe(`${held}the subscription limit no longer holds, claiming again\nnothing eligible\n`);
+    expect(fake.comments).toEqual([`Merged: ${setup.url}`]);
     expect(original(setup).followUp).toEqual({ repairs: 0, state: "merged" });
   });
 

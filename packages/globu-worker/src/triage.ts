@@ -1,12 +1,15 @@
+import path from "node:path";
 import { resolveAll } from "../../globu-core/src/index.js";
 import { projectFor, projectOf, requireProject, type ServedProject, settingsFor } from "./config.js";
+import { type Gap, gapText, overlapping, type RunGap, readGaps, runGap, runGapText, WHY_WINDOW_MS } from "./gaps.js";
 import { type JiraIssue, matchesStatus } from "./jira.js";
 import { searchFilter, searchJql, targetOf } from "./projects.js";
-import { loadRuns, type StoredRun, spentOn } from "./runs.js";
+import { type DeniedCall, deniedCalls, latestRuns, loadRuns, type StoredRun, spentOn } from "./runs.js";
 import { currentUsage, holdReason, overLimit } from "./subscription.js";
 import {
   candidateOf,
   checkShards,
+  deniedLine,
   dryRunAction,
   followUps,
   markerShard,
@@ -37,8 +40,11 @@ export type WhyReport = {
   assignee: string | null;
   waiting: { key: string; status: string }[];
   holds: Hold[];
+  denied: { run: string; calls: DeniedCall[] } | null;
   action: string;
   picked: boolean;
+  gaps: Gap[];
+  run: RunGap | null;
 };
 export type DelegateResult = { key: string; shard: string; matches: boolean };
 
@@ -143,6 +149,27 @@ async function searchReasons(deps: WorkerDeps, issue: JiraIssue, project: Served
   ];
 }
 
+function gapsLine(gaps: Gap[]): string {
+  if (gaps.length === 0) return "none in the last 24 hours";
+  const paused = gaps.map((gap) => `the worker paused ${gapText(gap)}`).join("; ");
+  return `${paused}, the machine was asleep or the worker was suspended`;
+}
+
+function pauses(deps: WorkerDeps, key: string, stored: StoredRun[]): { gaps: Gap[]; run: RunGap | null } {
+  const now = deps.now();
+  const since = new Date(now.getTime() - WHY_WINDOW_MS);
+  const latest = latestRuns(
+    stored.filter(({ record }) => record.key === key),
+    1
+  )[0]?.record;
+  const earliest = latest === undefined || new Date(latest.startedAt) > since ? since : new Date(latest.startedAt);
+  const gaps = readGaps(path.join(deps.home, "logs"), earliest);
+  return {
+    gaps: overlapping(gaps, since, now),
+    run: latest === undefined ? null : runGap(latest, gaps, now)
+  };
+}
+
 function whyLines(report: WhyReport, blockedLabel: string, search: string): string[] {
   const { key, shard, target } = report;
   const named = shard ?? "none";
@@ -166,9 +193,26 @@ function whyLines(report: WhyReport, blockedLabel: string, search: string): stri
     `assignee\t${report.assignee ?? "none"}`,
     `blockers\t${waiting === "" ? "none open" : `waiting on ${waiting}`}`,
     `limits\t${report.holds.length === 0 ? "none hold it" : report.holds.map((hold) => hold.detail).join("; ")}`,
+    `gaps\t${gapsLine(report.gaps)}`,
+    ...(report.run === null ? [] : [`run\t${runGapText(report.run)}`]),
+    ...(report.denied === null
+      ? []
+      : [
+          `denied\t${report.denied.calls.length} in run ${report.denied.run}`,
+          ...report.denied.calls.map((call) => `denied\t${deniedLine(call)}`)
+        ]),
     `outcome\t${report.action}`,
     `verdict\t${report.picked ? "the next cycle claims it" : `the next cycle leaves it: ${leftBecause(report, waiting, search)}`}`
   ];
+}
+
+function lastDenied(stored: StoredRun[], key: string): WhyReport["denied"] {
+  const [last] = latestRuns(
+    stored.filter(({ record }) => record.key === key),
+    1
+  );
+  const calls = last === undefined ? [] : deniedCalls(last.record);
+  return calls.length === 0 ? null : { run: last.record.id, calls };
 }
 
 export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
@@ -185,7 +229,8 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
   const shard = markerShard(issue, config);
   const target = candidate.project === null ? null : candidate.shardId;
   const reasons = matches ? [] : await searchReasons(deps, issue, candidate.project);
-  const waiting = waitingOn(deps, issue, loadRuns(home)).map((blocker) => ({
+  const stored = loadRuns(home);
+  const waiting = waitingOn(deps, issue, stored).map((blocker) => ({
     key: blocker.key,
     status: blocker.status
   }));
@@ -203,13 +248,15 @@ export async function why(deps: WorkerDeps, key: string): Promise<WhyReport> {
     assignee: issue.assignee,
     waiting,
     holds: held,
+    denied: lastDenied(stored, issue.key),
     action,
     picked:
       matches &&
       issue.assignee === null &&
       waiting.length === 0 &&
       held.length === 0 &&
-      action.startsWith("would claim")
+      action.startsWith("would claim"),
+    ...pauses(deps, issue.key, stored)
   };
   for (const line of whyLines(report, config.jira.blockedLabel, searchName(deps))) deps.io.out(line);
   return report;

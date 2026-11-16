@@ -1,15 +1,17 @@
 ---
 name: release
-description: Release a new version of Globu end to end. Use when the user asks to release, publish or ship Globu, or to cut a version, and to resume a release that stopped. Checks that the docs cover the changes, bumps the version, runs and watches the Release workflow, puts the docs snapshot and release.json on the site's main branch, waits until globu.kazet.blog serves the version and records the release in the knowledge base. Takes patch, minor, major or an exact version; running it again with the same version resumes.
+description: Release a new version of Globu end to end. Use when the user asks to release, publish or ship Globu, or to cut a version, and to resume a release that stopped. Checks that the docs cover the changes, bumps the version, runs and watches the Release workflow, then updates the site and records the release as the release runbook of the knowledge base that holds Globu's decisions describes. Takes patch, minor, major or an exact version; running it again with the same version resumes.
 ---
 
 # Release Globu
 
-One run of this skill takes Globu from a commit on `main` to the packages on npm, the plugins pinned on `stable`, the tag and GitHub release and globu.kazet.blog serving the new version and docs. Work without stopping for confirmation: push to `main` of both repos directly, never open a pull request for the release. Stop only where a step below says the user is needed, and then say exactly what to run.
+One run of this skill takes Globu from a commit on `main` to the packages on npm, the plugins pinned on `stable`, the tag and the GitHub release, the site serving the new version and docs and the release recorded. Work without stopping for confirmation: push to `main` directly, never open a pull request for the release. Stop only where a step below says the user is needed, and then say exactly what to run.
 
 Every step first checks whether it is already done and skips it if so. That makes `/release <version>` the way to resume after any failure: the same command, the same version, picks up at the first step that is not done.
 
-`docs/development.md` under "Releasing" explains the pieces and the reasons; this skill is the procedure.
+`docs/development.md` under "Releasing" explains the pieces; this skill is the procedure.
+
+Steps 1 to 5 depend only on this repo, GitHub and npm. Step 6 depends on where the site, the release record and the work items live, which this repo does not know: the knowledge base that holds Globu's decisions has a release runbook for it. The session index names that knowledge base; `node packages/globu-cli/dist/globu.mjs list --json` finds its checkout. Read the runbook before step 2, since its checks are part of the preflight.
 
 ## 1. The version
 
@@ -27,14 +29,12 @@ In a worktree of this repo on a branch at `origin/main` (`git fetch origin && gi
 
 * `git status --porcelain` is empty and `gh auth status` is fine.
 * Decide what is already done, for the resume:
-  * `npm view @kazet/globu@<version> version` and `npm view @kazet/globu-worker@<version> version` (published?)
+  * `npm view <name>@<version> version` for every non-private `packages/*/package.json` (published?)
   * `git ls-remote --tags origin v<version>` (pinned, tagged and released by the workflow?)
   * `gh release view v<version>`
-  * `gh api repos/kamilziajka/globu-website/contents/release.json --jq .content | base64 -d` (site main updated?)
-  * `curl -s https://globu.kazet.blog/version.json` (site deployed?)
-  * the globu-knowledge-base `docs/log.md` for a `Globu <version> released` entry (recorded?)
+  * the checks the release runbook lists for step 6 (site updated, deployed and release recorded?)
 * Every non-private `packages/*/package.json` must exist on npm (`npm view <name> name`). A new package gets its first release by hand in step 5; say so now, because it needs `npm login` with the browser approval.
-* `npm whoami` prints the account. A by-hand publish in step 5 needs the login, and the token in `~/.npmrc` expires (`E401`), as it had before 1.0.0 and again before 1.3.0. When it fails, ask the user to run `npm login` now rather than in the middle of a failed run, and go on meanwhile.
+* `npm whoami` prints the account. A by-hand publish in step 5 needs it. When it fails, ask the user to run `npm login` now rather than in the middle of a failed run, and go on meanwhile.
 
 ## 3. The docs cover the changes
 
@@ -59,44 +59,25 @@ Skip when the tag exists and the GitHub release exists.
 
 When it fails, read `gh run view <id> --log-failed`:
 
-* `npm refused <name>@<version>` (`E404` or `E403` from trusted publishing, see GLOBU-30 in the knowledge base) or a package that is not on npm at all: the user publishes it by hand. First copy the group `Trusted publishing lines for <name>` from the run's log into the report and the knowledge base entry, since it holds npm's reason for refusing the OIDC exchange. In this worktree, at the `Release <version>` commit, run `npm run build && npm run pin` and give the user the exact command with the absolute path: `npm publish <worktree>/release/<tarball>`. It needs their `npm login` and the browser approval, so it is theirs to run. Then poll `npm view <name>@<version> version` every 30 seconds until it prints the version (npm takes minutes to list an accepted publish; a run started earlier tries to publish again and fails), check `dist.integrity` against `release/packages.json`, run `git checkout -- plugins` to drop the local pin, and run the workflow again. A new package is then bound with `npm trust github <name> --file release.yml --repo kamilziajka/globu --allow-publish`, again by the user.
+* `npm refused <name>@<version>` (`E404` or `E403` from trusted publishing, see `docs/development.md`, "By hand") or a package that is not on npm at all: the user publishes it by hand. First copy the group `Trusted publishing lines for <name>` from the run's log into the report and the release record, since it holds npm's reason for refusing the OIDC exchange. In this worktree, at the `Release <version>` commit, run `npm run build && npm run pin` and give the user the exact command with the absolute path: `npm publish <worktree>/release/<tarball>`. It needs their `npm login` and the browser approval, so it is theirs to run. Then poll `npm view <name>@<version> version` every 30 seconds until it prints the version (npm takes minutes to list an accepted publish; a run started earlier tries to publish again and fails), check `dist.integrity` against `release/packages.json`, run `git checkout -- plugins` to drop the local pin, and run the workflow again. A new package is then bound with `npm trust github <name> --file release.yml --repo <owner>/<repo> --allow-publish`, where `<owner>/<repo>` is this repo on GitHub (`gh repo view --json nameWithOwner --jq .nameWithOwner`), again by the user.
 * A failure in `npm run verify`: the commit on `main` is broken. Fix it on `main`, then run the workflow again; it refuses only a version that is already tagged.
 * Anything else: read the log, fix the cause and run the workflow again. Never tag, push `stable` or create the GitHub release by hand.
 
-Afterwards `git fetch origin main --tags && git merge --ff-only origin/main` and confirm both packages on npm, the tag and `gh release view v<version>`.
+Afterwards `git fetch origin main --tags && git merge --ff-only origin/main` and confirm every package on npm, the tag and `gh release view v<version>`.
 
-## 6. The site
+## 6. The site and the record
 
-Skip when globu.kazet.blog already serves the version.
+Follow the release runbook of the knowledge base that holds Globu's decisions. It says how to tell whether each part is done, so a resume skips it, and covers:
 
-Find the site checkout with `node packages/globu-cli/dist/globu.mjs list --json`, shard `globu-website`, its `workPath`. Work in a worktree so the user's checkout is untouched:
+* **The site.** Where its checkout is, how its docs snapshot and `release.json` are written with `node scripts/release-site.ts <site checkout>` from this repo at the tag, how the site is checked, pushed and deployed and how to wait until the `version.json` of the site named by `homepage` in `packages/globu-cli/package.json` reports the version. Exit code 2 from the script means a doc is new or gone and the site's navigation needs the change it prints. The script also writes `artefacts` into `release.json`, every artefact in `scripts/artefacts.ts` with the version from its own manifest, and refuses to run before the pin, when the plugin is not yet at the release version. A status mod change has no site step of its own: the marketplace serves the mod from `stable`, which only the Release workflow moves, so the mod reaches users with the next Globu release and that release writes its version.
+* **The record.** Where the release is recorded, with the release commit, the pin commit, the tag, the Release run id or ids, the site commit and anything the run needed by hand.
+* **The work items.** Where they live and how each one that shipped gets a comment with the version, the commit and anything left open, and moves to done when nothing is left open.
 
-```bash
-git -C <workPath> fetch origin
-git -C <workPath> worktree add .claude/worktrees/globu-release-<version> -b globu-release-<version> origin/main
-```
+When the runbook is not available, stop after step 5 and tell the user that the site and the record are left.
 
-Unless the site's main already has the version in `release.json`:
+## 7. Report
 
-1. From this repo at the tag, run `node scripts/release-site.ts <site worktree>`. It writes `release.json` with the version, today's date and `artefacts`, the CLI, the worker, the plugin and the status mod, each with the version from its own manifest (`scripts/artefacts.ts`). It refuses to run when the CLI, the worker or the plugin is not at the release version, which happens before the pin, so run it at the tag. It also replaces the docs snapshot in `content` with `docs/*.md` (all but `index.md` and `log.md`) and adds the release entry to the site's `docs/log.md`. Exit code 2 means a doc is new or gone: add `fromContent("<slug>")` for a new one to the right group in `src/docs/nav.ts`, or remove a gone one, then run the script again.
-2. In the site worktree: `npm install`, `npm run verify`, `npm run build:prod`, `npm run verify:prerender`, and check that `dist/version.json` reports the version. `verify:prerender` also checks that the packages page shows every artefact's version from `release.json`; a new artefact in `scripts/artefacts.ts` needs its row in the site's `src/packages.ts` first, and the site's `npm run verify` fails until it has one.
-3. Commit as `Globu <version>: release.json and the docs snapshot`, `git fetch origin && git merge origin/main` (other sessions push to the site; a conflict in the day's section of `docs/log.md` resolves by keeping both sides, the release entry first), re-run the three checks when the merge brought anything, and `git push origin HEAD:main`.
-
-Remove the worktree (`git -C <workPath> worktree remove .claude/worktrees/globu-release-<version>`). Cloudflare Workers Builds deploys `main` on its own: poll `https://globu.kazet.blog/version.json` every 30 seconds for up to ten minutes until it reports the version. If it does not, look at the deploy (`gh api repos/kamilziajka/globu-website/commits/<sha>/check-runs`) and report rather than retry.
-
-A branch that presents a feature on the site ahead of a release leaves `content` and `release.json` alone; this step is the only writer of both. A status mod change has no site step of its own: the marketplace serves the mod from `stable`, which only the Release workflow moves, so the mod reaches users with the next Globu release and that release writes its version.
-
-## 7. The knowledge base
-
-Skip when the globu-knowledge-base `docs/log.md` has the entry.
-
-Find the shard `globu-knowledge-base` with `globu list --json` and work in a worktree of it at `origin/main`. Add a `base log` entry for today: `Globu <version> released on <date>` with the release commit, the pin commit, the tag, the Release run id or ids, the site commit and anything the run needed by hand. Then `base validate`, commit and push to `main`.
-
-The work items are issues in the Jira project GLOBU on `kazet.atlassian.net`, created and changed with `twg` as the knowledge base's `backlog.md` describes. For each GLOBU item that shipped, add a dated comment with the version, the commit and anything left open: `TWG_AGENT_DEFAULTS=1 twg jira workitem comment create --issue-id GLOBU-<n> --site kazet --body "<what shipped>" --body-format markdown`. When the item is now done, move it: `TWG_AGENT_DEFAULTS=1 twg jira workitem transition --id GLOBU-<n> --site kazet --transition-id Done`. An item that shipped but is still open, for example because it waits to be seen live, keeps its status and gets only the comment.
-
-## 8. Report
-
-One short report: the version and the packages on npm, the Release run, the tag and the GitHub release, the site commit and that globu.kazet.blog serves the version, the knowledge base entry, the GLOBU issues commented on or moved to Done, and every step that needed the user or a retry. The Stop hook `.claude/hooks/site-drift.mjs` reports a release left half done at the end of later sessions until it is finished.
+One short report: the version and the packages on npm, the Release run, the tag and the GitHub release, the site commit and that the site serves the version, the release record, the work items commented on or moved to done and every step that needed the user or a retry. The Stop hook `.claude/hooks/site-drift.mjs` reports a release left half done at the end of later sessions until it is finished.
 
 ## Guardrails
 

@@ -571,6 +571,31 @@ describe("globu-worker", () => {
     expect(fs.existsSync(lock)).toBe(false);
   });
 
+  it("keeps the machine awake while a command cycles, unless keepAwake is off", async () => {
+    const root = prepare();
+    const home = process.env.GLOBU_HOME as string;
+    const calls: string[] = [];
+    const awake = (platform: NodeJS.Platform, onProblem: (problem: string) => void) => {
+      calls.push(`awake on ${platform}`);
+      onProblem("caffeinate could not start: ENOENT");
+      return () => void calls.push("released");
+    };
+    const io = captureIo(root);
+    const overrides = { ...quiet(), jira: idleJira(() => calls.push("cycle")), awake };
+    expect(await workerMain(["once"], io, env(), { ...overrides, platform: "win32" })).toBe(0);
+    expect(calls).toEqual(["awake on win32", "cycle", "released"]);
+    expect(io.stderr).toContain("globu-worker: cannot keep the machine awake, caffeinate could not start: ENOENT");
+
+    expect(await workerMain(["once", "--dry-run"], captureIo(root), env(), overrides)).toBe(0);
+    write(home, "worker.yaml", `${CONFIG}keepAwake: false\n`);
+    expect(await workerMain(["once"], captureIo(root), env(), overrides)).toBe(0);
+    expect(calls).toEqual(["awake on win32", "cycle", "released", "cycle", "cycle"]);
+
+    write(home, "worker.yaml", CONFIG);
+    expect(await workerMain(["once"], captureIo(root), env(), overrides)).toBe(0);
+    expect(calls.slice(5)).toEqual([`awake on ${process.platform}`, "cycle", "released"]);
+  });
+
   it("exits 69 when run or start --mode auto stops for a problem of the machine", async () => {
     const root = prepare();
     const claudeless: Runner = async (command, args, options) =>
@@ -605,7 +630,11 @@ describe("globu-worker", () => {
   it("writes a diagnostics archive to the given path or a timestamped one in the current directory", async () => {
     const home = process.env.GLOBU_HOME as string;
     write(home, "secrets.env", "GH_TOKEN=ghp_from_file\n");
-    write(home, "logs/worker-2026-11-13.log", "ghp_from_file\n");
+    write(
+      home,
+      "logs/worker-2026-11-13.log",
+      'ghp_from_file\n{"msg":"resumed after a gap","from":"2026-11-13T01:00:00.000Z","to":"2026-11-13T07:30:00.000Z"}\n'
+    );
     const run: Runner = async (command, args, options) =>
       command === "tar"
         ? spawnRunner(command, args, options)
@@ -615,14 +644,20 @@ describe("globu-worker", () => {
     const now = () => new Date("2026-11-13T10:42:07.000Z");
     expect(await workerMain(["diagnostics"], named, env(), { ...quiet(), run, now })).toBe(0);
     const archive = path.join(cwd, "globu-worker-diagnostics-20261113T104207Z.tar.gz");
-    expect(named.stdout).toBe(`wrote ${archive} with 2 files: logs/worker-2026-11-13.log, environment.txt\n`);
+    expect(named.stdout).toBe(
+      [
+        `wrote ${archive} with 3 files: logs/worker-2026-11-13.log, environment.txt, summary.txt`,
+        "gap\tthe worker paused 2026-11-13 01:00 UTC to 2026-11-13 07:30 UTC (6 h 30 min), the machine was asleep or the worker was suspended",
+        ""
+      ].join("\n")
+    );
     expect(fs.existsSync(archive)).toBe(true);
     const given = captureIo(cwd);
     expect(await workerMain(["diagnostics", "--out", "d.tgz"], given, env(), { ...quiet(), run })).toBe(0);
-    expect(given.stdout).toContain(`wrote ${path.join(cwd, "d.tgz")} with 2 files`);
+    expect(given.stdout).toContain(`wrote ${path.join(cwd, "d.tgz")} with 3 files`);
     const real = captureIo(cwd);
     expect(await workerMain(["diagnostics"], real, env(), quiet())).toBe(0);
-    expect(real.stdout).toMatch(/^wrote .*globu-worker-diagnostics-\d{8}T\d{6}Z\.tar\.gz with 2 files/);
+    expect(real.stdout).toMatch(/^wrote .*globu-worker-diagnostics-\d{8}T\d{6}Z\.tar\.gz with 3 files/);
   });
 
   it("loops until a signal arrives, during a cycle or during the pause", async () => {
