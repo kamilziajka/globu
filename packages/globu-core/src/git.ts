@@ -7,18 +7,43 @@ export type Checkout = { root: string; commonDir: string };
 
 const WORKTREE_PREFIX = "worktree ";
 
+let stops: (error: GitError) => boolean = () => false;
+
+export function stopOnGitError(test: (error: GitError) => boolean): void {
+  stops = test;
+}
+
+export class GitError extends Error {
+  readonly status: number | null;
+  readonly code: string | undefined;
+  readonly fatal: boolean;
+
+  constructor(message: string, status: number | null, code: string | undefined) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.fatal = stops(this);
+  }
+}
+
+function passFatal(err: unknown): void {
+  if ((err as GitError).fatal) throw err;
+}
+
 function git(args: string[], cwd?: string): string {
   try {
     return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   } catch (err) {
-    throw new Error(`git ${args.join(" ")} failed: ${(err as Error).message.trim()}`);
+    const { message, status = null, code } = err as Error & { status?: number | null; code?: string };
+    throw new GitError(`git ${args.join(" ")} failed: ${message.trim()}`, status, code);
   }
 }
 
 export function isRepo(dir: string): boolean {
   try {
     return git(["rev-parse", "--is-inside-work-tree"], dir) === "true";
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return false;
   }
 }
@@ -30,7 +55,8 @@ export function checkoutOf(dir: string): Checkout | null {
       dir
     ).split("\n");
     return { root: path.resolve(root), commonDir: fs.realpathSync(commonDir) };
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return null;
   }
 }
@@ -51,7 +77,8 @@ export function worktreeRoots(dir: string): string[] {
 export function defaultRevision(dir: string): string {
   try {
     return git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], dir);
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return "HEAD";
   }
 }
@@ -60,7 +87,8 @@ export function hasPath(dir: string, revision: string, relPath: string): boolean
   try {
     git(["cat-file", "-e", `${revision}:${relPath}`], dir);
     return true;
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return false;
   }
 }
@@ -90,7 +118,8 @@ export function renamedTo(dir: string, revision: string, relPath: string): strin
       current = next;
     }
     return null;
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return null;
   }
 }
@@ -101,7 +130,8 @@ export function pathsNamed(dir: string, revision: string, name: string): string[
     return git(["ls-tree", "-r", "-t", "-z", "--name-only", revision], dir)
       .split("\0")
       .filter((entry) => path.posix.basename(entry).toLowerCase() === wanted);
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return [];
   }
 }
@@ -109,7 +139,8 @@ export function pathsNamed(dir: string, revision: string, name: string): string[
 export function remoteUrl(dir: string): string | null {
   try {
     return git(["remote", "get-url", "origin"], dir);
-  } catch {
+  } catch (err) {
+    passFatal(err);
     const remotes = git(["remote"], dir).split("\n").filter(Boolean);
     return remotes.length === 1 ? git(["remote", "get-url", remotes[0]], dir) : null;
   }
@@ -118,7 +149,8 @@ export function remoteUrl(dir: string): string | null {
 export function headCommit(dir: string): string | null {
   try {
     return git(["rev-parse", "HEAD"], dir);
-  } catch {
+  } catch (err) {
+    passFatal(err);
     return null;
   }
 }

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Io } from "../../globu-cli/src/cli/index.js";
-import { defaultRevision } from "../../globu-core/src/git.js";
+import { defaultRevision, GitError, stopOnGitError } from "../../globu-core/src/git.js";
 import {
   gitAuthArgs,
   type RefResult,
@@ -156,6 +156,14 @@ export function git(args: string[], cwd: string): string {
     const machine = machineFailure("git", { code: failure.status, startError: failure.code });
     throw machine === null ? err : new MachineProblem(machine);
   }
+}
+
+function machineGit(error: GitError): string | null {
+  return machineFailure("git", { code: error.status, startError: error.code });
+}
+
+export function stopOnMachineGit(): void {
+  stopOnGitError((error) => machineGit(error) !== null);
 }
 
 export function registry(): Registry {
@@ -485,7 +493,9 @@ function environmentProblem(record: RunRecord, reason: string): string {
 
 function failureOf(record: RunRecord, err: unknown): string {
   const { message } = err as Error;
-  return err instanceof MachineProblem ? environmentProblem(record, message) : `worker error: ${message}`;
+  if (err instanceof MachineProblem) return environmentProblem(record, message);
+  const machine = err instanceof GitError ? machineGit(err) : null;
+  return machine === null ? `worker error: ${message}` : environmentProblem(record, machine);
 }
 
 export async function runSetup(
@@ -1080,7 +1090,9 @@ async function attemptRepair(
   persist(deps, dir, record);
   try {
     git([...authorArgs(settings.git), "merge", "--no-edit", `${ORIGIN}${pull.base}`], tree);
-  } catch {}
+  } catch (err) {
+    if (err instanceof MachineProblem) throw err;
+  }
   const conflicted = conflictedFiles(tree);
   if (conflicted.length > 0 || pull.checks === "failing") {
     const failedSetup = await runSetup(deps, record, worktrees, settings);

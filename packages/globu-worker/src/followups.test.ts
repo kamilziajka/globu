@@ -14,6 +14,21 @@ import { start } from "./start.js";
 import { recordUsage } from "./subscription.js";
 import { type FollowUpRow, followUps, loop, once, type WorkerDeps } from "./worker.js";
 
+const endedGit = vi.hoisted(() => ({ when: null as ((args: string[]) => boolean) | null }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], options: object) => {
+      if (file === "git" && endedGit.when?.(args)) {
+        throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), { status: 3221225794, stderr: "" });
+      }
+      return actual.execFileSync(file, args, options);
+    }
+  };
+});
+
 const NOW = new Date("2026-11-13T12:00:00.000Z");
 const BRANCH = "agent/MR-7-change-x";
 
@@ -346,6 +361,25 @@ describe("following pull requests", () => {
     expect(jira.comments.at(-1)).toContain(
       "could not repair this pull request: Windows ended gh with status 0xC0000142. The worker will try again."
     );
+  });
+
+  it("does not count a repair whose git fetch or merge Windows ended", async () => {
+    const setup = world({ base: "export const x = 9;\n", extra: "limits:\n  repairs: 2\n" });
+    try {
+      for (const step of ["fetch", "merge"]) {
+        endedGit.when = (args) => args.includes(step);
+        const { worker } = deps(setup, { pulls: { [setup.url]: pull(setup.url) } });
+        const record = (await once(worker, { repair: setup.url })).runs[0];
+        expect(record).toMatchObject({
+          state: "released",
+          environment: true,
+          reason: "Windows ended git with status 0xC0000142"
+        });
+      }
+    } finally {
+      endedGit.when = null;
+    }
+    expect(original(setup).followUp).toEqual({ repairs: 0, state: "open" });
   });
 
   it("keeps a failed repair's reason and its comments when they cannot be posted, and posts them on a later cycle", async () => {

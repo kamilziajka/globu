@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { stopOnGitError } from "../../globu-core/src/git.js";
 import { loadManifest, register, saveManifest, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -26,9 +27,28 @@ import {
   type PresentShard,
   registry,
   releaseRun,
+  stopOnMachineGit,
   type WorkerDeps,
   git as workerGit
 } from "./worker.js";
+
+const endedGit = vi.hoisted(() => ({ when: null as ((args: string[]) => boolean) | null, status: 3221225794 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], options: object) => {
+      if (file === "git" && endedGit.when?.(args)) {
+        throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), {
+          status: endedGit.status,
+          stderr: ""
+        });
+      }
+      return actual.execFileSync(file, args, options);
+    }
+  };
+});
 
 const NOW = new Date("2026-11-05T10:20:30.000Z");
 
@@ -806,6 +826,40 @@ describe("once", () => {
         "globu-worker stopped, the machine needs fixing first: could not start claude: not found on PATH"
       ]
     ]);
+  });
+
+  it("releases as a machine problem when Windows ends a git call of the Globu library, which a CLI only reads as an answer", async () => {
+    const world = setup();
+    const reason = "Windows ended git with status 0xC0000142";
+    const machine = (run: Awaited<ReturnType<typeof runWith>>) => {
+      const record = run.record as RunRecord;
+      expect(record).toMatchObject({ state: "released", environment: true, reason });
+      expect((run.jira.store.get(record.key) as JiraIssue).labels).not.toContain("agent-blocked");
+      expect(run.jira.comments[record.key]?.at(-1)).toContain("This is a problem with the worker's machine");
+      expect(run.calls.claude).toEqual([]);
+    };
+    try {
+      endedGit.when = (args) => args[0] === "cat-file";
+      const answered = await runWith(world, [issue("MR-1")], {});
+      expectReleased(answered.jira, answered.record as RunRecord, "references that are not on the default branch:");
+
+      stopOnMachineGit();
+      machine(await runWith(world, [issue("MR-2")], {}));
+      endedGit.when = (args) => args[0] === "symbolic-ref";
+      machine(await runWith(world, [issue("MR-3", { description: "No references." })], {}));
+      endedGit.when = (args) => args.includes("fetch");
+      machine(await runWith(world, [issue("MR-4")], {}));
+
+      endedGit.when = (args) => args[0] === "worktree" && args[1] === "list";
+      endedGit.status = 128;
+      const plain = await runWith(world, [issue("MR-5", { description: "see product/docs/missing.md" })], {});
+      expectReleased(plain.jira, plain.record as RunRecord, "worker error: git worktree list --porcelain failed");
+      expect(plain.record?.environment).toBeUndefined();
+    } finally {
+      endedGit.when = null;
+      endedGit.status = 3221225794;
+      stopOnGitError(() => false);
+    }
   });
 
   it("records denied tool calls and the time in the model API in run.json and the footer", async () => {

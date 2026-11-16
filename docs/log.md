@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [globu-worker](./worker.md#a-run): a `git` call through the Globu library that did not start or that Windows ended, in the reference check or for a worktree's default branch, is a problem of the machine, and so is a repair's merge that Windows ended, which no longer counts against `repairs`.
 * [globu-worker](./worker.md#the-outcome): merging the pull requests of a run whose outcome is `partial` or `not met` leaves the issue open, in `statuses.claimed` or the new `statuses.partial`, keeps its key out of `merged.json` and says where the rest is. Its pull requests are labelled `partial`.
 * [globu-worker](./worker.md#background-commands): Claude Code stops a background command after 2 hours at most, so a run whose `timeout` is longer gets it as `BASH_MAX_TIMEOUT_MS` and a background command may last as long as the run. The delivery and repair briefs state the cap and `check` notes a `timeout` past the longest Claude Code takes.
 * [globu-worker](./worker.md#denied-tool-calls): each denied tool call in `run.json` keeps Claude Code's reason and the worker's note on whether a rule in `allowedTools` covers it, so a call denied for a path outside the run's directories is told apart from one no rule allows. `why` and the footer show them.

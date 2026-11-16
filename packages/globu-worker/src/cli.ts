@@ -28,7 +28,16 @@ import { smokeNames, smokeTest } from "./smoke.js";
 import { parseMode, type ReadKey, start } from "./start.js";
 import { delegate, retry, why } from "./triage.js";
 import { checkLine, checkProgress, type Every, type Screen, widthOf } from "./tui.js";
-import { claimIssue, finishRun, loop, nextCycle, once, releaseRun, type WorkerDeps } from "./worker.js";
+import {
+  claimIssue,
+  finishRun,
+  loop,
+  nextCycle,
+  once,
+  releaseRun,
+  stopOnMachineGit,
+  type WorkerDeps
+} from "./worker.js";
 
 export type Overrides = Partial<Pick<WorkerDeps, "jira" | "run" | "now" | "platform">> & {
   signals: EventEmitter;
@@ -84,6 +93,7 @@ function buildDeps(io: Io, given: NodeJS.ProcessEnv, overrides: Overrides, homes
   process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const secrets = readSecrets(env);
   useGitHubToken(secrets.githubToken);
+  stopOnMachineGit();
   return {
     config,
     secrets,
