@@ -42,6 +42,7 @@ Skip when the tag exists. Otherwise compare what changed since the last tag with
 
 * `git diff --stat <last tag>..origin/main -- packages plugins mods` for the code and `git log <last tag>..origin/main -- docs` for the docs.
 * A changed command, flag, config key, skill or hook needs its doc (`docs/globu-cli.md`, `docs/worker.md`, `docs/skills.md`, `docs/knowledge-base.md`, `docs/architecture.md`) and, where it is user facing, `README.md`. Read the diffs and the docs; do not trust a commit message.
+* When `mods/globu-status` changed since the last tag and the `version` in its `.claude-plugin/plugin.json` did not, bump that version (patch for fixes, minor for new behaviour) in the same commit. The mod is versioned on its own, an installed copy updates only when the version changes and the site's packages page shows this version.
 * Fix what is missing, add the `base log docs <today>` entry, run `npm run verify`, commit (`Docs for <version>`) and push to `main`. The site takes its docs from this commit, so this is the last chance to correct them before the release.
 
 ## 4. Bump
@@ -68,7 +69,7 @@ Afterwards `git fetch origin main --tags && git merge --ff-only origin/main` and
 
 Follow the release runbook of the knowledge base that holds Globu's decisions. It says how to tell whether each part is done, so a resume skips it, and covers:
 
-* **The site.** Where its checkout is, how its docs snapshot and `release.json` are written with `node scripts/release-site.ts <site checkout>` from this repo at the tag, how the site is checked, pushed and deployed and how to wait until the `version.json` of the site named by `homepage` in `packages/globu-cli/package.json` reports the version. Exit code 2 from the script means a doc is new or gone and the site's navigation needs the change it prints.
+* **The site.** Where its checkout is, how its docs snapshot and `release.json` are written with `node scripts/release-site.ts <site checkout>` from this repo at the tag, how the site is checked, pushed and deployed and how to wait until the `version.json` of the site named by `homepage` in `packages/globu-cli/package.json` reports the version. Exit code 2 from the script means a doc is new or gone and the site's navigation needs the change it prints. The script also writes `artefacts` into `release.json`, every artefact in `scripts/artefacts.ts` with the version from its own manifest, and refuses to run before the pin, when the plugin is not yet at the release version. A status mod change has no site step of its own: the marketplace serves the mod from `stable`, which only the Release workflow moves, so the mod reaches users with the next Globu release and that release writes its version.
 * **The record.** Where the release is recorded, with the release commit, the pin commit, the tag, the Release run id or ids, the site commit and anything the run needed by hand.
 * **The work items.** Where they live and how each one that shipped gets a comment with the version, the commit and anything left open, and moves to done when nothing is left open.
 

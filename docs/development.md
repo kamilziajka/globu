@@ -121,19 +121,44 @@ claude --plugin-dir ./plugins/globu --plugin-dir ./mods/globu-status
 
 The root `package.json` holds the version. The build copies it into `packages/globu-cli/package.json` and `packages/globu-worker/package.json`, and `globu base setup` stamps it into every base it touches as `knowledge_base_version`. The two packages, `@kazet/globu` and `@kazet/globu-worker`, share that version and are released together.
 
+Globu ships four artefacts, listed in `scripts/artefacts.ts`: the two npm packages, the plugin `globu@globu` and the status mod `globu-status@globu`. The plugin takes the root version from the pin. The mod is versioned on its own in `mods/globu-status/.claude-plugin/plugin.json` and is bumped by hand when it changes, since an installed copy updates only when that version changes. Both plugins are served from `stable`, which only the Release workflow moves, so a mod change ships with a Globu release and never on its own.
+
 A release is one command in Claude Code: the project skill `/release <patch|minor|major|x.y.z>` (`.claude/skills/release/SKILL.md`). It does every step below without asking and pushes straight to `main`. It stops only for what needs the owner (an `npm publish` or `npm trust` that needs the browser two-factor approval). Every step checks whether it is already done, so running `/release <version>` again after a failure resumes at the first step that is not.
 
-1. **Docs.** The diff since the last tag is compared with `docs` and `README.md`; a changed command, option, config key, skill or hook gets its doc before anything is bumped, because the site's docs are a snapshot of this commit.
+1. **Docs.** The diff since the last tag is compared with `docs` and `README.md`; a changed command, option, config key, skill or hook gets its doc before anything is bumped, because the site's docs are a snapshot of this commit. A changed status mod whose version did not move gets a new version in the same commit.
 2. **Bump.** `npm version <version> --no-git-tag-version && npm run build` changes four files (root `package.json` and `package-lock.json` and both packages' `package.json`), committed as `Release <version>` and pushed to `main`.
 3. **The `Release` workflow** (`.github/workflows/release.yml`), started with `gh workflow run release.yml --ref main` and watched to the end. Described below.
-4. **The site.** The site, named by `homepage` in `packages/globu-cli/package.json`, lives in a repo of its own and has no dependency on this one: it carries a `release.json` and a snapshot of `docs` in its `content`, both at its root, and it serves `version.json`. `node scripts/release-site.ts <site checkout>` writes both, adds the release entry to the site's `docs/log.md` and reports a doc that is new or gone, which then needs an entry in the site's `src/docs/nav.ts`. A site branch that presents a feature ahead of a release leaves `content` and `release.json` to this step.
+4. **The site.** The site, named by `homepage` in `packages/globu-cli/package.json`, lives in a repo of its own and has no dependency on this one: it carries a `release.json` (the version, the date and every artefact's version, [below](#the-sites-releasejson)) and a snapshot of `docs` in its `content`, both at its root, and it serves `version.json`. `node scripts/release-site.ts <site checkout>`, run at the tag, writes both, adds the release entry to the site's `docs/log.md` and reports a doc that is new or gone, which then needs an entry in the site's `src/docs/nav.ts`. A site branch that presents a feature ahead of a release leaves `content` and `release.json` to this step.
 5. **The record.** The release is recorded with the commits, the runs and anything done by hand, and each work item that shipped gets a comment and moves to done when nothing is left open.
 
 Steps 4 and 5 depend on where the site, the record and the work items live. The release runbook of the knowledge base that holds Globu's decisions says where, and how each step is checked, built and deployed; the session index names that knowledge base.
 
-`.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm versions of the non-private packages under `packages` and the `version.json` of the site named by `homepage` at the end of every session here and reports a release left half done: a bump npm does not serve, a package that lags the other or a site that lags npm.
+`.claude/hooks/site-drift.mjs`, a Stop hook registered in `.claude/settings.json`, compares `package.json`, the npm versions of the non-private packages under `packages` and the `version.json` of the site named by `homepage` at the end of every session here and reports a release left half done: a bump npm does not serve, a package that lags the other or a site that lags npm. It compares `version` only, not the artefacts: one run of `release-site.ts` writes them with `version` in one commit, the site's checks hold its packages page to `release.json` and the mod cannot reach users without a release, so a site whose `version` is current shows current artefacts too.
 
 Every release needs a new version. npm never accepts a version twice, and the workflow refuses to run on a version that is already tagged. `npm view @kazet/globu versions` and `npm view @kazet/globu-worker versions` show what is taken.
+
+### The site's release.json
+
+The site's root `release.json` is written by the release only and looks like this at 1.3.0:
+
+```json
+{
+  "version": "1.3.0",
+  "releasedAt": "2026-11-15",
+  "artefacts": [
+    { "id": "cli", "name": "@kazet/globu", "kind": "npm", "version": "1.3.0" },
+    { "id": "worker", "name": "@kazet/globu-worker", "kind": "npm", "version": "1.3.0" },
+    { "id": "plugin", "name": "globu@globu", "kind": "claude-code-plugin", "version": "1.3.0" },
+    { "id": "status", "name": "globu-status@globu", "kind": "claude-code-plugin", "version": "0.1.0" }
+  ]
+}
+```
+
+`version` and `releasedAt` are the Globu release. `artefacts` lists every artefact in the order of the site's packages page, each read from its own manifest when the release runs: `package.json` for an npm package, `.claude-plugin/plugin.json` for a plugin, whose `name` gets the marketplace's name after an `@`. `id` is the stable key the site's `src/packages.ts` joins on, `name` is what a person installs and `kind` is `npm` or `claude-code-plugin`. A list rather than an object keyed by id keeps the order and lets each entry stand alone, so a fifth artefact is one more entry in `scripts/artefacts.ts` and a row in the site's `src/packages.ts`; the site's tests fail until both agree. `release-site.ts` refuses to run when an artefact that shares the root version is not at it, which is the case before the pin, so it runs at the tag.
+
+`release-site.ts` writes the whole file from its own fields, so a key the script does not know is dropped at the next release. A change that gives `release.json` a new key therefore merges here first and on the site second: a site that reads the key before the script writes it fails its `npm run verify` on the next release.
+
+The site's `dist/version.json` keeps its three keys, `version`, `releasedAt` and `builtAt`, and does not carry the artefacts: nothing here reads them there, and the packages page is checked against `release.json` by the site's `verify:prerender` instead.
 
 ### The workflow
 
