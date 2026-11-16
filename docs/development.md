@@ -154,6 +154,8 @@ The site's root `release.json` is written by the release only and looks like thi
 
 `version` and `releasedAt` are the Globu release. `artefacts` lists every artefact in the order of the site's packages page, each read from its own manifest when the release runs: `package.json` for an npm package, `.claude-plugin/plugin.json` for a plugin, whose `name` gets the marketplace's name after an `@`. `id` is the stable key the site's `src/packages.ts` joins on, `name` is what a person installs and `kind` is `npm` or `claude-code-plugin`. A list rather than an object keyed by id keeps the order and lets each entry stand alone, so a fifth artefact is one more entry in `scripts/artefacts.ts` and a row in the site's `src/packages.ts`; the site's tests fail until both agree. `release-site.ts` refuses to run when an artefact that shares the root version is not at it, which is the case before the pin, so it runs at the tag.
 
+`release-site.ts` writes the whole file from its own fields, so a key the script does not know is dropped at the next release. A change that gives `release.json` a new key therefore merges here first and on the site second: a site that reads the key before the script writes it fails its `npm run verify` on the next release. `artefacts` went in that way, kamilziajka/globu#22 before kamilziajka/globu-website#13.
+
 The site's `dist/version.json` keeps its three keys, `version`, `releasedAt` and `builtAt`, and does not carry the artefacts: nothing here reads them there, and the packages page is checked against `release.json` by the site's `verify:prerender` instead.
 
 ### The workflow

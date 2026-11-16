@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-16
+* [Development](./development.md#the-sites-releasejson): `release-site.ts` writes the site's `release.json` whole, so a new key merges here before the site starts reading it; `artefacts` went in that way, kamilziajka/globu#22 before kamilziajka/globu-website#13.
 * [Development](./development.md#the-sites-releasejson): the site's `release.json` carries `artefacts`, the CLI, the worker, the plugin and the status mod, each with `id`, `name`, `kind` and the version read from its own manifest at release time (`scripts/artefacts.ts`); `version` and `releasedAt` keep their meaning. A list keeps the order of the site's packages page and takes a fifth artefact as one more entry. `release-site.ts` refuses to run before the pin, when the plugin is not yet at the release version. The status mod has no site step of its own, since both plugins are served from `stable`, which only the Release workflow moves, and the docs check of a release bumps the mod's version when the mod changed without one. `version.json` on the site keeps its three keys and the `site-drift` hook still compares `version` only, with the reasons. The release skill says the same.
 
 ## 2026-11-15
