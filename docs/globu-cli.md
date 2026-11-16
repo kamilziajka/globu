@@ -8,6 +8,8 @@ description: "Command reference for the globu CLI: knowledge bases, registering 
 
 Published to npm as `@kazet/globu` and built to `packages/globu-cli/dist/globu.mjs`. Source: `packages/globu-cli/src/globu.ts` on top of `packages/globu-core`, with the `base` group in `packages/globu-cli/src/base.ts` on top of `packages/knowledge-base` and the commander runner in `packages/globu-cli/src/cli`. Add `--json` to any command. `--help` works on the program and on every command. The CLI never prompts.
 
+The plugin carries its own copy of the CLI for its hooks and skills and does not put `globu` on the `PATH`. To run the commands below in a terminal, install it with `npm install -g @kazet/globu` or prefix each one with `npx --yes @kazet/globu`.
+
 Environment:
 
 - `GLOBU_HOME`: config directory, default `~/.globu`. When the home directory is not writable the default is `globu` under the system temp directory.
