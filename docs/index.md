@@ -49,5 +49,5 @@ This is a plain [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-form
 * [Claude Code hook contract](./claude-code-hooks.md) - the Claude Code behaviours the hooks and the worker rely on, which were measured in runs and which are untested
 * [Unattended runs](./unattended-runs.md) - bootstrapping a CI job or a fresh machine from a team manifest: import, token clones and loading the plugin
 * [globu-worker](./worker.md) - the worker that claims agent-eligible Jira issues and runs Claude Code in the right shard: its own homes, `worker.yaml` and `secrets.env`, the `start`, `check`, `once`, `run`, `retry`, `why`, `delegate` and `diagnostics` commands, following its pull requests with repairs and a cap, issues that wait on their blockers, follow-up issues filed from a handback, release comments that carry the handback, the smoke test, exclusive resources, their lock files and `hold`, one process per home through `worker.lock`, logs and a run step by step
-* [Development](./development.md) - tooling, quality gates, tests, CI and releasing
+* [Development](./development.md) - tooling, quality gates, tests, landing a change through a pull request, CI and releasing
 * [Update log](./log.md) - chronological history of changes to this base
