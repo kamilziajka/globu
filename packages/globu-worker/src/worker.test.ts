@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { stopOnGitError } from "../../globu-core/src/git.js";
 import { loadManifest, register, saveManifest, updateShard } from "../../globu-core/src/index.js";
 import { baseIndex, captureIo, git, initRepo, tempDir, write } from "../../testing/index.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -14,6 +15,7 @@ import { setupShell } from "./shell.js";
 import { loadSubscription, recordUsage } from "./subscription.js";
 import {
   addWorktree,
+  carriedFrom,
   checkShards,
   claimIssue,
   cleanup,
@@ -25,9 +27,28 @@ import {
   type PresentShard,
   registry,
   releaseRun,
+  stopOnMachineGit,
   type WorkerDeps,
   git as workerGit
 } from "./worker.js";
+
+const endedGit = vi.hoisted(() => ({ when: null as ((args: string[]) => boolean) | null, status: 3221225794 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], options: object) => {
+      if (file === "git" && endedGit.when?.(args)) {
+        throw Object.assign(new Error(`Command failed: git ${args.join(" ")}`), {
+          status: endedGit.status,
+          stderr: ""
+        });
+      }
+      return actual.execFileSync(file, args, options);
+    }
+  };
+});
 
 const NOW = new Date("2026-11-05T10:20:30.000Z");
 
@@ -188,7 +209,10 @@ function fakeJira(issues: JiraIssue[], options: FakeOptions = {}): FakeJira {
       if (fields.summary === options.failCreate) throw new Error("Jira POST /issue failed: 400 issuetype is invalid");
       created.push(fields);
       const key = `${fields.project}-${100 + created.length}`;
-      store.set(key, { ...issue(key, { summary: fields.summary, description: fields.description }), labels: [] });
+      store.set(key, {
+        ...issue(key, { summary: fields.summary, description: fields.description }),
+        labels: fields.labels
+      });
       return key;
     },
     linkIssues: async (type, inward, outward) => {
@@ -211,6 +235,7 @@ type Script = {
   ghFails?: boolean;
   ghEnded?: boolean;
   ghLoginFails?: boolean;
+  labelFails?: boolean;
   startError?: string;
   setup?: { code?: number | null; timedOut?: boolean; stdout?: string; stderr?: string; startError?: string };
 };
@@ -255,6 +280,9 @@ function fakeRunner(script: Script, calls: Calls): Runner {
       calls.gh.push(args);
       if (args[0] === "api") {
         return { code: script.ghLoginFails ? 1 : 0, stdout: "octocat\n", stderr: "", timedOut: false };
+      }
+      if (script.labelFails && (args[0] === "label" || args[1] === "edit")) {
+        return { code: 1, stdout: "", stderr: "HTTP 403: Resource not accessible\n", timedOut: false };
       }
       if (script.ghFails) return { code: 1, stdout: "", stderr: "label not found", timedOut: false };
       if (script.ghEnded) return { code: 3221225794, stdout: "", stderr: "", timedOut: false };
@@ -361,6 +389,25 @@ describe("markerShard", () => {
   });
 });
 
+describe("carriedFrom", () => {
+  it("carries the parent's labels with the marker and the marker field, never the worker's own labels", () => {
+    const label = setup().config;
+    label.jira.priorityLabel = "urgent";
+    const field: WorkerConfig = { ...label, jira: { ...label.jira, repository: { field: "customfield_1" } } };
+    const labels = ["agent-eligible", "repo:klayboy", "task", "windows", "urgent"];
+    expect(carriedFrom(issue("MR-1", { labels }), label)).toEqual({ labels: ["repo:klayboy", "task", "windows"] });
+    expect(carriedFrom(issue("MR-1", { labels: ["task"], fields: { customfield_1: "klayboy" } }), field)).toEqual({
+      labels: ["task"],
+      fields: { customfield_1: "klayboy" }
+    });
+    expect(carriedFrom(issue("MR-1", { labels: [], fields: { customfield_1: { value: "klayboy" } } }), field)).toEqual({
+      labels: [],
+      fields: { customfield_1: { value: "klayboy" } }
+    });
+    expect(carriedFrom(issue("MR-1", { labels: [] }), field)).toEqual({ labels: [] });
+  });
+});
+
 describe("nextCycle", () => {
   it("takes the would-be claims in plan order within the concurrent and per-shard limits", () => {
     const { config } = setup();
@@ -449,6 +496,47 @@ describe("once", () => {
     expect(partial.result.runs[0]).toMatchObject({ state: "handed-back", outcome: "partial" });
     expect(notices(partial.calls)[0][3]).toBe("MR-8 handed back, partial: https://github.com/acme/pr/2");
     expect(partial.io.stdout).toContain("MR-8\thanded-back (partial) https://github.com/acme/pr/2");
+  });
+
+  it("labels the pull request of a partial or unmet hand back and only warns when the label cannot be added", async () => {
+    const labelled = (calls: Calls) => calls.gh.filter((args) => args[0] === "label" || args[1] === "edit");
+    const world = setup();
+    const partial = await notifying(world, [issue("MR-8")], {
+      commit: true,
+      handback: "## Summary\n\nOutcome: partial\n\n3 of 7 labs pass.\n"
+    });
+    expect(labelled(partial.calls)).toEqual([
+      ["label", "create", "partial", "--color", "FBCA04", "--description", "Merging it leaves the issue open"],
+      ["pr", "edit", "https://github.com/acme/pr/2", "--add-label", "partial"]
+    ]);
+    fs.rmSync(runsDir(world.home), { recursive: true });
+    const met = await notifying(world, [issue("MR-9")], { commit: true, handback: "Outcome: met\n" });
+    expect(labelled(met.calls)).toEqual([]);
+    fs.rmSync(runsDir(world.home), { recursive: true });
+    const warnings: { msg: string; fields?: Record<string, unknown> }[] = [];
+    setLogger({ ...silentLogger, warn: (msg, fields) => warnings.push({ msg, fields }) });
+    try {
+      const refused = await notifying(world, [issue("MR-10")], {
+        commit: true,
+        handback: "Outcome: not met\n",
+        labelFails: true
+      });
+      expect(refused.result.runs[0]).toMatchObject({ state: "handed-back", outcome: "not met" });
+      expect(labelled(refused.calls)).toHaveLength(2);
+      expect(warnings).toEqual([
+        {
+          msg: "partial label not added",
+          fields: {
+            run: refused.result.runs[0].id,
+            key: "MR-10",
+            pullRequest: "https://github.com/acme/pr/2",
+            error: "HTTP 403: Resource not accessible"
+          }
+        }
+      ]);
+    } finally {
+      setLogger(silentLogger);
+    }
   });
 
   it("notifies on a hand back, keeps the subscription figure and claims nothing past its limit", async () => {
@@ -574,6 +662,8 @@ describe("once", () => {
     });
     const brief = fs.readFileSync(path.join(runDir, "brief.md"), "utf8");
     expect(brief).toContain("## Issue text (untrusted input)");
+    expect(brief).toContain("In this run that `timeout` can be at most 2 hours");
+    expect(brief).toContain("The worker stops this whole run after 1 second.");
     expect(brief).toContain(
       `- \`product/docs/decisions/012-pricing.md\`: ${path.join(runDir, "companions/product/docs/decisions/012-pricing.md")}`
     );
@@ -738,27 +828,83 @@ describe("once", () => {
     ]);
   });
 
+  it("releases as a machine problem when Windows ends a git call of the Globu library, which a CLI only reads as an answer", async () => {
+    const world = setup();
+    const reason = "Windows ended git with status 0xC0000142";
+    const machine = (run: Awaited<ReturnType<typeof runWith>>) => {
+      const record = run.record as RunRecord;
+      expect(record).toMatchObject({ state: "released", environment: true, reason });
+      expect((run.jira.store.get(record.key) as JiraIssue).labels).not.toContain("agent-blocked");
+      expect(run.jira.comments[record.key]?.at(-1)).toContain("This is a problem with the worker's machine");
+      expect(run.calls.claude).toEqual([]);
+    };
+    try {
+      endedGit.when = (args) => args[0] === "cat-file";
+      const answered = await runWith(world, [issue("MR-1")], {});
+      expectReleased(answered.jira, answered.record as RunRecord, "references that are not on the default branch:");
+
+      stopOnMachineGit();
+      machine(await runWith(world, [issue("MR-2")], {}));
+      endedGit.when = (args) => args[0] === "symbolic-ref";
+      machine(await runWith(world, [issue("MR-3", { description: "No references." })], {}));
+      endedGit.when = (args) => args.includes("fetch");
+      machine(await runWith(world, [issue("MR-4")], {}));
+
+      endedGit.when = (args) => args[0] === "worktree" && args[1] === "list";
+      endedGit.status = 128;
+      const plain = await runWith(world, [issue("MR-5", { description: "see product/docs/missing.md" })], {});
+      expectReleased(plain.jira, plain.record as RunRecord, "worker error: git worktree list --porcelain failed");
+      expect(plain.record?.environment).toBeUndefined();
+    } finally {
+      endedGit.when = null;
+      endedGit.status = 3221225794;
+      stopOnGitError(() => false);
+    }
+  });
+
   it("records denied tool calls and the time in the model API in run.json and the footer", async () => {
     const world = setup();
-    const stream = JSON.stringify({
-      type: "result",
-      subtype: "success",
-      total_cost_usd: 1.25,
-      num_turns: 59,
-      result: "done",
-      duration_ms: 798_000,
-      duration_api_ms: 228_000,
-      permission_denials: [
-        { tool_name: "Bash", tool_input: { command: "git stash push -u" } },
-        { tool_name: "Bash", tool_input: { command: "cat <<'EOF' > a.ts\nexport {};\nEOF" } },
-        { tool_name: "Bash", tool_input: { command: `node -e "${"x".repeat(200)}"` } }
-      ]
+    const dontAsk = "Permission to use Bash has been denied because Claude Code is running in don't ask mode.";
+    const listing = 'ls "C:/Program Files/NVIDIA Corporation"';
+    const result = (id: string) => ({
+      type: "tool_result",
+      tool_use_id: id,
+      is_error: true,
+      content: `${dontAsk} IMPORTANT: You *may* ...`
     });
+    const refused = { type: "user", message: { content: [result("t1"), result("t2")] } };
+    world.config.claude.configDir = "user";
+    const stream = [
+      JSON.stringify(refused),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        total_cost_usd: 1.25,
+        num_turns: 59,
+        result: "done",
+        duration_ms: 798_000,
+        duration_api_ms: 228_000,
+        permission_denials: [
+          { tool_name: "Bash", tool_use_id: "t1", tool_input: { command: listing } },
+          { tool_name: "Bash", tool_use_id: "t2", tool_input: { command: "nvidia-smi" } },
+          { tool_name: "Bash", tool_input: { command: "git stash push -u" } },
+          { tool_name: "Bash", tool_input: { command: "cat <<'EOF' > a.ts\nexport {};\nEOF" } },
+          { tool_name: "Bash", tool_input: { command: `node -e "${"x".repeat(200)}"` } }
+        ]
+      })
+    ].join("\n");
     const { jira, record } = await runWith(world, [issue("MR-7")], { commit: true, handback: true, stream });
     expect(record).toMatchObject({ durationMs: 798_000, apiMs: 228_000, segments: 1, wallMs: 0 });
-    expect(record?.denied).toHaveLength(3);
+    const outside =
+      "The command is covered by Bash(ls*) in allowedTools, so the likely cause is a path outside the run's directories.";
+    expect(record?.denied?.[0]).toEqual({ call: `Bash: ${listing}`, reason: dontAsk, note: outside });
+    expect(record?.denied?.[1]).toMatchObject({
+      note: "No rule in allowedTools covers the command. The allow rules of the person's own Claude Code settings, which claude.configDir: user adds, are not checked."
+    });
+    expect(record?.denied).toHaveLength(5);
     const comment = jira.comments["MR-7"][0];
-    expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 3.");
+    expect(comment).toContain(", 3.8 min of it in the model API. Blocked writes: 0. Denied tool calls: 5.");
+    expect(comment).toContain(`- denied Bash: ${listing} - ${dontAsk} ${outside}\n`);
     expect(comment).toContain("- denied Bash: git stash push -u\n");
     expect(comment).toContain("- denied Bash: cat <<'EOF' > a.ts …\n");
     expect(comment).toContain(`- denied Bash: node -e "${"x".repeat(145)} …`);
@@ -796,6 +942,7 @@ describe("once", () => {
     const world = setup();
     world.config.defaults.git = { branchPrefix: "agent/" };
     world.config.defaults.github = { draft: false, labels: [] };
+    world.config.defaults.timeout = 600 * 60_000;
     const { jira, calls, record } = await runWith(world, [issue("MR-7")], {
       commit: true,
       stream: JSON.stringify({ type: "result", subtype: "success", total_cost_usd: 0.2, num_turns: 3 })
@@ -804,6 +951,9 @@ describe("once", () => {
     expect(calls.gh[1]).not.toContain("--draft");
     expect(calls.gh[1]).not.toContain("--label");
     expect(calls.claude[0].env.GIT_AUTHOR_NAME).toBeUndefined();
+    expect(calls.claude[0].env.BASH_MAX_TIMEOUT_MS).toBe("36000000");
+    const brief = fs.readFileSync(path.join(runsDir(world.home), (record as RunRecord).id, "brief.md"), "utf8");
+    expect(brief).toContain("In this run that `timeout` can be at most 10 hours");
     expect(jira.comments["MR-7"][0]).toContain("The run wrote no handback. Its last message:\n\n(none)");
   });
 
@@ -1023,14 +1173,16 @@ describe("once", () => {
       "- Rename the flag",
       ""
     ].join("\n");
-    const { jira, calls, record } = await runWith(world, [issue("MR-7")], { commit: true, handback });
+    world.config.jira.priorityLabel = "urgent";
+    const labelled = issue("MR-7", { labels: ["agent-eligible", "repo:backend", "task", "urgent"] });
+    const { jira, calls, record } = await runWith(world, [labelled], { commit: true, handback });
     expect(record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
     expect(jira.created.map((entry) => `${entry.project} ${entry.issueType} ${entry.summary}`)).toEqual([
       "MR Task Add retries to the client",
       "MR Task Rename the flag"
     ]);
     expect(jira.issueLinks).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102"]);
-    expect(jira.store.get("MR-101")?.labels).toEqual([]);
+    expect(jira.store.get("MR-101")?.labels).toEqual(["repo:backend", "task"]);
     const comment = jira.comments["MR-7"][0];
     expect(comment).toContain(
       "---\n\nFollow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
@@ -1038,6 +1190,19 @@ describe("once", () => {
     expect(calls.claude).toHaveLength(1);
     const brief = fs.readFileSync(path.join(world.home, "runs", record?.id as string, "brief.md"), "utf8");
     expect(brief).toContain("The worker files each bullet as an issue linked to this one");
+    expect(brief).toContain("write the description of each follow-up in that format");
+  });
+
+  it("leaves a label that only looks like a marker on a follow-up when the marker is a field", async () => {
+    const world = setup();
+    world.config.projects[0].worker.followUps = { issueType: "Task" };
+    world.config.jira.repository = { field: "customfield_1" };
+    const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Rename the flag\n";
+    const marked = issue("MR-7", { fields: { customfield_1: "backend" } });
+    const { jira, record } = await runWith(world, [marked], { commit: true, handback });
+    expect(record?.state).toBe("handed-back");
+    expect(jira.store.get("MR-101")?.labels).toEqual(["repo:backend"]);
+    expect(jira.created[0].fields).toEqual({ customfield_1: "backend" });
   });
 
   it("hands back when a follow-up cannot be created and says so in the comment", async () => {
@@ -1057,24 +1222,49 @@ describe("once", () => {
     );
   });
 
-  it("does not file the follow-ups again when the comment failed and a later run hands back", async () => {
+  it("hands back when Jira refuses the handback comment and its links, and a later cycle posts them once", async () => {
     const world = setup();
     world.config.projects[0].worker.followUps = { issueType: "Task" };
     const handback = "## Summary\n\nDone.\n\n## Follow-ups\n\n- Add retries to the client\n- Rename the flag\n";
-    const failed = await runWith(world, [issue("MR-7")], { commit: true, handback }, { jira: { failHandback: true } });
-    expect(failed.record?.state).toBe("released");
-    expect(failed.record?.reason).toContain("Jira POST /issue/MR-7/comment failed: 500");
-    expect(failed.record?.followUpIssues).toEqual(["MR-101", "MR-102"]);
-    expect(filedFor(world.home, "MR-7").map((entry) => entry.key)).toEqual(["MR-101", "MR-102"]);
-
-    const retry = await runWith(world, [issue("MR-7", { summary: "Change x again" })], { commit: true, handback });
-    expect(retry.record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
-    expect(retry.jira.created).toEqual([]);
-    expect(retry.jira.issueLinks).toEqual([]);
-    expect(retry.jira.comments["MR-7"][0]).toContain(
-      "Follow-up issues:\n- MR-101: Add retries to the client\n- MR-102: Rename the flag\n\nPull requests:\n"
+    const jira = fakeJira([issue("MR-7")], { failHandback: true });
+    jira.remoteLink = async () => {
+      throw new Error("Jira POST /issue/MR-7/remotelink failed: 503");
+    };
+    const { worker, io } = deps(world, jira, fakeRunner({ commit: true, handback }, { gh: [], claude: [] }));
+    const record = (await once(worker)).runs[0];
+    const url = record.pullRequests[0];
+    expect(record).toMatchObject({ state: "handed-back", followUpIssues: ["MR-101", "MR-102"] });
+    const stored = () => loadRuns(world.home).find((entry) => entry.record.id === record.id)?.record as RunRecord;
+    expect(stored()).toMatchObject({ state: "handed-back", pullRequests: [url] });
+    expect(stored().unposted).toEqual([
+      {
+        on: "issue",
+        target: "MR-7",
+        body: expect.stringContaining(`MR-102: Rename the flag\n\nPull requests:\n- ${url}`)
+      },
+      { on: "link", target: "MR-7", url, title: "Pull request for MR-7" }
+    ]);
+    expect(io.stderr).toContain(
+      "globu-worker: could not comment on MR-7, the next cycle tries again: Jira POST /issue/MR-7/comment failed: 500"
     );
+    expect(io.stderr).toContain(
+      `globu-worker: could not link ${url} to MR-7, the next cycle tries again: Jira POST /issue/MR-7/remotelink failed: 503`
+    );
+    expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", assignee: "bot" });
+    expect(jira.store.get("MR-7")?.labels).not.toContain("agent-blocked");
     expect(filedFor(world.home, "MR-7")).toEqual([]);
+
+    const later = fakeJira([]);
+    await once(deps(world, later, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(later.comments["MR-7"]).toEqual([expect.stringContaining("Follow-up issues:\n- MR-101: Add retries")]);
+    expect(later.links["MR-7"]).toEqual([url]);
+    expect(stored().unposted).toBeUndefined();
+    expect(stored().state).toBe("handed-back");
+
+    const after = fakeJira([]);
+    await once(deps(world, after, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(after.comments).toEqual({});
+    expect(after.links).toEqual({});
   });
 
   it("leaves the follow-ups in the comment only when they are not configured", async () => {
@@ -1240,6 +1430,28 @@ describe("once", () => {
     );
     expect(record?.state).toBe("released");
     expect(io.stderr).toContain("MR-1: releasing failed: no transition");
+  });
+
+  it("keeps a release comment Jira refuses and posts it on a later cycle", async () => {
+    const world = setup();
+    const jira = fakeJira([issue("MR-1", { labels: [] })]);
+    jira.comment = async () => {
+      throw new Error("Jira is down");
+    };
+    const { worker, io } = deps(world, jira, fakeRunner({}, { gh: [], claude: [] }));
+    const record = (await once(worker)).runs[0];
+    const stored = () => loadRuns(world.home).find((entry) => entry.record.id === record.id)?.record as RunRecord;
+    expect(stored()).toMatchObject({
+      state: "released",
+      unposted: [{ on: "issue", target: "MR-1", body: expect.stringContaining("Released by the Globu worker") }]
+    });
+    expect(jira.store.get("MR-1")).toMatchObject({ status: "Ready for delivery", labels: ["agent-blocked"] });
+    expect(io.stderr).toContain("globu-worker: could not comment on MR-1, the next cycle tries again: Jira is down");
+
+    const later = fakeJira([]);
+    await once(deps(world, later, fakeRunner({}, { gh: [], claude: [] }), null).worker);
+    expect(later.comments["MR-1"]).toEqual([expect.stringContaining("Released by the Globu worker")]);
+    expect(stored().unposted).toBeUndefined();
   });
 
   it("notes a lost claim and takes a named issue that is already claimed", async () => {
@@ -1577,6 +1789,24 @@ describe("loop", () => {
     });
     expect(cycles).toBe(6);
   });
+
+  it("names the gap when a pause took much longer than the poll interval", async () => {
+    const world = setup();
+    const { worker, io } = deps(world, fakeJira([]), fakeRunner({}, { gh: [], claude: [] }));
+    const times = ["2026-11-15T23:14:10Z", "2026-11-16T05:52:40Z", "2026-11-16T05:53:00Z", "2026-11-16T05:54:00Z"];
+    let pauses = 0;
+    worker.now = () => new Date(times[0]);
+    await loop(worker, {
+      sleep: async () => {
+        pauses += 1;
+        worker.now = () => new Date(times[pauses]);
+      },
+      stopped: () => pauses >= 3
+    });
+    expect(io.stdout.split("\n").filter((line) => line.startsWith("resumed"))).toEqual([
+      "resumed after a gap: nothing ran from 2026-11-15 23:14 UTC to 2026-11-16 05:52 UTC, the machine was asleep or the worker was suspended"
+    ]);
+  });
 });
 
 describe("session commands", () => {
@@ -1609,7 +1839,7 @@ describe("session commands", () => {
         base: "origin/main"
       }
     ]);
-    expect(fs.existsSync(path.join(dir, "brief.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "brief.md"), "utf8")).not.toContain("run_in_background");
     expect(fs.existsSync(path.join(dir, "tree/src/x.ts"))).toBe(true);
     expect(io.stdout).toBe(`MR-7\tprepared ${dir}\n`);
     expect(jira.store.get("MR-7")).toMatchObject({ status: "Delivery", assignee: "bot" });

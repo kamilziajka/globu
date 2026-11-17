@@ -46,10 +46,11 @@ describe("diagnostics", () => {
       newRun("MR-1", new Date("2026-11-13T10:00:00Z"), { jira: "Bot", github: null })
     );
     const out = path.join(tempDir(), "out.tar.gz");
-    const included = await writeDiagnostics(
+    const { included, gaps } = await writeDiagnostics(
       { home, env: {}, run: tools(["claude"]), secrets: ["sk-secret-value"] },
       out
     );
+    expect(gaps).toEqual([]);
     expect(included).toEqual([
       "logs/worker-2026-11-13.log",
       "runs/MR-1-x.json",
@@ -57,7 +58,8 @@ describe("diagnostics", () => {
       "merged.json",
       "subscription.json",
       "followups.json",
-      "environment.txt"
+      "environment.txt",
+      "summary.txt"
     ]);
     const dir = unpack(out);
     expect(fs.readFileSync(path.join(dir, "logs/worker-2026-11-13.log"), "utf8")).toContain("uses [redacted]");
@@ -74,12 +76,37 @@ describe("diagnostics", () => {
     expect(environment[1]).toBe(`node ${process.version}`);
     expect(environment[3]).toBe(`home ${home}`);
     expect(environment.slice(4, 7)).toEqual(["claude not available (127)", "git git 9.9.9", "gh gh 9.9.9"]);
+    expect(fs.readFileSync(path.join(dir, "summary.txt"), "utf8")).toBe("gaps\tnone in the logs\n");
+  });
+
+  it("lists the gaps the logs it packs record in summary.txt", async () => {
+    const home = tempDir();
+    const gap = (from: string, to: string) =>
+      JSON.stringify({ time: to, level: "warn", msg: "resumed after a gap", from, to });
+    write(home, "logs/worker-2026-11-15.log", `${gap("2026-11-15T09:00:00.000Z", "2026-11-15T09:40:00.000Z")}\n`);
+    write(home, "logs/worker-2026-11-16.log", `${gap("2026-11-15T23:14:00.000Z", "2026-11-16T05:52:00.000Z")}\n`);
+    const out = path.join(tempDir(), "out.tar.gz");
+    const { gaps } = await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out);
+    expect(gaps).toEqual([
+      { from: "2026-11-15T09:00:00.000Z", to: "2026-11-15T09:40:00.000Z" },
+      { from: "2026-11-15T23:14:00.000Z", to: "2026-11-16T05:52:00.000Z" }
+    ]);
+    expect(fs.readFileSync(path.join(unpack(out), "summary.txt"), "utf8")).toBe(
+      [
+        "gap\tthe worker paused 2026-11-15 09:00 UTC to 2026-11-15 09:40 UTC (40 min), the machine was asleep or the worker was suspended",
+        "gap\tthe worker paused 2026-11-15 23:14 UTC to 2026-11-16 05:52 UTC (6 h 38 min), the machine was asleep or the worker was suspended",
+        ""
+      ].join("\n")
+    );
   });
 
   it("packs only the environment of an empty home and reports a failing tar", async () => {
     const home = tempDir();
     const out = path.join(tempDir(), "out.tar.gz");
-    expect(await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out)).toEqual(["environment.txt"]);
+    expect((await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out)).included).toEqual([
+      "environment.txt",
+      "summary.txt"
+    ]);
     const broken: Runner = async (command, args, options) =>
       command === "tar"
         ? { code: 2, stdout: "", stderr: "disk full\n", timedOut: false }
@@ -93,9 +120,10 @@ describe("diagnostics", () => {
     const home = tempDir();
     write(home, "merged.json", "{ not json\n");
     const out = path.join(tempDir(), "out.tar.gz");
-    expect(await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out)).toEqual([
+    expect((await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out)).included).toEqual([
       "merged.json",
-      "environment.txt"
+      "environment.txt",
+      "summary.txt"
     ]);
     expect(fs.readFileSync(path.join(unpack(out), "merged.json"), "utf8")).toBe("{ not json\n");
   });
@@ -108,7 +136,7 @@ describe("diagnostics", () => {
       return record.id;
     });
     const out = path.join(tempDir(), "out.tar.gz");
-    const included = await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out);
+    const { included } = await writeDiagnostics({ home, env: {}, run: tools(), secrets: [] }, out);
     const runs = included.filter((name) => name.startsWith("runs/"));
     expect(runs).toEqual(ids.slice(2).map((id) => `runs/${id}.json`));
   });

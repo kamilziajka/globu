@@ -71,6 +71,7 @@ describe("renderBrief", () => {
         { key: "MR-6", summary: "Other", status: "In Review", done: false, resolved: false, pullRequests: [] }
       ],
       allowedTools: ["Read", "Bash(npm run *)", "Bash(git status*)"],
+      timeout: 2_700_000,
       handbackFile: "/runs/r1/handback.md"
     });
     expect(brief).toContain("# MR-7: Add the thing\n\nIssue: https://acme.atlassian.net/browse/MR-7");
@@ -91,10 +92,18 @@ describe("renderBrief", () => {
     expect(brief).toContain(`The worker released this issue 2 times before, the last time with: ${"x".repeat(200)} …`);
     expect(brief).toContain("Status: Delivery. Labels: windows, bug.");
     expect(brief).toContain(
-      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `git status*`. Every part of a command joined with"
+      "Bash runs only the commands that match these patterns, in which `*` stands for any text: `npm run *`, `git status*`. A variable set in front of a command"
     );
     expect(brief).toContain("`git stash` is denied");
+    expect(brief).toContain(
+      "\n\nClaude Code stops a command started with `run_in_background` when its `timeout` runs out. In this run that `timeout` can be at most 2 hours, and the default is much shorter, so set it. Keep each background command well under 2 hours: split long work, such as rendering or converting many files, into batches that skip what an earlier batch already did, so a stopped command loses little. The worker stops this whole run after 45 minutes.\n\n"
+    );
     expect(brief).toContain("`globu base stamp --verified` is denied because a verification needs a person.");
+    expect(brief).toContain(
+      "A variable set in front of a command, as in `FOO=1 node app.js`, is part of the command, so it runs only under a pattern that starts with that assignment, such as `FOO=* node *`"
+    );
+    expect(brief).toContain("such as `node --env-file=<file>` with the file written next to the handback");
+    expect(brief).toContain("instead of dropping the step. Every part of a command joined with");
     expect(brief).toContain(
       "## Linked issues\n\n- relates to MR-3: Nearby (Done)\n- Cloners MR-2 (unknown)\n- linked to MR-1 (unknown)\n"
     );
@@ -128,11 +137,12 @@ describe("renderBrief", () => {
       informational: [],
       blockers: [],
       allowedTools: ["Read"],
+      timeout: 2_700_000,
       handbackFile: "/h.md",
       followUps: true
     });
     expect(brief).toContain(
-      "The worker files each bullet as an issue linked to this one and lists the new keys on this issue."
+      "The worker files each bullet as an issue linked to this one, with this issue's labels, and lists the new keys on this issue."
     );
     expect(brief).toContain("> (empty)");
     expect(brief).toContain("- none");
@@ -144,6 +154,8 @@ describe("renderBrief", () => {
     expect(brief).not.toContain("## Linked issues");
     expect(brief).toContain("Labels: none.");
     expect(brief).toContain("Bash is not allowed in this run.");
+    expect(brief).not.toContain("A variable set in front of a command");
+    expect(brief).not.toContain("run_in_background");
   });
 
   it("says once for a single earlier release", () => {
@@ -169,6 +181,7 @@ describe("renderBrief", () => {
       informational: [],
       blockers: [],
       allowedTools: [],
+      timeout: 2_700_000,
       handbackFile: "/h.md"
     });
     expect(brief).toContain("The worker released this issue once before, the last time with: no marker");
@@ -198,9 +211,49 @@ describe("renderBrief", () => {
       informational: [],
       blockers: [],
       allowedTools: ["Read"],
+      timeout: 2_700_000,
       handbackFile: "/h.md"
     });
     expect(brief).toContain("- `src/old.ts`: not found (not on origin/main)\n");
     expect(brief).toContain("\nThe worker ran the setup commands in `product`.\n");
+  });
+
+  it("states the longest background command the run's timeout allows", () => {
+    const briefFor = (timeout: number) =>
+      renderBrief({
+        issue: {
+          key: "MR-10",
+          summary: "Render",
+          description: "",
+          labels: [],
+          status: "",
+          statusId: "",
+          assignee: null,
+          comments: [],
+          fields: {}
+        },
+        site: "s",
+        shard: "backend",
+        tree: "/t",
+        branch: "b",
+        setup: false,
+        others: [],
+        refs: [],
+        informational: [],
+        blockers: [],
+        allowedTools: ["Bash(npm run *)"],
+        timeout,
+        handbackFile: "/h.md"
+      });
+    const raised = briefFor(600 * 60_000);
+    expect(raised).toContain("In this run that `timeout` can be at most 10 hours");
+    expect(raised).toContain("Keep each background command well under 10 hours");
+    expect(raised).toContain("The worker stops this whole run after 10 hours.");
+    expect(briefFor(3_600_000)).toContain("at most 2 hours, and the default is much shorter, so set it.");
+    expect(briefFor(3_600_000)).toContain("The worker stops this whole run after 1 hour.");
+    expect(briefFor(90_000)).toContain("The worker stops this whole run after 90 seconds.");
+    const clamped = briefFor(30 * 24 * 3_600_000);
+    expect(clamped).toContain("In this run that `timeout` can be at most 2147483647 milliseconds");
+    expect(clamped).toContain("The worker stops this whole run after 720 hours.");
   });
 });

@@ -16,7 +16,14 @@ export type JiraBlocker = { key: string; summary: string; status: string; done: 
 export type JiraLink = { relation: string; key: string; summary: string; status: string };
 export type JiraUser = { accountId: string; displayName: string };
 export type JiraHit = { key: string; labels: string[] };
-export type NewIssue = { project: string; issueType: string; summary: string; description: string };
+export type NewIssue = {
+  project: string;
+  issueType: string;
+  summary: string;
+  description: string;
+  labels: string[];
+  fields?: Record<string, unknown>;
+};
 export type JiraIssueType = { id: string; name: string };
 export type JiraClient = {
   myself(): Promise<JiraUser>;
@@ -143,6 +150,11 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
   }
 
   const issuePath = (key: string) => `/issue/${encodeURIComponent(key)}`;
+  const readable = (project: string, text: string) =>
+    text.replace(
+      new RegExp(`(^|[\\s(])(${project}-\\d+)(?=$|[\\s).,:;!?])`, "gm"),
+      (_found, before: string, key: string) => `${before}[${key}|${base}/browse/${key}]`
+    );
 
   return {
     myself: () => request<JiraUser>("GET", "/myself"),
@@ -167,7 +179,7 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
       }
       await request("POST", `${issuePath(key)}/transitions`, { transition: { id: transition.id } });
     },
-    comment: (key, body) => request("POST", `${issuePath(key)}/comment`, { body }),
+    comment: (key, body) => request("POST", `${issuePath(key)}/comment`, { body: readable(key.split("-")[0], body) }),
     addLabel: (key, label) => request("PUT", issuePath(key), { update: { labels: [{ add: label }] } }),
     removeLabel: (key, label) => request("PUT", issuePath(key), { update: { labels: [{ remove: label }] } }),
     async setField(key, field, value) {
@@ -178,10 +190,17 @@ export function jiraClient(site: string, email: string, token: string, fetchFn: 
       await request("PUT", issuePath(key), { fields: { [field]: content } });
     },
     remoteLink: (key, url, title) => request("POST", `${issuePath(key)}/remotelink`, { object: { url, title } }),
-    async createIssue({ project, issueType, summary, description }) {
+    async createIssue({ project, issueType, summary, description, labels, fields }) {
       const issuetype = isStatusId(issueType) ? { id: issueType } : { name: issueType };
       const created = await request<{ key: string }>("POST", "/issue", {
-        fields: { project: { key: project }, issuetype, summary, description }
+        fields: {
+          ...fields,
+          project: { key: project },
+          issuetype,
+          summary,
+          description: readable(project, description),
+          labels
+        }
       });
       return created.key;
     },

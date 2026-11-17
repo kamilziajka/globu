@@ -34,7 +34,9 @@ shards:
 
 type Fake = JiraClient & { created: NewIssue[]; linked: string[] };
 
-function jira(options: { failCreate?: string; failLink?: string; first?: number } = {}): Fake {
+const REFUSED = "Jira POST /issue failed: 400 customfield_1 cannot be set, it is not on the appropriate screen";
+
+function jira(options: { failCreate?: string; failLink?: string; first?: number; refuseFields?: boolean } = {}): Fake {
   const created: NewIssue[] = [];
   const linked: string[] = [];
   const unused = async () => {
@@ -55,6 +57,7 @@ function jira(options: { failCreate?: string; failLink?: string; first?: number 
     remoteLink: unused,
     createIssue: async (issue) => {
       if (issue.summary === options.failCreate) throw new Error("Jira POST /issue failed: 400 issuetype is invalid");
+      if (options.refuseFields && issue.fields !== undefined) throw new Error(REFUSED);
       created.push(issue);
       return `${issue.project}-${(options.first ?? 100) + created.length}`;
     },
@@ -154,7 +157,8 @@ describe("fileFollowUps", () => {
       tempDir(),
       "MR-7",
       "run-1",
-      HANDBACK
+      HANDBACK,
+      { labels: ["repo:backend", "task"], fields: { customfield_1: "backend" } }
     );
     expect(filed.map((entry) => entry.key)).toEqual(["MR-101", "MR-102", "MR-103"]);
     expect(fake.created[0]).toEqual({
@@ -163,7 +167,9 @@ describe("fileFollowUps", () => {
       summary: "Add retries to the client",
       description: expect.stringMatching(
         /^The client gives up after one failure\.[\s\S]*\n\nFollow-up of MR-7, from the handback of Globu worker run run-1\.$/
-      )
+      ),
+      labels: ["repo:backend", "task"],
+      fields: { customfield_1: "backend" }
     });
     expect(fake.created[2].description).toBe("Follow-up of MR-7, from the handback of Globu worker run run-1.");
     expect(fake.linked).toEqual(["MR-7 Relates MR-101", "MR-7 Relates MR-102", "MR-7 Relates MR-103"]);
@@ -198,6 +204,38 @@ describe("fileFollowUps", () => {
       "## Follow-ups\n- One\n"
     );
     expect(other).toEqual([]);
+  });
+});
+
+describe("fileFollowUps with a marker field Jira refuses", () => {
+  it("files the follow-up again without the field and says the marker is not set", async () => {
+    const { logger, entries } = memory();
+    setLogger(logger);
+    const fake = jira({ refuseFields: true, failCreate: "Rename the flag", failLink: "MR-102" });
+    const filed = await fileFollowUps(
+      fake,
+      config("  followUps:\n    issueType: Task"),
+      tempDir(),
+      "MR-7",
+      "run-1",
+      HANDBACK,
+      { labels: ["repo:backend"], fields: { customfield_1: "backend" } }
+    );
+    const unmarked = `repository marker not set: ${REFUSED}`;
+    expect(filed).toEqual([
+      { summary: "Add retries to the client", key: "MR-101", problem: unmarked },
+      { summary: "Rename the flag", key: null, problem: "Jira POST /issue failed: 400 issuetype is invalid" },
+      {
+        summary: "Spaced out summary",
+        key: "MR-102",
+        problem: `${unmarked}, not linked: Jira POST /issueLink failed: 404 no link type`
+      }
+    ]);
+    expect(fake.created.map((issue) => [issue.summary, issue.labels, issue.fields])).toEqual([
+      ["Add retries to the client", ["repo:backend"], undefined],
+      ["Spaced out summary", ["repo:backend"], undefined]
+    ]);
+    expect(entries.filter((entry) => entry.startsWith("warn follow-up failed"))).toHaveLength(3);
   });
 });
 

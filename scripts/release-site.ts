@@ -1,17 +1,23 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { behindRelease, readArtefacts } from "./artefacts.ts";
 import { readJson, root } from "./targets.ts";
 
 const [siteArg, dateArg] = process.argv.slice(2);
 if (siteArg === undefined) {
-  console.error("usage: node scripts/release-site.ts <globu-website checkout> [YYYY-MM-DD]");
+  console.error("usage: node scripts/release-site.ts <site checkout> [YYYY-MM-DD]");
   process.exit(1);
 }
 
 const site = path.resolve(siteArg);
 const version = readJson<{ version: string }>(path.join(root, "package.json")).version;
 const date = dateArg ?? new Date().toISOString().slice(0, 10);
+const artefacts = readArtefacts(root);
+const behind = behindRelease(artefacts, version);
+if (behind.length > 0) {
+  throw new Error(`${behind.join("; ")}: run this script from the tag v${version}, where the pin set every version`);
+}
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const tagged = git("rev-parse", "--short", `v${version}^{commit}`);
 const released = git("log", "-1", "--format=%h", "--grep", `^Release ${version}$`, `v${version}`);
@@ -20,7 +26,7 @@ const docsDir = path.join(root, "docs");
 const contentDir = path.join(site, "content");
 const navFile = path.join(site, "src", "docs", "nav.ts");
 for (const required of [contentDir, navFile, path.join(site, "release.json"), path.join(site, "docs", "log.md")]) {
-  if (!fs.existsSync(required)) throw new Error(`${required} is missing, is ${site} a globu-website checkout?`);
+  if (!fs.existsSync(required)) throw new Error(`${required} is missing, is ${site} a checkout of the site?`);
 }
 
 const markdown = (dir: string) =>
@@ -39,7 +45,10 @@ const changed = after.filter(
 for (const name of before) fs.rmSync(path.join(contentDir, name));
 for (const name of after) fs.copyFileSync(path.join(docsDir, name), path.join(contentDir, name));
 
-fs.writeFileSync(path.join(site, "release.json"), `${JSON.stringify({ version, releasedAt: date }, null, 2)}\n`);
+fs.writeFileSync(
+  path.join(site, "release.json"),
+  `${JSON.stringify({ version, releasedAt: date, artefacts }, null, 2)}\n`
+);
 
 const nav = fs.readFileSync(navFile, "utf8");
 const slugs = after.map((name) => name.slice(0, -3));
@@ -63,6 +72,7 @@ if (log.includes(`* Globu ${version}, released on`)) {
 }
 
 console.log(`release.json: ${version}, released ${date}`);
+for (const artefact of artefacts) console.log(`  ${artefact.id}: ${artefact.name} ${artefact.version}`);
 console.log(`content: ${after.length} docs, ${changes}`);
 if (unlisted.length > 0 || stale.length > 0) {
   if (unlisted.length > 0) console.log(`add to src/docs/nav.ts: ${unlisted.join(", ")}`);

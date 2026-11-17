@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { gitAuthArgs, resolveAll } from "../../globu-core/src/index.js";
 import { VERSION } from "../../knowledge-base/src/index.js";
+import { LONGEST_TIMEOUT_MS } from "./claude.js";
 import {
   defaultClaude,
   type FollowUpSettings,
@@ -128,6 +129,21 @@ function loadedWith(deps: WorkerDeps, init: InitEvent): string {
   return parts.length === 0 ? "" : `, a run loads ${parts.join("; ")}`;
 }
 
+function longTimeouts(config: WorkerConfig): string[] {
+  const named = config.projects.flatMap((project) =>
+    [undefined, ...Object.keys(project.worker.shards ?? {})].map((shard) => ({
+      where: shard === undefined ? `project ${project.name}` : `shard ${shard} of project ${project.name}`,
+      timeout: settingsFor(config, project, shard).timeout
+    }))
+  );
+  const over = named.filter(({ timeout }) => timeout > LONGEST_TIMEOUT_MS);
+  if (over.length === 0) return [];
+  const where = over.map(({ where, timeout }) => `${where} (${Math.round(timeout / 3_600_000)} hours)`).join(", ");
+  const note = `the timeout of ${where} is above the ${LONGEST_TIMEOUT_MS} ms, about 596 hours, that Claude Code allows a background command, so a run there has to split work that takes longer`;
+  log().warn("timeout above the background limit", { where });
+  return [note];
+}
+
 async function claudeProbe(deps: WorkerDeps): Promise<Found> {
   const claude = defaultClaude(deps.config);
   const args = [
@@ -168,7 +184,10 @@ async function claudeProbe(deps: WorkerDeps): Promise<Found> {
   const model = init.model as string;
   const chosen = claude.model === undefined ? `${model} (the default, set claude.model to choose)` : model;
   return {
-    detail: `${chosen} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)${loadedWith(deps, init)}`,
+    detail: [
+      `${chosen} answers in ${deps.claudeConfigDir} with the ${claude.skill} skill (${cost} USD)${loadedWith(deps, init)}`,
+      ...longTimeouts(deps.config)
+    ].join(", "),
     short: model
   };
 }

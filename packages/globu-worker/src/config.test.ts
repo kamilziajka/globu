@@ -81,6 +81,7 @@ describe("loadWorkerConfig for a version 1 file", () => {
       limits: { concurrent: 1, perShard: 1, dayUsd: 40, openPullRequests: 5, keepRuns: 100, subscription: 70 },
       claude: { configDir: "own" },
       notify: { timeout: 30_000 },
+      keepAwake: true,
       warnings: [
         `${file} is a version 1 worker.yaml: its settings are read as the defaults of version 2 and its shards as one project for every other Jira project, with deliverable and companion kept as they were; see "Moving a version 1 worker.yaml" in the worker docs`
       ]
@@ -315,6 +316,7 @@ describe("loadWorkerConfig for a version 2 file", () => {
       repos: {},
       limits: { concurrent: 2, perShard: 1, dayUsd: 40 },
       claude: { configDir: "own" },
+      keepAwake: true,
       warnings: []
     });
     expect(config.jira.jql).toBeUndefined();
@@ -375,6 +377,17 @@ describe("loadWorkerConfig for a version 2 file", () => {
       max: 10
     });
     expect(defaultClaude(config)).toMatchObject({ model: "claude-sonnet-5-5", maxTurns: 40, skill: "issue-deliver" });
+  });
+
+  it("takes the status of a partial merge from the defaults or the project", () => {
+    const config = v2(V2.replace("defaults:\n", "defaults:\n  statuses: { partial: Partly done }\n"), {
+      ...PROJECTS,
+      sandbox: { ...PROJECTS.sandbox, worker: { statuses: { claimed: "Doing", released: "Open", partial: "Review" } } }
+    });
+    const [klayboy, sandbox] = config.projects;
+    expect(settingsFor(config, klayboy).statuses).toEqual({ ...STATUSES, partial: "Partly done" });
+    expect(settingsFor(config, sandbox).statuses).toEqual({ claimed: "Doing", released: "Open", partial: "Review" });
+    expect(settingsFor(v2(V2), klayboy).statuses.partial).toBeUndefined();
   });
 
   it("refuses version 1 keys, unknown projects and projects it cannot serve", () => {

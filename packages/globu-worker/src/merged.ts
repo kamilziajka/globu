@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { unmet } from "./handback.js";
 import type { StoredRun } from "./runs.js";
 
 const MergedIssueSchema = z.object({ pullRequests: z.array(z.string()), mergedAt: z.string() });
@@ -37,7 +38,12 @@ function loadFile(home: string): MergedIndex {
 }
 
 export function mergedRun({ record }: StoredRun): boolean {
-  return record.repairOf === undefined && record.state === "handed-back" && record.followUp?.state === "merged";
+  return (
+    record.repairOf === undefined &&
+    record.state === "handed-back" &&
+    record.followUp?.state === "merged" &&
+    !unmet(record.outcome)
+  );
 }
 
 export function mergedIssues(home: string, runs: StoredRun[]): MergedIndex {

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Io } from "../../globu-cli/src/cli/index.js";
-import { defaultRevision } from "../../globu-core/src/git.js";
+import { defaultRevision, GitError, stopOnGitError } from "../../globu-core/src/git.js";
 import {
   gitAuthArgs,
   type RefResult,
@@ -12,8 +12,15 @@ import {
   resolveRefs,
   sameRepo
 } from "../../globu-core/src/index.js";
-import { type Blocker, renderBrief } from "./brief.js";
-import { type ClaudeSummary, claudeArgs, implementPrompt, repairPrompt, summarizeStream } from "./claude.js";
+import { type Blocker, backgroundRules, bashRules, renderBrief } from "./brief.js";
+import {
+  backgroundEnv,
+  type ClaudeSummary,
+  claudeArgs,
+  implementPrompt,
+  repairPrompt,
+  summarizeStream
+} from "./claude.js";
 import {
   projectFor,
   projectOf,
@@ -27,7 +34,8 @@ import {
 } from "./config.js";
 import { MachineProblem, machineFailure, type Runner, runOrThrow } from "./exec.js";
 import { forgetFiled } from "./filed.js";
-import { fileFollowUps, followUpSection, parseOutcome } from "./handback.js";
+import { AWAY_MS, GAP_MESSAGE } from "./gaps.js";
+import { type Carried, fileFollowUps, followUpSection, parseOutcome, unmet } from "./handback.js";
 import { blockersOf, type JiraClient, type JiraHit, type JiraIssue, type JiraUser, matchesStatus } from "./jira.js";
 import { launcherDir, WORKER_SCRIPT, withDirOnPath, writeLaunchers } from "./launcher.js";
 import { exclusiveHold, type Hold, lockDir } from "./lock.js";
@@ -38,6 +46,8 @@ import { deliveryShards, layoutOf, othersOf, searchJql, setupShards, targetOf } 
 import { type FollowUpState, followUpState, type PullRequest, readPullRequest, repoOf } from "./pulls.js";
 import { extractRefs } from "./refs.js";
 import {
+  type DeniedCall,
+  deniedCalls,
   endRun,
   followingUp,
   isTerminal,
@@ -57,7 +67,7 @@ import {
   type UnpostedComment
 } from "./runs.js";
 import { NO_SHELL, setupShell } from "./shell.js";
-import { currentUsage, holdReason, overLimit, recordUsage } from "./subscription.js";
+import { currentUsage, holdReason, overLimit, recordUsage, resetTime } from "./subscription.js";
 
 export type WorkerDeps = {
   config: WorkerConfig;
@@ -75,7 +85,9 @@ export type WorkerDeps = {
   onPlan?: (plan: PlanEntry[]) => void;
   onFollowUps?: (rows: FollowUpRow[]) => void;
 };
-export type OnceOptions = { dryRun?: boolean; issue?: string; repair?: string };
+export type LimitHold = { kind: "day cap" | "subscription limit"; line: string; detail: Record<string, unknown> };
+export type SaidHold = { current: LimitHold | null };
+export type OnceOptions = { dryRun?: boolean; issue?: string; repair?: string; hold?: SaidHold };
 export type FollowUpRow = {
   run: string;
   key: string;
@@ -147,6 +159,14 @@ export function git(args: string[], cwd: string): string {
   }
 }
 
+function machineGit(error: GitError): string | null {
+  return machineFailure("git", { code: error.status, startError: error.code });
+}
+
+export function stopOnMachineGit(): void {
+  stopOnGitError((error) => machineGit(error) !== null);
+}
+
 export function registry(): Registry {
   const { shards: active, context } = resolveActive();
   return { all: resolveAll().shards, active, context };
@@ -179,6 +199,11 @@ const LINE_LIMIT = 160;
 function oneLine(text: string): string {
   const first = text.split("\n")[0];
   return first.length < text.length || first.length > LINE_LIMIT ? `${first.slice(0, LINE_LIMIT)} …` : first;
+}
+
+export function deniedLine(denied: DeniedCall): string {
+  const why = [denied.reason, denied.note].filter((part) => part !== undefined).join(" ");
+  return why === "" ? oneLine(denied.call) : `${oneLine(denied.call)} - ${why}`;
 }
 
 function minutes(ms: number): string {
@@ -237,6 +262,16 @@ export function markerShard(issue: JiraIssue, config: WorkerConfig): string | nu
   return typeof option === "string" ? option : null;
 }
 
+export function carriedFrom(issue: JiraIssue, config: WorkerConfig): Carried {
+  const own = [config.jira.eligibleLabel, config.jira.blockedLabel, config.jira.priorityLabel];
+  const labels = issue.labels.filter((label) => !own.includes(label));
+  const marker = config.jira.repository;
+  const shard = markerShard(issue, config);
+  if ("labelPrefix" in marker || shard === null) return { labels };
+  const value = typeof issue.fields[marker.field] === "string" ? shard : { value: shard };
+  return { labels, fields: { [marker.field]: value } };
+}
+
 export function candidateOf(deps: WorkerDeps, issue: JiraIssue): Candidate {
   const project = projectFor(deps.config, issue.key);
   if (project === null) return { issue, project, shardId: markerShard(issue, deps.config), problem: null };
@@ -277,13 +312,13 @@ function footer(record: RunRecord, now: Date): string {
   if (record.driver === "session") {
     return `Run ${record.id} as ${record.identity.jira}${github} from a Claude Code session, ${elapsed}.`;
   }
-  const denied = record.denied ?? [];
+  const denied = deniedCalls(record);
   const segments = (record.segments ?? 1) > 1 ? ` in ${record.segments} segments` : "";
   const api = record.apiMs ? `, ${minutes(record.apiMs)} of it in the model API` : "";
   const lines = [
     `Run ${record.id} as ${record.identity.jira}${github}: ${record.turns} turns${segments}, ${record.costUsd.toFixed(2)} USD, ${elapsed}${api}. Blocked writes: ${record.blocked.length}. Denied tool calls: ${denied.length}.`,
     ...record.blocked.map((text) => `- ${text}`),
-    ...denied.map((text) => `- denied ${oneLine(text)}`)
+    ...denied.map((entry) => `- denied ${deniedLine(entry)}`)
   ];
   return lines.join("\n");
 }
@@ -319,14 +354,12 @@ async function release(
     await jira.transitionTo(record.key, statusesOf(config, record.key).released);
     await jira.assign(record.key, null);
     if (!record.environment) await jira.addLabel(record.key, config.jira.blockedLabel);
-    await jira.comment(
-      record.key,
-      `Released by the Globu worker: ${reason}${machine}\n\n${handbackPart(handback)}${footer(record, deps.now())}`
-    );
   } catch (err) {
     log().error("releasing failed", { run: record.id, key: record.key, error: (err as Error).message });
     io.err(`${record.key}: releasing failed: ${(err as Error).message}`);
   }
+  const body = `Released by the Globu worker: ${reason}${machine}\n\n${handbackPart(handback)}${footer(record, deps.now())}`;
+  await postComments(deps, record, [{ on: "issue", target: record.key, body }]);
   if (!record.environment) {
     await tell(deps, record, "released", issueUrl(config, record.key), `${record.key} released: ${oneLine(reason)}`);
   }
@@ -432,6 +465,26 @@ export async function openPullRequest(
   return output.split("\n").at(-1) as string;
 }
 
+const PARTIAL_LABEL = "partial";
+
+async function labelPartial(deps: WorkerDeps, record: RunRecord, url: string, cwd: string, token: string) {
+  const env = { ...deps.env, GH_TOKEN: token };
+  const description = "Merging it leaves the issue open";
+  await deps.run("gh", ["label", "create", PARTIAL_LABEL, "--color", "FBCA04", "--description", description], {
+    cwd,
+    env
+  });
+  const added = await deps.run("gh", ["pr", "edit", url, "--add-label", PARTIAL_LABEL], { cwd, env });
+  if (added.code !== 0) {
+    log().warn("partial label not added", {
+      run: record.id,
+      key: record.key,
+      pullRequest: url,
+      error: tail(added.stderr)
+    });
+  }
+}
+
 function environmentProblem(record: RunRecord, reason: string): string {
   record.environment = true;
   return reason;
@@ -439,7 +492,9 @@ function environmentProblem(record: RunRecord, reason: string): string {
 
 function failureOf(record: RunRecord, err: unknown): string {
   const { message } = err as Error;
-  return err instanceof MachineProblem ? environmentProblem(record, message) : `worker error: ${message}`;
+  if (err instanceof MachineProblem) return environmentProblem(record, message);
+  const machine = err instanceof GitError ? machineGit(err) : null;
+  return machine === null ? `worker error: ${message}` : environmentProblem(record, machine);
 }
 
 export async function runSetup(
@@ -571,6 +626,7 @@ async function prepare(
       informational: resolved.informational.map((result) => inRunTree(result, worktrees)),
       blockers: blockers(deps, issue, loadRuns(deps.home)),
       allowedTools: settings.claude.allowedTools,
+      timeout: record.driver === "session" ? undefined : settings.timeout,
       handbackFile,
       followUps: settings.followUps !== undefined
     })
@@ -606,6 +662,7 @@ async function runClaude(
   const env = {
     ...scrubbedEnv(deps.env),
     ...authorEnv(settings.git),
+    ...backgroundEnv(settings.timeout),
     GLOBU_HOME: deps.home,
     CLAUDE_CONFIG_DIR: deps.claudeConfigDir
   };
@@ -627,7 +684,11 @@ async function runClaude(
       stdoutFile: streamFile
     }
   );
-  const summary = summarizeStream(fs.readFileSync(streamFile, "utf8"));
+  const summary = summarizeStream(
+    fs.readFileSync(streamFile, "utf8"),
+    claude.allowedTools,
+    deps.config.claude.configDir === "user"
+  );
   record.costUsd = summary.costUsd;
   record.turns = summary.turns;
   record.blocked = summary.blocked;
@@ -679,21 +740,36 @@ async function conclude(deps: WorkerDeps, prepared: Prepared, outcome: Outcome |
     const bodyFile = path.join(dir, `pull-request-${worktree.shard.id}.md`);
     fs.writeFileSync(bodyFile, `${handback}\n\n---\n\n${footer(record, deps.now())}\n`);
     const { github } = worktree === target ? settings : settingsFor(config, project, worktree.shard.id);
-    record.pullRequests.push(await openPullRequest(deps, worktree, title, bodyFile, token, github));
+    const url = await openPullRequest(deps, worktree, title, bodyFile, token, github);
+    record.pullRequests.push(url);
+    if (unmet(met)) await labelPartial(deps, record, url, worktree.tree, token);
   }
-  const filed = await fileFollowUps(jira, settings.followUps, deps.home, issue.key, record.id, handback);
+  const filed = await fileFollowUps(
+    jira,
+    settings.followUps,
+    deps.home,
+    issue.key,
+    record.id,
+    handback,
+    carriedFrom(issue, config)
+  );
   const keys = filed.flatMap((entry) => (entry.key === null ? [] : [entry.key]));
   if (keys.length > 0) record.followUpIssues = keys;
   const links = record.pullRequests.map((url) => `- ${url}`).join("\n");
   const section = followUpSection(filed);
-  await jira.comment(
-    issue.key,
-    `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`
-  );
-  forgetFiled(deps.home, issue.key);
-  for (const url of record.pullRequests) await jira.remoteLink(issue.key, url, `Pull request for ${issue.key}`);
+  const body = `${handback}\n\n---\n\n${section}Pull requests:\n${links}\n\n${footer(record, deps.now())}`;
   record.state = "handed-back";
   endRun(record, deps.now());
+  await deliver(deps, dir, record, [
+    { on: "issue", target: issue.key, body },
+    ...record.pullRequests.map((url) => ({
+      on: "link" as const,
+      target: issue.key,
+      url,
+      title: `Pull request for ${issue.key}`
+    }))
+  ]);
+  forgetFiled(deps.home, issue.key);
   log().info("handed back", { run: record.id, key: record.key, pullRequests: record.pullRequests, outcome: met });
   const message = `${record.key} handed back${met === null ? "" : `, ${met}`}: ${record.pullRequests.join(" ")}`;
   await tell(deps, record, "handed-back", record.pullRequests[0], message);
@@ -735,6 +811,7 @@ function pullNumber(record: RunRecord): string {
 
 export async function claimIssue(deps: WorkerDeps, key: string): Promise<ClaimResult> {
   const { jira, io, home } = deps;
+  await postUnposted(deps);
   const me = await jira.myself();
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: await githubLogin(deps) };
   const issue = await jira.issue(key);
@@ -785,6 +862,7 @@ function preparedRun(deps: WorkerDeps, id: string): Prepared {
 }
 
 export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord> {
+  await postUnposted(deps);
   const prepared = preparedRun(deps, id);
   const { record, dir, worktrees } = prepared;
   try {
@@ -800,6 +878,7 @@ export async function finishRun(deps: WorkerDeps, id: string): Promise<RunRecord
 }
 
 export async function releaseRun(deps: WorkerDeps, id: string, reason: string): Promise<RunRecord> {
+  await postUnposted(deps);
   const { dir, record } = loadRun(deps.home, id);
   if (isTerminal(record.state)) throw new Error(`run ${id} is already ${record.state}`);
   const worktrees = restoreWorktrees(record);
@@ -877,19 +956,30 @@ function deleteBranch(record: RunRecord, pull: PullRequest, token: string): void
   }
 }
 
+function partialNote(record: RunRecord, status: string | undefined): string {
+  const moved = status === undefined ? "" : ` and moves to ${status}`;
+  const keys = record.followUpIssues ?? [];
+  const rest = keys.length === 0 ? "What is left is in its handback." : `What is left is filed as ${keys.join(", ")}.`;
+  return `The merge was partial: the run handed back with Outcome: ${record.outcome}, so ${record.key} stays open${moved}. ${rest}`;
+}
+
 async function settle(deps: WorkerDeps, stored: StoredRun, pulls: PullRequest[], token: string): Promise<void> {
   const { record, dir } = stored;
   const merged = pulls.some((pull) => pull.state === "MERGED");
+  const partial = merged && unmet(record.outcome);
   const urls = pulls.map((pull) => pull.url).join(" ");
   record.followUp = { repairs: record.followUp?.repairs ?? 0, state: merged ? "merged" : "closed" };
   const project = projectFor(deps.config, record.key);
-  const done = project === null ? undefined : settingsFor(deps.config, project).statuses.done;
-  if (merged && done !== undefined) await deps.jira.transitionTo(record.key, done);
-  await deps.jira.comment(record.key, merged ? `Merged: ${urls}` : `Closed without merging: ${urls}`);
-  log().info(merged ? "merged" : "closed", { run: record.id, key: record.key, pullRequests: record.pullRequests });
+  const statuses = project === null ? undefined : settingsFor(deps.config, project).statuses;
+  const status = partial ? statuses?.partial : statuses?.done;
+  if (merged && status !== undefined) await deps.jira.transitionTo(record.key, status);
+  const fields = { run: record.id, key: record.key, pullRequests: record.pullRequests };
+  log().info(merged ? "merged" : "closed", partial ? { ...fields, outcome: record.outcome } : fields);
   for (const pull of pulls) deleteBranch(record, pull, token);
-  if (merged) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
-  persist(deps, dir, record);
+  if (merged && !partial) recordMerged(deps.home, loadRuns(deps.home), record.key, record.pullRequests, deps.now());
+  const note = partial ? `Merged: ${urls}\n\n${partialNote(record, status)}` : `Merged: ${urls}`;
+  const body = merged ? note : `Closed without merging: ${urls}`;
+  await deliver(deps, dir, record, [{ on: "issue", target: record.key, body }]);
 }
 
 export async function followUps(deps: WorkerDeps, apply: boolean): Promise<FollowUpRow[]> {
@@ -916,15 +1006,27 @@ export async function followUps(deps: WorkerDeps, apply: boolean): Promise<Follo
   return rows;
 }
 
+function noteGap(deps: WorkerDeps, paused: Date): void {
+  const resumed = deps.now();
+  if (resumed.getTime() - paused.getTime() - deps.config.poll.every <= AWAY_MS) return;
+  const [from, to] = [paused.toISOString(), resumed.toISOString()];
+  log().warn(GAP_MESSAGE, { from, to });
+  deps.io.out(
+    `${GAP_MESSAGE}: nothing ran from ${resetTime(from)} to ${resetTime(to)}, the machine was asleep or the worker was suspended`
+  );
+}
+
 async function settlingMeanwhile<T>(deps: WorkerDeps, work: Promise<T>): Promise<T> {
   const ended = Promise.allSettled([work]).then(() => true);
   const workEnded = async (): Promise<boolean> => {
     let timer: NodeJS.Timeout | undefined;
+    const planned = deps.now();
     const interval = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => resolve(false), deps.config.poll.every);
     });
     const over = await Promise.race([interval, ended]);
     clearTimeout(timer);
+    noteGap(deps, planned);
     return over;
   };
   const settling = (async () => {
@@ -953,7 +1055,13 @@ function conflictedFiles(tree: string): string[] {
     .filter((line) => line !== "");
 }
 
-function repairBrief(pull: PullRequest, original: string, conflicted: string[], handbackFile: string): string {
+function repairBrief(
+  pull: PullRequest,
+  original: string,
+  conflicted: string[],
+  handbackFile: string,
+  settings: Settings
+): string {
   const files = conflicted.length === 0 ? "none" : conflicted.map((file) => `- ${file}`).join("\n");
   const checks = pull.failing.length === 0 ? "none" : pull.failing.map((line) => `- ${line}`).join("\n");
   return [
@@ -961,6 +1069,9 @@ function repairBrief(pull: PullRequest, original: string, conflicted: string[], 
     "",
     `The branch \`${pull.head}\` is checked out here with \`origin/${pull.base}\` merged into it, the merge left uncommitted when it conflicted.`,
     "Keep what the pull request set out to do and fit it to what changed on the base branch. Do not rebase, do not push.",
+    "",
+    bashRules(settings.claude.allowedTools),
+    ...backgroundRules(settings.claude.allowedTools, settings.timeout),
     "",
     "## Conflicted files",
     "",
@@ -998,14 +1109,16 @@ async function attemptRepair(
   persist(deps, dir, record);
   try {
     git([...authorArgs(settings.git), "merge", "--no-edit", `${ORIGIN}${pull.base}`], tree);
-  } catch {}
+  } catch (err) {
+    if (err instanceof MachineProblem) throw err;
+  }
   const conflicted = conflictedFiles(tree);
   if (conflicted.length > 0 || pull.checks === "failing") {
     const failedSetup = await runSetup(deps, record, worktrees, settings);
     if (failedSetup !== null) return failedSetup;
     const briefFile = path.join(dir, "brief.md");
     const handbackFile = path.join(dir, "handback.md");
-    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile));
+    fs.writeFileSync(briefFile, repairBrief(pull, original, conflicted, handbackFile, settings));
     const outcome = await runClaude(deps, record, dir, tree, repairPrompt(briefFile, handbackFile), settings);
     const unstarted = machineFailure("claude", outcome);
     if (unstarted !== null) return environmentProblem(record, unstarted);
@@ -1028,34 +1141,42 @@ async function noteRepair(deps: WorkerDeps, url: string, token: string, body: st
   if (label !== undefined) await deps.run("gh", ["pr", "edit", url, "--add-label", label], { env });
 }
 
-async function postComments(
-  deps: WorkerDeps,
-  record: RunRecord,
-  token: string,
-  comments: UnpostedComment[]
-): Promise<void> {
+async function postOne(deps: WorkerDeps, comment: UnpostedComment): Promise<void> {
+  if (comment.on === "issue") return await deps.jira.comment(comment.target, comment.body);
+  if (comment.on === "link") return await deps.jira.remoteLink(comment.target, comment.url, comment.title);
+  const token = deps.secrets.githubToken;
+  if (token === null) throw new Error("set GH_TOKEN to comment on pull requests");
+  await noteRepair(deps, comment.target, token, comment.body, comment.label);
+}
+
+async function postComments(deps: WorkerDeps, record: RunRecord, comments: UnpostedComment[] = []): Promise<void> {
   const unposted: UnpostedComment[] = [];
-  for (const comment of comments) {
+  for (const comment of [...(record.unposted ?? []), ...comments]) {
     try {
-      if (comment.on === "issue") await deps.jira.comment(comment.target, comment.body);
-      else await noteRepair(deps, comment.target, token, comment.body, comment.label);
+      await postOne(deps, comment);
     } catch (err) {
       const error = (err as Error).message;
+      const what = comment.on === "link" ? `link ${comment.url} to ${comment.target}` : `comment on ${comment.target}`;
       unposted.push(comment);
       log().warn("comment not posted", { run: record.id, key: record.key, target: comment.target, error });
-      deps.io.err(`globu-worker: could not comment on ${comment.target}, the next cycle tries again: ${error}`);
+      deps.io.err(`globu-worker: could not ${what}, the next cycle tries again: ${error}`);
     }
   }
   if (unposted.length > 0) record.unposted = unposted;
   else delete record.unposted;
 }
 
+async function deliver(deps: WorkerDeps, dir: string, record: RunRecord, comments: UnpostedComment[]): Promise<void> {
+  record.unposted = [...(record.unposted ?? []), ...comments];
+  persist(deps, dir, record);
+  await postComments(deps, record);
+  persist(deps, dir, record);
+}
+
 async function postUnposted(deps: WorkerDeps): Promise<void> {
-  const token = deps.secrets.githubToken;
-  if (token === null) return;
   for (const { dir, record } of loadRuns(deps.home)) {
     if (record.unposted === undefined) continue;
-    await postComments(deps, record, token, record.unposted);
+    await postComments(deps, record);
     saveRun(dir, record);
   }
 }
@@ -1098,8 +1219,7 @@ export async function repairPullRequest(
   if (problem === null) {
     record.state = "handed-back";
     log().info("repaired", { run: record.id, key: record.key, pullRequest: url });
-    persist(deps, dir, record);
-    await postComments(deps, record, token, [
+    await deliver(deps, dir, record, [
       { on: "pull", target: url, body: `Repaired by the Globu worker.\n\n${run}` },
       { on: "issue", target: record.key, body: `Repaired ${url}.\n\n${run}` }
     ]);
@@ -1113,8 +1233,7 @@ export async function repairPullRequest(
     const body = `The Globu worker could not repair this pull request: ${problem}. ${next}\n\n${run}`;
     original.record.followUp = { repairs, state: exhausted ? "needs-human" : "open" };
     persist(deps, original.dir, original.record);
-    persist(deps, dir, record);
-    await postComments(deps, record, token, [
+    await deliver(deps, dir, record, [
       { on: "pull", target: url, body, ...(exhausted ? { label: "needs-human" } : {}) },
       { on: "issue", target: record.key, body }
     ]);
@@ -1170,6 +1289,20 @@ export function projectHolds(deps: WorkerDeps, holder: string): ProjectHolds {
   };
 }
 
+function limitHold(deps: WorkerDeps): LimitHold | null {
+  const { config, home } = deps;
+  const spent = spentOn(loadRuns(home), deps.now());
+  if (spent >= config.limits.dayUsd) {
+    const line = `day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`;
+    return { kind: "day cap", line, detail: { capUsd: config.limits.dayUsd, spentUsd: spent } };
+  }
+  const limit = config.limits.subscription;
+  const usage = overLimit(currentUsage(home, deps.env, deps.now()), limit);
+  if (usage === null) return null;
+  const line = `subscription limit reached: ${holdReason(usage, limit)}, claiming nothing`;
+  return { kind: "subscription limit", line, detail: { ...usage, limit } };
+}
+
 export async function once(deps: WorkerDeps, options: OnceOptions = {}): Promise<OnceResult> {
   const holds = projectHolds(deps, "globu-worker");
   try {
@@ -1186,24 +1319,26 @@ async function cycle(deps: WorkerDeps, options: OnceOptions, holds: ProjectHolds
   const identity = { jira: `${me.displayName} (${me.accountId})`, github: null as string | null };
   const dryRun = options.dryRun === true;
   if (!dryRun) {
-    await reconcile(deps, me);
     await postUnposted(deps);
+    await reconcile(deps, me);
     const pruned = pruneRuns(home, config.limits.keepRuns, deps.now());
     if (pruned.length > 0) log().info("pruned", { runs: pruned, keep: config.limits.keepRuns });
     identity.github = await githubLogin(deps);
   }
-  const spent = spentOn(loadRuns(home), deps.now());
-  if (spent >= config.limits.dayUsd) {
-    log().warn("day cap reached", { capUsd: config.limits.dayUsd, spentUsd: spent });
-    io.out(`day cap of ${config.limits.dayUsd} USD reached (${spent.toFixed(2)} spent today), claiming nothing`);
+  const hold = limitHold(deps);
+  const said = options.hold?.current ?? null;
+  if (options.hold !== undefined) options.hold.current = hold;
+  if (hold !== null) {
+    if (said?.line !== hold.line) {
+      log().warn(`${hold.kind} reached`, hold.detail);
+      io.out(hold.line);
+    }
+    if (!dryRun && options.issue === undefined && options.repair === undefined) await followUps(deps, true);
     return { runs: [], plan: [] };
   }
-  const limit = config.limits.subscription;
-  const usage = overLimit(currentUsage(home, deps.env, deps.now()), limit);
-  if (usage !== null) {
-    log().warn("subscription limit reached", { ...usage, limit });
-    io.out(`subscription limit reached: ${holdReason(usage, limit)}, claiming nothing`);
-    return { runs: [], plan: [] };
+  if (said !== null) {
+    log().info("hold over", { kind: said.kind });
+    io.out(`the ${said.kind} no longer holds, claiming again`);
   }
   if (options.repair !== undefined) {
     const url = options.repair;
@@ -1322,9 +1457,10 @@ export function nextCycle(config: WorkerConfig, plan: PlanEntry[]): string {
 export type LoopOptions = { sleep: (ms: number) => Promise<void>; stopped: () => boolean };
 
 export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<boolean> {
+  const hold: SaidHold = { current: null };
   for (;;) {
     try {
-      const broken = (await once(deps)).runs.find((record) => record.environment);
+      const broken = (await once(deps, { hold })).runs.find((record) => record.environment);
       if (broken !== undefined) {
         log().error("stopping", { run: broken.id, reason: broken.reason });
         deps.io.err(`globu-worker: stopping, the machine needs fixing first: ${broken.reason}`);
@@ -1339,7 +1475,9 @@ export async function loop(deps: WorkerDeps, options: LoopOptions): Promise<bool
       deps.io.err(`globu-worker: ${(err as Error).message}`);
     }
     if (options.stopped()) return false;
+    const paused = deps.now();
     await options.sleep(deps.config.poll.every);
     if (options.stopped()) return false;
+    noteGap(deps, paused);
   }
 }
