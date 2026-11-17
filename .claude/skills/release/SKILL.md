@@ -5,7 +5,7 @@ description: Release a new version of Globu end to end. Use when the user asks t
 
 # Release Globu
 
-One run of this skill takes Globu from a commit on `main` to the packages on npm, the plugins pinned on `stable`, the tag and GitHub release and globu.kazet.blog serving the new version and docs. Work without stopping for confirmation: push to `main` of both repos directly, never open a pull request for the release. Stop only where a step below says the user is needed, and then say exactly what to run.
+One run of this skill takes Globu from a commit on `main` to the packages on npm, the plugins pinned on `stable`, the tag and GitHub release and globu.kazet.blog serving the new version and docs. Work without stopping for confirmation. This repo's `main` takes the release through one pull request, `release/<version>`, that this skill opens, waits for and merges itself; the site and the knowledge base still take a push to their `main`. Stop only where a step below says the user is needed, and then say exactly what to run.
 
 Every step first checks whether it is already done and skips it if so. That makes `/release <version>` the way to resume after any failure: the same command, the same version, picks up at the first step that is not done.
 
@@ -19,7 +19,7 @@ The argument is `patch`, `minor`, `major` or an exact version such as `1.2.0`.
 * `patch`, `minor` or `major`: compute it from the last tag (`git describe --tags --abbrev=0 --match 'v*' origin/main`).
 * No argument: read `git log --no-merges --format='%s' <last tag>..origin/main`. New commands, options, skills or behaviour make it `minor`; only fixes and docs make it `patch`. Say which version you chose and why in one line, then go on.
 
-When `package.json` on `origin/main` is already at a version that npm does not serve, a release is in progress: resume it with that version instead of starting another.
+When `package.json` on `origin/main` is already at a version that npm does not serve, a release is in progress: resume it with that version instead of starting another. So is an open pull request from a `release/<version>` branch (`gh pr list --head release/<version>`): resume with its version.
 
 ## 2. Preflight
 
@@ -42,13 +42,15 @@ Skip when the tag exists. Otherwise compare what changed since the last tag with
 
 * `git diff --stat <last tag>..origin/main -- packages plugins mods` for the code and `git log <last tag>..origin/main -- docs` for the docs.
 * A changed command, flag, config key, skill or hook needs its doc (`docs/globu-cli.md`, `docs/worker.md`, `docs/skills.md`, `docs/knowledge-base.md`, `docs/architecture.md`) and, where it is user facing, `README.md`. Read the diffs and the docs; do not trust a commit message.
-* Fix what is missing, add the `base log docs <today>` entry, run `npm run verify`, commit (`Docs for <version>`) and push to `main`. The site takes its docs from this commit, so this is the last chance to correct them before the release.
+* Fix what is missing, add the `base log docs <today>` entry, run `npm run verify` and commit (`Docs for <version>`) on the branch `release/<version>`. Step 4 adds the bump to the same branch and merges both. The site takes its docs from that merge, so this is the last chance to correct them before the release.
 
 ## 4. Bump
 
 Skip when `package.json` on `origin/main` is already at the version.
 
-`npm version <version> --no-git-tag-version && npm run build`, then commit the four changed files (root `package.json` and `package-lock.json`, `packages/globu-cli/package.json`, `packages/globu-worker/package.json`) as `Release <version>` and `git push origin HEAD:main`. The pre-commit hook runs `npm run verify`.
+On the branch `release/<version>` (create it from `origin/main` when step 3 committed nothing; reuse it and its pull request when a resumed run finds them): `npm version <version> --no-git-tag-version && npm run build`, then commit the four changed files (root `package.json` and `package-lock.json`, `packages/globu-cli/package.json`, `packages/globu-worker/package.json`) as `Release <version>`. The pre-commit hook runs `npm run verify`.
+
+Push the branch and open the pull request: `git push -u origin release/<version>`, then `gh pr create --base main --head release/<version> --title "Release <version>" --body "<the docs fixed in step 3, or none>"`. Wait for its checks with `gh pr checks <number> --watch --fail-fast` in the background. The Review workflow skips `release/` branches, so no Claude comments hold the merge. When a check fails, read `gh run view <id> --log-failed`, fix it on the branch, push and wait again. When they pass, `gh pr merge <number> --squash --delete-branch --subject "Release <version>"`, then `git fetch origin && git checkout --detach origin/main` and confirm that `package.json` there has the version.
 
 ## 5. The Release workflow
 
@@ -59,7 +61,7 @@ Skip when the tag exists and the GitHub release exists.
 When it fails, read `gh run view <id> --log-failed`:
 
 * `npm refused <name>@<version>` (`E404` or `E403` from trusted publishing, see GLOBU-30 in the knowledge base) or a package that is not on npm at all: the user publishes it by hand. First copy the group `Trusted publishing lines for <name>` from the run's log into the report and the knowledge base entry, since it holds npm's reason for refusing the OIDC exchange. In this worktree, at the `Release <version>` commit, run `npm run build && npm run pin` and give the user the exact command with the absolute path: `npm publish <worktree>/release/<tarball>`. It needs their `npm login` and the browser approval, so it is theirs to run. Then poll `npm view <name>@<version> version` every 30 seconds until it prints the version (npm takes minutes to list an accepted publish; a run started earlier tries to publish again and fails), check `dist.integrity` against `release/packages.json`, run `git checkout -- plugins` to drop the local pin, and run the workflow again. A new package is then bound with `npm trust github <name> --file release.yml --repo kamilziajka/globu --allow-publish`, again by the user.
-* A failure in `npm run verify`: the commit on `main` is broken. Fix it on `main`, then run the workflow again; it refuses only a version that is already tagged.
+* A failure in `npm run verify`: the commit on `main` is broken. Fix it in a pull request of its own, merge it once its checks pass, then run the workflow again; it refuses only a version that is already tagged.
 * Anything else: read the log, fix the cause and run the workflow again. Never tag, push `stable` or create the GitHub release by hand.
 
 Afterwards `git fetch origin main --tags && git merge --ff-only origin/main` and confirm both packages on npm, the tag and `gh release view v<version>`.
@@ -101,5 +103,6 @@ One short report: the version and the packages on npm, the Release run, the tag 
 
 * Never `npm publish` a package the workflow publishes, except as step 5 describes for a refused or new package, and only by the user.
 * Never create the tag, move `stable` or create the GitHub release by hand: the workflow does it and refuses an already tagged version.
+* Never push to this repo's `main` from the skill: the release and every fix reach it through a pull request, and only the Release workflow pushes the pin there.
 * Never edit the site's `content` by hand: fix `docs` here and run the site step again.
 * Never lower the coverage gate or skip a check to get a release out. A release that cannot pass `npm run verify` waits for the fix.

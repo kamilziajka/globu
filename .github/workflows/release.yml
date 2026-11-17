@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: release
@@ -13,12 +12,22 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record the released commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -96,6 +105,39 @@ jobs:
             exit 1
           done
 
+      - name: Keep the pin for the tag job
+        run: |
+          git add plugins
+          git diff --cached --binary > pin.patch
+
+      - name: Upload the pin
+        uses: actions/upload-artifact@v7
+        with:
+          name: pin
+          path: |
+            pin.patch
+            release/packages.json
+          if-no-files-found: error
+
+  tag:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the released commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+
+      - name: Download the pin
+        uses: actions/download-artifact@v8
+        with:
+          name: pin
+
       - name: Commit the pins, move the stable branch and tag the release
         env:
           HUSKY: "0"
@@ -103,7 +145,7 @@ jobs:
           version=$(node -p "require('./package.json').version")
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add plugins
+          git apply --index pin.patch
           git commit -m "Pin plugins to $version"
           git tag "v$version"
           git push origin HEAD:main
