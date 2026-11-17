@@ -10,7 +10,21 @@ concurrency:
   group: release
 
 jobs:
+  deploy-key:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Refuse to publish without the deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::The release environment has no RELEASE_DEPLOY_KEY secret. The ruleset on main lets only that deploy key push the pin, so the run stops before anything is published."
+            exit 1
+          fi
+
   release:
+    needs: deploy-key
     runs-on: ubuntu-latest
     permissions:
       contents: read

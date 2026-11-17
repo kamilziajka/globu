@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-17
+* [Releasing](./development.md#the-workflow): the Release workflow starts with the job `deploy-key`, which stops the run before anything is published when the `release` environment has no `RELEASE_DEPLOY_KEY`, since the ruleset on `main` refuses the pin push with `GITHUB_TOKEN`. Found by Claude's review of #24.
 * [Development](./development.md#continuous-integration): the subject GitHub sends for this repository carries the owner and repository IDs, a rule that expects the plain form refuses the exchange with `match_subject_prefix`, and where the refusal shows.
 * [Development](./development.md#landing-a-change): `main` takes changes only through pull requests. A ruleset requires a pull request and the `verify` and `verify-windows` checks, refuses direct and force pushes and deletion, needs no approval and lets only the Release workflow's deploy key through. A change is landed with `gh pr create` and `gh pr merge --auto --squash`, and a branch that `main` moved under is merged with `origin/main` or rebased and pushed with `--force-with-lease`. `CLAUDE.md` says the same.
 * [Development](./development.md#continuous-integration): the Review workflow is skipped when a pull request as a whole changes only `docs/log.md`, since GitHub matches `paths-ignore` against the pull request's whole diff and not the latest push. The release skill's step 4 resumes: it reuses `release/<version>`, skips a bump the branch already has and a pull request that is already open.
