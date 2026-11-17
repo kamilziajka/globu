@@ -1,6 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-17
+* [Development](./development.md#continuous-integration): the Review workflow is skipped when a pull request as a whole changes only `docs/log.md`, since GitHub matches `paths-ignore` against the pull request's whole diff and not the latest push. The release skill's step 4 resumes: it reuses `release/<version>`, skips a bump the branch already has and a pull request that is already open.
 * [Development](./development.md#continuous-integration): the Review workflow, in which Claude Code reviews a pull request with inline comments and a summary through workload identity federation with no stored key, skipped while the federation IDs are not repository variables. [Releasing](./development.md#the-workflow): the Release workflow is split into the publishing job `release` and the job `tag`, which pushes the pin in the environment `release` through `RELEASE_DEPLOY_KEY` when it is set; the release skill brings the docs fix and the bump to `main` through a `release/<version>` pull request that it merges itself.
 
 ## 2026-11-16

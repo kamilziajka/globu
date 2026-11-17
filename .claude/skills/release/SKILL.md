@@ -40,7 +40,7 @@ In a worktree of this repo on a branch at `origin/main` (`git fetch origin && gi
 
 Skip when the tag exists. Otherwise compare what changed since the last tag with what the docs say:
 
-* `git diff --stat <last tag>..origin/main -- packages plugins mods` for the code and `git log <last tag>..origin/main -- docs` for the docs.
+* `git diff --stat <last tag>..origin/main -- packages plugins mods` for the code and `git log <last tag>..origin/main -- docs` for the docs. When `release/<version>` already exists, read the docs on that branch, so a resumed run sees the docs fix it committed before.
 * A changed command, flag, config key, skill or hook needs its doc (`docs/globu-cli.md`, `docs/worker.md`, `docs/skills.md`, `docs/knowledge-base.md`, `docs/architecture.md`) and, where it is user facing, `README.md`. Read the diffs and the docs; do not trust a commit message.
 * When `mods/globu-status` changed since the last tag and the `version` in its `.claude-plugin/plugin.json` did not, bump that version (patch for fixes, minor for new behaviour) in the same commit. The mod is versioned on its own, an installed copy updates only when the version changes and the site's packages page shows this version.
 * Fix what is missing, add the `base log docs <today>` entry, run `npm run verify` and commit (`Docs for <version>`) on the branch `release/<version>`. Step 4 adds the bump to the same branch and merges both. The site takes its docs from that merge, so this is the last chance to correct them before the release.
@@ -49,9 +49,13 @@ Skip when the tag exists. Otherwise compare what changed since the last tag with
 
 Skip when `package.json` on `origin/main` is already at the version.
 
-On the branch `release/<version>` (create it from `origin/main` when step 3 committed nothing; reuse it and its pull request when a resumed run finds them): `npm version <version> --no-git-tag-version && npm run build`, then commit the four changed files (root `package.json` and `package-lock.json`, `packages/globu-cli/package.json`, `packages/globu-worker/package.json`) as `Release <version>`. The pre-commit hook runs `npm run verify`.
+Work on the branch `release/<version>`: check it out when it exists locally or on `origin`, which a resumed run finds, and create it from `origin/main` otherwise. Each part below checks whether it is already done:
 
-Push the branch and open the pull request: `git push -u origin release/<version>`, then `gh pr create --base main --head release/<version> --title "Release <version>" --body "<the docs fixed in step 3, or none>"`. Wait for its checks with `gh pr checks <number> --watch --fail-fast` in the background. The Review workflow skips `release/` branches, so no Claude comments hold the merge. When a check fails, read `gh run view <id> --log-failed`, fix it on the branch, push and wait again. When they pass, `gh pr merge <number> --squash --delete-branch --subject "Release <version>"`, then `git fetch origin && git checkout --detach origin/main` and confirm that `package.json` there has the version.
+1. **The bump.** Skip it when `package.json` on the branch is already at the version, since `npm version` refuses a version that does not change. Otherwise `npm version <version> --no-git-tag-version && npm run build`, then commit the four changed files (root `package.json` and `package-lock.json`, `packages/globu-cli/package.json`, `packages/globu-worker/package.json`) as `Release <version>`. The pre-commit hook runs `npm run verify`.
+2. **The push.** `git push -u origin release/<version>`, which does nothing when `origin` already has the commits.
+3. **The pull request.** Take its number from `gh pr list --head release/<version> --state open --json number`. Only when there is none, `gh pr create --base main --head release/<version> --title "Release <version>" --body "<the docs fixed in step 3, or none>"`.
+
+Wait for its checks with `gh pr checks <number> --watch --fail-fast` in the background. The Review workflow skips `release/` branches, so no Claude comments hold the merge. When a check fails, read `gh run view <id> --log-failed`, fix it on the branch, push and wait again. When they pass, `gh pr merge <number> --squash --delete-branch --subject "Release <version>"`, then `git fetch origin && git checkout --detach origin/main` and confirm that `package.json` there has the version.
 
 ## 5. The Release workflow
 
