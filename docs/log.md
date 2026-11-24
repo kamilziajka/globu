@@ -1,7 +1,7 @@
 # Knowledge base update log
 
 ## 2026-11-24
-* [Development](./development.md#continuous-integration): the Review workflow names its model, `claude-haiku-5-5`. Without one it ran the default of the action, which cost about 30 cents a review in klayboy, measured over 51 runs.
+* [Development](./development.md#continuous-integration): the Review workflow names its model, `claude-haiku-5-5`. Without one it ran the default of the action, the largest model. The repository variable `ANTHROPIC_WORKSPACE_ID` is set again and names the workspace the federation rule authorizes: without it the token exchange is refused with `no_workspace`.
 
 ## 2026-11-17
 * [Releasing](./development.md#the-workflow): the Release workflow starts with the job `deploy-key`, which stops the run before anything is published when the `release` environment has no `RELEASE_DEPLOY_KEY`, since the ruleset on `main` refuses the pin push with `GITHUB_TOKEN`. Found by Claude's review of #24.
